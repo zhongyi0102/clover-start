@@ -10,6 +10,9 @@ app/*.log
 config/
 desktop-backup/
 
+# 发布包（由 tools\make-release.ps1 生成）
+dist/
+
 # 测试产物
 tests/bin/
 tests/*.exe
