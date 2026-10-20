@@ -8,23 +8,34 @@
 #     启动.bat               双击启动
 #     安装开机自启.bat       创建开机自启
 #     使用说明.txt
+#   CloverStart-v1.0.0.zip
+#   CloverStart-v1.0.0.zip.sha256   校验值
 #
 # 注意：exe 必须放在 app\ 子目录里——程序用 `exe目录\..` 推算程序根目录，
 #       直接放在根目录会导致配置和 res 都找不到。
 #
+# 版本号来源：仓库根目录的 VERSION 文件（如 1.0.0），与 build.ps1、git tag 保持一致。
+#
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1
 #      可加 -SkipBuild 跳过重新编译
 param(
-    [switch]$SkipBuild,
-    [string]$Version = '1.0.0'
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+
+# ---------------- 0. 读版本号 ----------------
+$versionFile = Join-Path $root 'VERSION'
+if (-not (Test-Path $versionFile)) { throw "找不到 $versionFile（内容形如 1.0.0）" }
+$Version = (Get-Content $versionFile -Raw -Encoding ascii).Trim()
+if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION 内容不合法: '$Version'（应形如 1.0.0）" }
+
 $distDir = Join-Path $root 'dist'
 $pkgName = "CloverStart-v$Version"
 $pkgDir = Join-Path $distDir $pkgName
 $zipPath = Join-Path $distDir ($pkgName + '.zip')
+$shaPath = $zipPath + '.sha256'
 
 # ---------------- 1. 编译 ----------------
 if (-not $SkipBuild) {
@@ -72,8 +83,8 @@ pause
     [System.Text.Encoding]::GetEncoding(936))
 
 # ---------------- 5. 使用说明 ----------------
-$readme = @'
-四叶草启动面板 v1.0.0 —— 使用说明
+$readme = @"
+四叶草启动面板 v$Version —— 使用说明
 
 【怎么运行】
   双击「启动.bat」
@@ -117,20 +128,26 @@ $readme = @'
   3. 如果开了开机自启，先删掉上面提到的那个 .lnk
 
 完整文档见 README.md
-'@
+"@
 [System.IO.File]::WriteAllText((Join-Path $pkgDir '使用说明.txt'), $readme,
     (New-Object System.Text.UTF8Encoding($true)))
 
-# ---------------- 6. 打包 zip ----------------
+# ---------------- 6. 打包 zip + 生成 SHA256 ----------------
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path $pkgDir -DestinationPath $zipPath -CompressionLevel Optimal
 $zipSize = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
+
+$hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$zipName = Split-Path $zipPath -Leaf
+[System.IO.File]::WriteAllText($shaPath, "$hash  $zipName`n", (New-Object System.Text.ASCIIEncoding))
 
 # ---------------- 7. 汇总 ----------------
 Write-Host ''
 Write-Host '打包完成' -ForegroundColor Green
 Write-Host ('  目录: ' + $pkgDir)
 Write-Host ('  压缩包: ' + $zipPath + '  (' + $zipSize + ' KB)')
+Write-Host ('  SHA256: ' + $hash)
+Write-Host ('  校验文件: ' + $shaPath)
 Write-Host ''
 Write-Host '内容:' -ForegroundColor Cyan
 Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {

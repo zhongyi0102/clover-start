@@ -5,6 +5,7 @@ namespace Clover
     static class BuildInfo
     {
         public const string Version = "dev";
+        public const string Stamp = "dev";
         public const string BuildTime = "unknown";
         public static string Describe { get { return "四叶草 v" + Version + "（" + BuildTime + " 构建）"; } }
     }

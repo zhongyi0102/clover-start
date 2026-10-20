@@ -83,5 +83,13 @@
 
 ## 版本号说明
 
-`src\Version.cs` 由 `build.ps1` 每次编译时生成，格式为 `yyyy.MM.dd.HHmm`，
-仅用于排查「跑的是哪一次构建」，与上面的语义化版本号相互独立。
+版本号只有一个来源：仓库根目录的 **`VERSION`** 文件（形如 `1.0.0`）。
+
+`build.ps1` 读它，写进 `src\Version.cs` 和 exe 的文件属性；
+`tools\make-release.ps1` 读它，决定发布包名；
+git tag 用 `v` + 同样内容。
+
+三者因此永远一致，不会再出现「tag 是 v1.0.0、发布包写 1.0.0、程序内却是别的时间戳」的情况。
+
+`Version.cs` 里另有 `Stamp`（格式 `yyyy.MM.dd.HHmm`）和 `BuildTime`，
+只用于排查「跑的是哪一次构建」，不参与版本比较。

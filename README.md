@@ -150,7 +150,7 @@ clover-start\
 | `SafeCall.cs` | UIAutomation/COM 调用的异步包装（界面线程不阻塞） |
 | `ResourceWatch.cs` | 内存/句柄自检与缓存清理 |
 | `Native.cs` | P/Invoke 声明 |
-| `Version.cs` | 编译时自动生成（版本号 + 构建时间） |
+| `Version.cs` | 编译时自动生成（版本号 + 构建时间），版本号取自根目录 `VERSION` |
 
 **测试**
 
@@ -547,8 +547,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 - **改分类规则**：编辑 `src\Catalog.cs` 的 `GuessCategory`（按名称关键字）和 `src\NativeScanner.cs` 的 `GuessCategory`（按开始菜单目录），重新编译后右键四叶草 → 重新扫描应用。
 - **手动加软件**：编辑 `config\manual-apps.json`，格式 `{ "apps":[{"name":"名称","path":"C:\\...\\app.exe","category":"其他"}] }`。
 - **换图标**：直接替换 `res\clover.ico`（编译用）和 `res\clover.png`（界面用），再运行 `build.ps1`。
-- **重新编译**：`powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1`（自动生成 `src\Version.cs`，写入版本号与构建时间）
-- **重新生成拼音表**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-pinyin.ps1`（从 Windows 自带的微软拼音单字库 `chs_singlechar_pinyin.dat` 提取，约 1.6 万字；系统库缺失时退回内置精简表）
+- **重新编译**：`powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1`（自动生成 `src\Version.cs`，版本号取自根目录 `VERSION`，另写入构建时间）
+- **重新生成拼音表**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-pinyin.ps1`（数据源是 pinyin-pro，MIT 许可，约 2 万字；详见 `tools\pinyin-data\README.md`）
+- **改版本号**：编辑根目录 `VERSION`（形如 `1.0.0`），再重新编译。程序内版本、exe 文件属性、发布包名、git tag 都从它取，保证一致。
+- **打包发布**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1`（生成 `dist\CloverStart-v<版本>.zip` 和 `.sha256` 校验文件）
 - **改开关默认值**：编辑 `src\Settings.cs` 的字段初始值。
 - **取消开机自启**：删掉 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\四叶草启动器.lnk`，或右键四叶草把“开机自启”取消勾选。
 - **恢复桌面快捷方式**：把 `desktop-backup\` 里的 `.lnk` 移回桌面即可（`manual-apps.json` 里对应条目可留可删）。
