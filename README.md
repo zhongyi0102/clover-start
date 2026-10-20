@@ -562,3 +562,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 - **按钮位置/大小不对**：看 `config\error.log` 里有没有「开始按钮定位失败」，确认任务栏在主屏；改 `src\TriggerWindow.cs` 的 `Width/Height`（44×48）与 `Reposition()` 里的 `right + 4` 间距后重新编译。
 - **想完全停用某个自动行为**：右键四叶草 → 取消对应勾选项，或直接改 `config\settings.json` 里的开关。
 - **看门狗残留**：正常退出时会自动结束。若看到多余的 `CloverStart.exe --guard` 进程，直接结束即可，它不持有任何资源。
+
+
+## 相关文档
+
+| 文档 | 内容 |
+|---|---|
+| [项目说明.md](项目说明.md) | 实现细节与设计取舍：源码分层、系统状态设计、看门狗原理、已知限制 |
+| [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
+
+## 许可证
+
+[MIT](LICENSE) © 2026 clover-start contributors
