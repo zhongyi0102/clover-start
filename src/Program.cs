@@ -41,7 +41,21 @@ namespace Clover
                 }
             }
 
-            string baseDir = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".."));
+            // ---------- 程序根目录 ----------
+            // 两种分发形态都要支持：
+            //   A. 免安装包：exe 在 <根>\app\ 下，根目录放 config\ 和 res\  → 取上一级
+            //   B. 单文件 exe：exe 直接放在任意目录，config\ 和 res\ 与它同级 → 取 exe 所在目录
+            // 判定依据：exe 所在目录名是 "app" 就用上一级，否则用当前目录。
+            string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            string baseDir;
+            if (string.Equals(Path.GetFileName(exeDir), "app", StringComparison.OrdinalIgnoreCase))
+            {
+                baseDir = Path.GetFullPath(Path.Combine(exeDir, ".."));
+            }
+            else
+            {
+                baseDir = exeDir;
+            }
 
             // ---------- 看门狗模式：无界面，只等主进程退出后还原系统状态 ----------
             if (guard)

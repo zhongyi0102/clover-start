@@ -70,7 +70,7 @@ namespace Clover
             root.Cursor = Cursors.Hand;
 
             Image img = new Image();
-            img.Source = Ui.LoadImage(Path.Combine(baseDir, "res", "clover.png"));
+            img.Source = Ui.LoadCloverIcon(Path.Combine(baseDir, "res", "clover.png"));
             img.Width = 26;
             img.Height = 26;
             img.Stretch = Stretch.Uniform;

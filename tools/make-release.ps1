@@ -132,7 +132,7 @@ $readme = @"
 [System.IO.File]::WriteAllText((Join-Path $pkgDir '使用说明.txt'), $readme,
     (New-Object System.Text.UTF8Encoding($true)))
 
-# ---------------- 6. 打包 zip + 生成 SHA256 ----------------
+# ---------------- 6. 打包 zip + 单文件 exe + 生成 SHA256 ----------------
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path $pkgDir -DestinationPath $zipPath -CompressionLevel Optimal
 $zipSize = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
@@ -141,15 +141,28 @@ $hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $zipName = Split-Path $zipPath -Leaf
 [System.IO.File]::WriteAllText($shaPath, "$hash  $zipName`n", (New-Object System.Text.ASCIIEncoding))
 
+# 单文件 exe：直接放 dist\ 下，图标已嵌入程序集，无外部依赖
+$singleExe = Join-Path $distDir 'CloverStart.exe'
+Copy-Item $exe $singleExe -Force
+$singleSize = [math]::Round((Get-Item $singleExe).Length / 1KB, 1)
+$singleHash = (Get-FileHash $singleExe -Algorithm SHA256).Hash.ToLowerInvariant()
+[System.IO.File]::WriteAllText($singleExe + '.sha256', "$singleHash  CloverStart.exe`n", (New-Object System.Text.ASCIIEncoding))
+
 # ---------------- 7. 汇总 ----------------
 Write-Host ''
 Write-Host '打包完成' -ForegroundColor Green
+Write-Host ''
+Write-Host '【单文件 exe】' -ForegroundColor Cyan
+Write-Host ('  ' + $singleExe + '  (' + $singleSize + ' KB)')
+Write-Host ('  SHA256: ' + $singleHash)
+Write-Host ''
+Write-Host '【免安装 zip】' -ForegroundColor Cyan
 Write-Host ('  目录: ' + $pkgDir)
 Write-Host ('  压缩包: ' + $zipPath + '  (' + $zipSize + ' KB)')
 Write-Host ('  SHA256: ' + $hash)
 Write-Host ('  校验文件: ' + $shaPath)
 Write-Host ''
-Write-Host '内容:' -ForegroundColor Cyan
+Write-Host 'zip 内容:' -ForegroundColor Cyan
 Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {
     $rel = $_.FullName.Substring($pkgDir.Length + 1)
     Write-Host ('  {0,-30} {1,8} KB' -f $rel, [math]::Round($_.Length / 1KB, 1))
@@ -157,18 +170,24 @@ Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {
 
 # 校验 zip 能正常解压
 Write-Host ''
-Write-Host '校验压缩包...' -ForegroundColor Cyan
+Write-Host '校验...' -ForegroundColor Cyan
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
     $count = $zip.Entries.Count
     $hasExe = ($zip.Entries | Where-Object { $_.FullName -like '*CloverStart.exe' }).Count -gt 0
     $hasPng = ($zip.Entries | Where-Object { $_.FullName -like '*clover.png' }).Count -gt 0
-    Write-Host ("  条目数: $count")
-    Write-Host ("  含主程序: " + $(if ($hasExe) { '是' } else { '否' }))
-    Write-Host ("  含界面图标: " + $(if ($hasPng) { '是' } else { '否' }))
+    Write-Host ("  zip 条目数: $count")
+    Write-Host ("  zip 含主程序: " + $(if ($hasExe) { '是' } else { '否' }))
+    Write-Host ("  zip 含界面图标: " + $(if ($hasPng) { '是' } else { '否' }))
     if (-not ($hasExe -and $hasPng)) { throw '压缩包缺少关键文件' }
 } finally {
     $zip.Dispose()
 }
+
+# 校验单 exe 里确实嵌入了图标资源
+$asm = [System.Reflection.Assembly]::LoadFile($singleExe)
+$hasEmbeddedIcon = ($asm.GetManifestResourceNames() | Where-Object { $_ -like '*clover.png' }).Count -gt 0
+Write-Host ("  单 exe 含嵌入图标: " + $(if ($hasEmbeddedIcon) { '是' } else { '否' }))
+if (-not $hasEmbeddedIcon) { throw '单文件 exe 缺少嵌入图标资源' }
 Write-Host '  校验通过' -ForegroundColor Green

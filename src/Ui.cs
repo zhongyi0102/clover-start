@@ -93,5 +93,57 @@ namespace Clover
                 return null;
             }
         }
+
+        /// <summary>
+        /// 加载四叶草图标。单文件 exe 场景下没有外部 res\ 目录，
+        /// 所以优先读 <paramref name="externalPath"/>，读不到就用**嵌入资源**兜底。
+        /// 两条路都失败时返回 null（调用方显示首字占位，不崩）。
+        /// </summary>
+        public static BitmapImage LoadCloverIcon(string externalPath)
+        {
+            BitmapImage img = LoadImage(externalPath);
+            if (img != null) return img;
+
+            // 兜底：编译时嵌入的程序集资源（见 build.ps1 的 /resource 参数）
+            try
+            {
+                System.Reflection.Assembly asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using (System.IO.Stream s = asm.GetManifestResourceStream("CloverStart.clover.png"))
+                {
+                    if (s == null)
+                    {
+                        // 资源名可能带目录前缀，模糊匹配一次
+                        foreach (string name in asm.GetManifestResourceNames())
+                        {
+                            if (name.EndsWith("clover.png", StringComparison.OrdinalIgnoreCase))
+                            {
+                                using (System.IO.Stream s2 = asm.GetManifestResourceStream(name))
+                                {
+                                    if (s2 != null) return DecodeStream(s2);
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                    return DecodeStream(s);
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("读取嵌入图标失败: " + ex.Message);
+                return null;
+            }
+        }
+
+        static BitmapImage DecodeStream(System.IO.Stream stream)
+        {
+            BitmapImage b = new BitmapImage();
+            b.BeginInit();
+            b.CacheOption = BitmapCacheOption.OnLoad;
+            b.StreamSource = stream;
+            b.EndInit();
+            b.Freeze();
+            return b;
+        }
     }
 }

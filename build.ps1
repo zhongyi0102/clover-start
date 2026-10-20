@@ -56,7 +56,13 @@ if ($sources.Count -eq 0) { throw "src 目录没有 .cs 文件" }
 $exe = Join-Path $outDir 'CloverStart.exe'
 $ico = Join-Path $root 'res\clover.ico'
 
-$cscArgs = @('/nologo', '/target:winexe', '/codepage:65001', '/optimize+', ('/win32icon:' + $ico), ('/out:' + $exe)) + $refs + $sources
+# 把界面图标嵌进程序集，这样单文件 exe 场景下没有外部 res\ 也能显示四叶草。
+# 资源名固定为 CloverStart.clover.png（命名空间 + 文件名）。
+$png = Join-Path $root 'res\clover.png'
+$resourceArgs = @()
+if (Test-Path $png) { $resourceArgs += ('/resource:' + $png + ',CloverStart.clover.png') }
+
+$cscArgs = @('/nologo', '/target:winexe', '/codepage:65001', '/optimize+', ('/win32icon:' + $ico), ('/out:' + $exe)) + $resourceArgs + $refs + $sources
 & $csc @cscArgs
 if ($LASTEXITCODE -ne 0) { throw "编译失败 (exit $LASTEXITCODE)" }
 

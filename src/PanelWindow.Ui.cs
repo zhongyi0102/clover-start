@@ -44,7 +44,7 @@ namespace Clover
             header.ColumnDefinitions[3].Width = GridLength.Auto;
 
             Image logo = new Image();
-            logo.Source = Ui.LoadImage(Path.Combine(baseDir, "res", "clover.png"));
+            logo.Source = Ui.LoadCloverIcon(Path.Combine(baseDir, "res", "clover.png"));
             logo.Width = 28;
             logo.Height = 28;
             logo.VerticalAlignment = VerticalAlignment.Center;

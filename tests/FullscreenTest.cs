@@ -84,6 +84,8 @@ namespace Clover
         static extern bool ShowWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")]
         static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         static extern IntPtr FindWindow(string cls, string name);
 
@@ -167,8 +169,19 @@ namespace Clover
                     Environment.Exit(failed == 0 ? 0 : 1);
                 }
 
-                SetForegroundWindow(hwnd);
-                Thread.Sleep(600);
+                // 把全屏窗口抢到前台。SetForegroundWindow 对非前台进程可能被系统拒绝，
+                // 而且测试机器上常有别的窗口（Chrome/QQ/微信）在抢焦点，所以这里重试几次
+                // 并校验 GetForegroundWindow 确实是它，避免偶发失败被误判成功能坏了。
+                bool foreground = false;
+                for (int attempt = 0; attempt < 10; attempt++)
+                {
+                    SetForegroundWindow(hwnd);
+                    Thread.Sleep(300);
+                    if (GetForegroundWindow() == hwnd) { foreground = true; break; }
+                }
+                Check(foreground, "全屏窗口成功成为前台窗口（若失败是环境干扰，非功能问题）");
+
+                Thread.Sleep(400);
 
                 // ---------- 3. 全屏窗口在前台：应判定为全屏 ----------
                 bool during = FullscreenWatch.IsFullscreen();
