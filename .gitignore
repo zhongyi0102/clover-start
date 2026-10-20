@@ -1,0 +1,25 @@
+# 编译产物
+app/CloverStart.exe
+app/*.pdb
+app/*.log
+
+# 运行日志
+*.log
+
+# 用户数据（每个人的应用清单、设置、使用记录都不同）
+config/
+desktop-backup/
+
+# 测试产物
+tests/bin/
+tests/*.exe
+
+# 说明：src/Version.cs 会提交一个占位版本，
+# build.ps1 每次编译时覆盖它（保证 clone 后不跑 build 也能直接编译）。
+
+# 编辑器与系统
+.vs/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

@@ -1,0 +1,10 @@
+﻿# 统一换行符，避免 Windows/Linux 协作时整文件被标记为修改
+* text=auto eol=lf
+
+# Windows 脚本保持 CRLF（PowerShell 对 LF 兼容，但记事本更友好）
+*.ps1 text eol=crlf
+
+# 二进制文件不做换行符转换
+*.ico binary
+*.png binary
+*.exe binary

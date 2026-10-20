@@ -1,0 +1,103 @@
+﻿# 编译并运行全部测试
+#   单元测试（不依赖 WPF）：
+#     CatalogTest     分类规则 / 隐藏分类 / ContainsName / JsonIO 往返与每日备份
+#     PinyinTest      拼音表 / 全拼 / 首字母 / 边界 / 性能
+#     SettingsTest    设置默认值 / 往返 / 未知字段保留 / 损坏回退 / 开关联动
+#     CrashGuardTest  崩溃计数 / 时间窗口 / 安全模式判定 / 稳定清除
+#     WatcherTest     文件监听溢出兜底 / Dispose 后无泄漏回调
+#   集成测试（需要真实桌面会话）：
+#     FullscreenTest  真建无边框全屏窗口，验证全屏检测与恢复
+#     TaskbarCreatedTest  验证 TaskbarCreated 消息注册与接收
+# 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$srcDir = Join-Path $root 'src'
+$testDir = $PSScriptRoot
+$outDir = Join-Path $testDir 'bin'
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $csc)) { throw "csc.exe 不存在: $csc" }
+
+$refDir = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
+$baseRefs = @(
+    ('/r:' + (Join-Path $refDir 'System.dll')),
+    ('/r:' + (Join-Path $refDir 'System.Core.dll'))
+)
+$webRef = ('/r:' + (Join-Path $refDir 'System.Web.Extensions.dll'))
+
+# 集成测试要链接 src 下完整代码，需要 WPF + UIAutomation
+$wpfRefs = $baseRefs + @(
+    ('/r:' + (Join-Path $refDir 'System.Xaml.dll')),
+    $webRef
+)
+foreach ($n in @('WindowsBase', 'PresentationCore', 'PresentationFramework', 'UIAutomationClient', 'UIAutomationTypes')) {
+    $asm = [System.Reflection.Assembly]::LoadWithPartialName($n)
+    if ($asm) { $wpfRefs += ('/r:' + $asm.Location) }
+}
+
+$script:failed = 0
+
+function Invoke-Suite($name, $refs, $sources) {
+    Write-Host "===== $name =====" -ForegroundColor Cyan
+    $exe = Join-Path $outDir ($name + '.exe')
+    & $csc /nologo /target:exe /codepage:65001 ('/out:' + $exe) $refs $sources 2>&1 |
+        Where-Object { $_ -notmatch 'warning CS' }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "编译失败: $name" -ForegroundColor Red
+        $script:failed++
+        return
+    }
+    & $exe
+    if ($LASTEXITCODE -ne 0) { $script:failed++ }
+    Write-Host ''
+}
+
+# ---------------- 单元测试 ----------------
+Invoke-Suite 'CatalogTest' ($baseRefs + $webRef) `
+    @((Join-Path $srcDir 'Catalog.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $srcDir 'UsageStore.cs'), (Join-Path $testDir 'CatalogTest.cs'))
+
+Invoke-Suite 'PinyinTest' $baseRefs `
+    @((Join-Path $srcDir 'Pinyin.cs'), (Join-Path $srcDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
+
+Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
+    @((Join-Path $srcDir 'Settings.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $testDir 'SettingsTest.cs'))
+
+Invoke-Suite 'WatcherTest' $baseRefs `
+    @((Join-Path $testDir 'WatcherTest.cs'))
+
+# 虚拟化面板的几何/滚动计算（用到 ItemsControl，需要 WPF 引用）
+Invoke-Suite 'VirtualPanelTest' $wpfRefs `
+    @((Join-Path $testDir 'VirtualPanelTest.cs'))
+
+# ---------------- 集成测试 ----------------
+# 链接 src 下除 Program.cs 外的全部源码（Program.cs 有 Main，会冲突）
+$allSrc = @(Get-ChildItem $srcDir -Filter *.cs |
+    Where-Object { $_.Name -ne 'Program.cs' } |
+    ForEach-Object { $_.FullName })
+
+# CrashGuardTest 要真正调用 CrashGuard（依赖 ErrorLog/Ui），所以走全量源码
+Invoke-Suite 'CrashGuardTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'CrashGuardTest.cs')))
+
+# 桌面还原：直接测 AppWatcher.RestoreLinks/MakeUniqueDest 的纯文件逻辑
+Invoke-Suite 'DesktopRestoreTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'DesktopRestoreTest.cs')))
+
+# 打开文件所在位置：测 PanelWindow.TryBuildExplorerArgs 的路径解析
+Invoke-Suite 'OpenFolderTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'OpenFolderTest.cs')))
+
+Invoke-Suite 'FullscreenTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'FullscreenTest.cs')))
+
+Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))
+
+if ($script:failed -eq 0) {
+    Write-Host '全部测试通过' -ForegroundColor Green
+    exit 0
+} else {
+    Write-Host "$($script:failed) 个套件失败" -ForegroundColor Red
+    exit 1
+}
