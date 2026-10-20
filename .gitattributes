@@ -1,4 +1,4 @@
-﻿# 统一换行符，避免 Windows/Linux 协作时整文件被标记为修改
+# 统一换行符，避免 Windows/Linux 协作时整文件被标记为修改
 * text=auto eol=lf
 
 # Windows 脚本保持 CRLF（PowerShell 对 LF 兼容，但记事本更友好）
