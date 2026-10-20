@@ -66,6 +66,16 @@ namespace Clover
             periodic.Tick += delegate { RefreshCatalog(); };
             periodic.Start();
 
+            // ---------- 首次运行检测 ----------
+            // apps.json 不存在或没有应用时，立即触发一次后台扫描。
+            // 不做这一步，新用户首次运行会看到空面板，要等 15 分钟兜底才有应用。
+            // 后台线程跑，不阻塞面板显示；扫完自动刷新。
+            if (NeedsInitialScan())
+            {
+                Ui.Log("首次运行（apps.json 缺失或为空），立即触发后台扫描");
+                RunScan("首次运行");
+            }
+
             string[] startMenus = new string[]
             {
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), @"Microsoft\Windows\Start Menu\Programs"),
@@ -207,6 +217,38 @@ namespace Clover
             catch (Exception ex)
             {
                 ErrorLog.Hook(ex, "启动后台扫描");
+            }
+        }
+
+        /// <summary>
+        /// 是否需要首次扫描：apps.json 不存在、读不出来、或里面一个应用都没有。
+        /// </summary>
+        bool NeedsInitialScan()
+        {
+            try
+            {
+                string path = Path.Combine(baseDir, "config", "apps.json");
+                if (!File.Exists(path)) return true;
+
+                string json = JsonIO.Read(path);
+                if (string.IsNullOrEmpty(json)) return true;
+
+                // 数一下 apps 数组
+                System.Web.Script.Serialization.JavaScriptSerializer ser =
+                    new System.Web.Script.Serialization.JavaScriptSerializer();
+                ser.MaxJsonLength = int.MaxValue;
+                Dictionary<string, object> d = ser.Deserialize<Dictionary<string, object>>(json);
+                if (d == null) return true;
+
+                object arr;
+                if (!d.TryGetValue("apps", out arr) || arr == null) return true;
+                int count = 0;
+                foreach (object o in (System.Collections.IEnumerable)arr) count++;
+                return count == 0;
+            }
+            catch
+            {
+                return true; // 读不出就当作需要扫
             }
         }
 
