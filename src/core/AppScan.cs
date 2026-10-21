@@ -17,17 +17,17 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Hook(ex, "扫描开始菜单");
+                Log.Hook(ex, "扫描开始菜单");
                 ok = false;
             }
 
             if (ok)
             {
                 try { NativeScanner.FilterDeadLinks(baseDir); }
-                catch (Exception ex) { ErrorLog.Hook(ex, "清理死链接"); }
+                catch (Exception ex) { Log.Hook(ex, "清理死链接"); }
 
                 try { PortableScanner.Merge(baseDir); }
-                catch (Exception ex) { ErrorLog.Hook(ex, "便携软件识别"); }
+                catch (Exception ex) { Log.Hook(ex, "便携软件识别"); }
             }
             return ok;
         }

@@ -45,11 +45,11 @@ namespace Clover
 
             List<Step> steps = new List<Step>();
 
-            ErrorLog.Init(baseDir);
+            Log.Init(baseDir);
             TaskbarVisibility.Init(baseDir);
             SystemState.Init(baseDir);
 
-            ErrorLog.Log(BuildInfo.Describe + " 开始一键回滚（keepConfig=" + keepConfig + "）");
+            Log.Info(BuildInfo.Describe + " 开始一键回滚（keepConfig=" + keepConfig + "）");
 
             // ---------- 1. 恢复系统任务栏（可见性 + EX 样式）----------
             steps.Add(Do("恢复系统任务栏", delegate
@@ -164,7 +164,7 @@ namespace Clover
                 {
                     failed++;
                     text.AppendLine("[失败] " + s.Name + "  -> " + s.Detail);
-                    ErrorLog.Warn("一键回滚失败项: " + s.Name + " -> " + s.Detail);
+                    Log.Warn("一键回滚失败项: " + s.Name + " -> " + s.Detail);
                 }
             }
 
@@ -172,12 +172,12 @@ namespace Clover
             if (failed == 0)
             {
                 text.AppendLine("全部完成。系统已恢复到本程序介入前的状态。");
-                ErrorLog.Log("一键回滚完成，无失败项");
+                Log.Info("一键回滚完成，无失败项");
             }
             else
             {
                 text.AppendLine("有 " + failed + " 项未能完成，详见 config\\error.log。");
-                ErrorLog.Warn("一键回滚完成，失败 " + failed + " 项");
+                Log.Warn("一键回滚完成，失败 " + failed + " 项");
             }
 
             if (!keepConfig)
@@ -190,7 +190,7 @@ namespace Clover
 
             // 主程序是 winexe：从命令行调用时通常拿不到可用控制台。
             // 这里统一走「写日志 + 尽力写控制台」，不弹窗阻塞（回滚应当在无人值守下也能完成）。
-            ErrorLog.Log(report.Replace(Environment.NewLine, " | "));
+            Log.Info(report.Replace(Environment.NewLine, " | "));
             try { Console.WriteLine(report); } catch { }
 
             return failed;
@@ -238,7 +238,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("删除目录失败 " + dir + ": " + ex.Message);
+                Log.Warn("删除目录失败 " + dir + ": " + ex.Message);
             }
         }
 
@@ -249,13 +249,13 @@ namespace Clover
             try
             {
                 action();
-                ErrorLog.Log("回滚步骤成功: " + name);
+                Log.Info("回滚步骤成功: " + name);
             }
             catch (Exception ex)
             {
                 s.Ok = false;
                 s.Detail = ex.Message;
-                ErrorLog.Warn("回滚步骤失败: " + name + " -> " + ex.GetType().Name + ": " + ex.Message);
+                Log.Warn("回滚步骤失败: " + name + " -> " + ex.GetType().Name + ": " + ex.Message);
             }
             return s;
         }

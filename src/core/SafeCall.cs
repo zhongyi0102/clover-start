@@ -41,18 +41,18 @@ namespace Clover
                 }
                 catch (Exception ex)
                 {
-                    ErrorLog.Warn("后台调用失败: " + ex.GetType().Name + ": " + ex.Message);
+                    Log.Warn("后台调用失败: " + ex.GetType().Name + ": " + ex.Message);
                     ok = false;
                 }
 
                 double ms = (DateTime.Now - started).TotalMilliseconds;
                 if (ok && ms > timeoutMs)
                 {
-                    Ui.Log("后台调用耗时 " + (int)ms + "ms 超过阈值 " + timeoutMs + "ms，结果仍采用");
+                    Log.Info("后台调用耗时 " + (int)ms + "ms 超过阈值 " + timeoutMs + "ms，结果仍采用");
                 }
 
                 try { onDone(ok, result); }
-                catch (Exception ex) { ErrorLog.Warn("后台调用回调失败: " + ex.Message); }
+                catch (Exception ex) { Log.Warn("后台调用回调失败: " + ex.Message); }
             });
         }
 
@@ -87,12 +87,12 @@ namespace Clover
 
             if (!finished)
             {
-                Ui.Log("后台调用超时(" + timeoutMs + "ms)，走回退值");
+                Log.Info("后台调用超时(" + timeoutMs + "ms)，走回退值");
                 return false;
             }
             if (error != null)
             {
-                ErrorLog.Warn("后台调用失败: " + error.GetType().Name + ": " + error.Message);
+                Log.Warn("后台调用失败: " + error.GetType().Name + ": " + error.Message);
                 return false;
             }
 

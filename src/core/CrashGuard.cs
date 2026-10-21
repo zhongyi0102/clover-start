@@ -77,7 +77,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("读取 crash-guard.json 失败（按空处理）: " + ex.Message);
+                Log.Warn("读取 crash-guard.json 失败（按空处理）: " + ex.Message);
             }
             return d;
         }
@@ -106,7 +106,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("写 crash-guard.json 失败: " + ex.Message);
+                Log.Warn("写 crash-guard.json 失败: " + ex.Message);
             }
         }
 
@@ -140,11 +140,11 @@ namespace Clover
                             d.Ticks = TrimWindow(d.Ticks, now);
                             d.Ticks.Add(now);
                             if (d.Ticks.Count >= CrashThreshold) d.SafeMode = true;
-                            ErrorLog.Warn("检测到上次未正常退出（运行标记残留），已记为一次异常退出");
+                            Log.Warn("检测到上次未正常退出（运行标记残留），已记为一次异常退出");
                         }
                         else
                         {
-                            ErrorLog.Log("上次运行标记残留，但本轮崩溃已由异常钩子记录，跳过重复计数");
+                            Log.Info("上次运行标记残留，但本轮崩溃已由异常钩子记录，跳过重复计数");
                         }
                     }
 
@@ -158,7 +158,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                try { ErrorLog.Warn("处理运行标记失败: " + ex.Message); } catch { }
+                try { Log.Warn("处理运行标记失败: " + ex.Message); } catch { }
                 return false;
             }
         }
@@ -179,12 +179,12 @@ namespace Clover
                     d.RunStarted = 0;
                     d.CrashRecordedThisRun = false;
                     SaveRaw(d);
-                    Ui.Log("清除运行标记（" + reason + "）");
+                    Log.Info("清除运行标记（" + reason + "）");
                 }
             }
             catch (Exception ex)
             {
-                try { ErrorLog.Warn("清除运行标记失败: " + ex.Message); } catch { }
+                try { Log.Warn("清除运行标记失败: " + ex.Message); } catch { }
             }
         }
 
@@ -253,7 +253,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                try { ErrorLog.Warn("记录崩溃次数失败: " + ex.Message); } catch { }
+                try { Log.Warn("记录崩溃次数失败: " + ex.Message); } catch { }
             }
         }
 
@@ -269,12 +269,12 @@ namespace Clover
                     d.Ticks.Clear();
                     d.SafeMode = false;
                     SaveRaw(d);
-                    Ui.Log("稳定运行 " + StableSeconds + " 秒，已清除崩溃计数");
+                    Log.Info("稳定运行 " + StableSeconds + " 秒，已清除崩溃计数");
                 }
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("清除崩溃计数失败: " + ex.Message);
+                Log.Warn("清除崩溃计数失败: " + ex.Message);
             }
         }
 

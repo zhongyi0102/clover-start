@@ -371,7 +371,7 @@ namespace Clover
             StackPanel sp = new StackPanel();
             sp.VerticalAlignment = VerticalAlignment.Center;
 
-            ImageSource icon = Native.GetAppIcon(a.Path);
+            ImageSource icon = AppIcons.Get(a.Path);
             if (icon != null)
             {
                 Image img = new Image();

@@ -163,12 +163,12 @@ namespace Clover
                 root["apps"] = apps;
                 root["updated"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 JsonIO.WriteAtomic(appsPath, ser.Serialize(root));
-                ErrorLog.Log("便携软件识别：新增 " + added + " 个（扫描目录 " + visited + " 个，候选 " + found.Count + " 个）");
+                Log.Info("便携软件识别：新增 " + added + " 个（扫描目录 " + visited + " 个，候选 " + found.Count + " 个）");
                 return added;
             }
             catch (Exception ex)
             {
-                ErrorLog.Hook(ex, "便携软件识别");
+                Log.Hook(ex, "便携软件识别");
                 return 0;
             }
         }
@@ -211,14 +211,14 @@ namespace Clover
             if (fileCount >= MaxFiles)
             {
                 aborted = true;
-                ErrorLog.Warn("便携软件扫描中止：文件数超过上限 " + MaxFiles + "，本次只处理已扫到的部分");
+                Log.Warn("便携软件扫描中止：文件数超过上限 " + MaxFiles + "，本次只处理已扫到的部分");
                 return true;
             }
 
             if ((DateTime.Now - scanStart).TotalMilliseconds > ScanTimeoutMs)
             {
                 aborted = true;
-                ErrorLog.Warn("便携软件扫描中止：超过 " + (ScanTimeoutMs / 1000) + " 秒超时限制，本次只处理已扫到的部分");
+                Log.Warn("便携软件扫描中止：超过 " + (ScanTimeoutMs / 1000) + " 秒超时限制，本次只处理已扫到的部分");
                 return true;
             }
             return false;

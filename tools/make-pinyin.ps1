@@ -1,4 +1,4 @@
-﻿# 生成 src\PinyinData.cs：汉字 -> 无调拼音 映射表。
+﻿# 生成 src\core\PinyinData.cs：汉字 -> 无调拼音 映射表。
 #
 # 数据来源：pinyin-pro（https://github.com/zh-lx/pinyin-pro）
 #   MIT License, Copyright (c) 2022-present zh-lx
@@ -16,7 +16,7 @@
 # 需要先准备好 tools\pinyin-data\pinyin-table.txt（生成方式见该目录 README）。
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$outFile = Join-Path $root 'src\PinyinData.cs'
+$outFile = Join-Path $root 'src\core\PinyinData.cs'
 $tableFile = Join-Path $PSScriptRoot 'pinyin-data\pinyin-table.txt'
 
 # ---------------- 1. 读取拼音数据 ----------------

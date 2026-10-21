@@ -66,7 +66,7 @@ namespace Clover
                                 + " 个（阈值 " + (MemoryWarnBytes / 1024 / 1024) + " MB / " + HandleWarn + " 个）");
                         }
                         // 逐级释放可丢弃的缓存
-                        try { Native.ClearIconCache(); } catch { }
+                        try { AppIcons.Clear(); } catch { }
                         try { TaskList.ClearIconCache(); } catch { }
                         // 主动回收一次，给 WPF 归还渲染表面的机会
                         try { GC.Collect(2, GCCollectionMode.Forced, false, false); } catch { }

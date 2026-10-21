@@ -12,6 +12,10 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $srcDir = Join-Path $root 'src'
+# 源码分两层：core 零 WPF 依赖，ui 依赖 WPF。
+# 单元测试只引用 core；集成/验收测试引用 core + ui。
+$coreDir = Join-Path $srcDir 'core'
+$uiSrcDir = Join-Path $srcDir 'ui'
 $testDir = $PSScriptRoot
 $outDir = Join-Path $testDir 'bin'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -55,17 +59,17 @@ function Invoke-Suite($name, $refs, $sources) {
 
 # ---------------- 单元测试 ----------------
 Invoke-Suite 'CatalogTest' ($baseRefs + $webRef) `
-    @((Join-Path $srcDir 'Catalog.cs'), (Join-Path $srcDir 'CategoryOverrides.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $srcDir 'UsageStore.cs'), (Join-Path $testDir 'CatalogTest.cs'))
+    @((Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'CatalogTest.cs'))
 
 # 分类覆盖表：优先级、重扫保持、损坏回退
 Invoke-Suite 'CategoryOverrideTest' ($baseRefs + $webRef) `
-    @((Join-Path $srcDir 'CategoryOverrides.cs'), (Join-Path $srcDir 'Catalog.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $srcDir 'UsageStore.cs'), (Join-Path $testDir 'CategoryOverrideTest.cs'))
+    @((Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'CategoryOverrideTest.cs'))
 
 Invoke-Suite 'PinyinTest' $baseRefs `
-    @((Join-Path $srcDir 'Pinyin.cs'), (Join-Path $srcDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
+    @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
 
 Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
-    @((Join-Path $srcDir 'Settings.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $testDir 'SettingsTest.cs'))
+    @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
 Invoke-Suite 'WatcherTest' $baseRefs `
     @((Join-Path $testDir 'WatcherTest.cs'))
@@ -75,10 +79,14 @@ Invoke-Suite 'VirtualPanelTest' $wpfRefs `
     @((Join-Path $testDir 'VirtualPanelTest.cs'))
 
 # ---------------- 集成测试 ----------------
-# 链接 src 下除 Program.cs 外的全部源码（Program.cs 有 Main，会冲突）
-$allSrc = @(Get-ChildItem $srcDir -Filter *.cs |
-    Where-Object { $_.Name -ne 'Program.cs' } |
-    ForEach-Object { $_.FullName })
+# 链接 core + ui 下除 Program.cs 外的全部源码（Program.cs 有 Main，会冲突）
+$allSrc = @(
+    (Get-ChildItem $coreDir -Filter *.cs | ForEach-Object { $_.FullName })
+) + @(
+    (Get-ChildItem $uiSrcDir -Filter *.cs |
+        Where-Object { $_.Name -ne 'Program.cs' } |
+        ForEach-Object { $_.FullName })
+)
 
 # CrashGuardTest 要真正调用 CrashGuard（依赖 ErrorLog/Ui），所以走全量源码
 Invoke-Suite 'CrashGuardTest' $wpfRefs `

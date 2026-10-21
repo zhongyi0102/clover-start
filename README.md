@@ -131,7 +131,8 @@ clover-start\
   config\system-state.json   未还原的系统状态标记（存在=需要还原；详见「紧急恢复」）
   config\crash-guard.json    崩溃计数与安全模式标记
   res\clover.ico, clover.png 四叶草图标
-  src\                       源码（见下节）
+  src\core\                  纯逻辑层（零 WPF 依赖，可单独编译成 DLL）
+  src\ui\                    界面层（依赖 WPF）
   tests\                     最小测试
   tools\make-pinyin.ps1      生成拼音表
   build.ps1                  编译（csc.exe，无需 MSBuild）
@@ -139,9 +140,51 @@ clover-start\
   desktop-backup\            被移走的桌面快捷方式（可恢复）
 ```
 
-## 源码结构（src\）
+## 源码结构
 
-面板按职责拆成几个 `partial class` 文件，改哪块找哪个文件即可。
+源码分**两层**，依赖方向是单向的：`ui` 依赖 `core`，`core` 不依赖任何界面代码。
+
+```
+src\core\    纯逻辑层：扫描、配置、看门狗、崩溃保护、拼音…
+             零 WPF 依赖，可脱离 WPF 单独编译成 DLL
+src\ui\      界面层：窗口、控件、图标、日志实现
+             依赖 WPF，依赖 core
+```
+
+`build.ps1` 会**先用「只含非 WPF 程序集」的引用单独编译 core**。只要有人在 core 里用了 WPF 类型，编译立刻失败并指出原因——这是**编译器强制**的分层约束，不是靠自觉。
+
+**好处**：core 层可以脱离界面单测；界面重构不会波及底层逻辑；崩溃保护、扫描这些关键代码能被独立编译验证。
+
+> 为什么不在构建时真的产出两个 DLL？那会让发布多带一个 `Clover.Core.dll`，破坏「单文件 exe」这个核心特性。所以 core 的独立编译只用于**验证**，产物用完即删。
+
+### `src\core\`（纯逻辑，零 WPF）
+
+| 文件 | 负责 |
+|---|---|
+| `Native.cs` | P/Invoke 声明与 Win32 结构体 |
+| `Log.cs` | 日志抽象（core 只调它，实现由 ui 注入） |
+| `JsonIO.cs` | 原子写 + `.bak` 回退 + 每日备份 |
+| `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
+| `Catalog.cs` | 软件清单模型、分类规则、排序 |
+| `CategoryOverrides.cs` | 用户手工指定的「应用 → 分类」覆盖表（优先级最高） |
+| `UsageStore.cs` | 启动次数与最近使用时间 |
+| `AppScan.cs` | 扫描流程编排（开始菜单 → 死链接清理 → 便携软件） |
+| `NativeScanner.cs` | 遍历开始菜单目录、猜分类、清理死链接 |
+| `PortableScanner.cs` | 便携软件识别（目录递归、主程序挑选、重名去重） |
+| `ScanService.cs` | 后台扫描调度（单飞 + 完成后回界面线程） |
+| `Pinyin.cs` | 拼音匹配（全拼 / 首字母） |
+| `PinyinData.cs` | 汉字拼音表（自动生成，勿手改） |
+| `SystemState.cs` | `system-state.json` 的读写（崩溃后能靠它还原） |
+| `TaskbarVisibility.cs` | 系统状态改动的唯一入口 + `RestoreSystemState()` |
+| `ResetAll.cs` | 一键回滚：撤销全部系统改动（8 个步骤，逐项报告） |
+| `CrashGuard.cs` | 崩溃计数、安全模式判定、稳定清除 |
+| `Guard.cs` | 看门狗（`--guard` 模式） |
+| `HeartbeatFile.cs` | 心跳文件读写（看门狗据此判卡死） |
+| `SafeCall.cs` | UIAutomation/COM 调用的异步包装（界面线程不阻塞） |
+| `FullscreenWatch.cs` | 全屏判定（含多显示器） |
+| `Version.cs` | 编译时自动生成（版本号 + 构建时间），版本号取自根目录 `VERSION` |
+
+### `src\ui\`（界面层，依赖 WPF）
 
 **面板本体**
 
@@ -149,26 +192,9 @@ clover-start\
 |---|---|
 | `PanelWindow.cs` | 窗口生命周期、显示/隐藏、拖拽改尺寸、窗口布局存取、启动应用 |
 | `PanelWindow.Ui.cs` | 界面骨架 `BuildUi` 与通用小控件（图标按钮、字形） |
-| `PanelWindow.Nav.cs` | 左侧分类、搜索过滤、应用磁贴渲染、拖拽排序、键盘选中导航 |
+| `PanelWindow.Nav.cs` | 左侧分类、搜索过滤、应用磁贴渲染、拖拽排序、键盘选中导航、右键菜单 |
 | `PanelWindow.Tasks.cs` | 左侧“任务栏”区域（当前窗口列表、右键菜单、定时刷新） |
 | `PanelWindow.Data.cs` | 目录/配置加载保存、刷新、对外接口、设置应用 |
-
-**扫描与数据**
-
-| 文件 | 负责 |
-|---|---|
-| `AppScan.cs` | 扫描流程编排（开始菜单 → 死链接清理 → 便携软件） |
-| `NativeScanner.cs` | 遍历开始菜单目录、猜分类、清理死链接 |
-| `PortableScanner.cs` | 便携软件识别（目录递归、主程序挑选、重名去重） |
-| `ScanService.cs` | 后台扫描调度（单飞 + 完成后回界面线程） |
-| `AppWatcher.cs` | 监听开始菜单/桌面变化、去抖、定时兜底、桌面清理 |
-| `Catalog.cs` | 软件清单模型、分类规则、排序 |
-| `CategoryOverrides.cs` | 用户手工指定的「应用 → 分类」覆盖表（优先级最高） |
-| `UsageStore.cs` | 启动次数与最近使用时间 |
-| `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
-| `JsonIO.cs` | 原子写 + `.bak` 回退 + 每日备份 |
-| `Pinyin.cs` | 拼音匹配（全拼 / 首字母） |
-| `PinyinData.cs` | 汉字拼音表（自动生成，勿手改） |
 
 **窗口与外观**
 
@@ -178,40 +204,39 @@ clover-start\
 | `StartButtonWindow.cs` | 任务栏隐藏时的「开始」按钮 |
 | `MiniTaskbarWindow.cs` | 左下角迷你任务栏 |
 | `OverlayGate.cs` | 悬浮按钮的全屏隐藏 / 悬停唤出统一调度 |
-| `FullscreenWatch.cs` | 全屏判定（含多显示器） |
 | `TaskbarGeometry.cs` | 任务栏所在边/厚度、开始按钮定位 |
 | `TaskList.cs` | 枚举顶层窗口、切换/关闭 |
 | `IconCache.cs` | 图标内存 + 磁盘缓存、过期清理 |
-| `Ui.cs` | 配色、字体、图片加载、clover.log |
+| `AppIcons.cs` | 图标获取（把 `ImageSource` 挡在 core 之外） |
+| `Ui.cs` | 配色、字体、图片加载 |
+| `Heartbeat.cs` | 心跳定时器（文件读写委托给 core 的 `HeartbeatFile`） |
 
 **基础设施**
 
 | 文件 | 负责 |
 |---|---|
-| `Program.cs` | 入口、单实例、命令行（`--rescan`/`--show`/`--safe-mode`/`--restore-system`/`--reset-all`/`--guard`）、异常钩子接线、稳定计时 |
+| `Program.cs` | 入口、单实例、命令行（`--rescan`/`--show`/`--safe-mode`/`--restore-system`/`--reset-all`/`--guard`）、异常钩子接线、稳定计时、**Log 接线** |
 | `ErrorLog.cs` | error.log（分级、去重、1MB 轮转）、三层未处理异常钩子 |
-| `SystemState.cs` | `system-state.json` 的读写（崩溃后能靠它还原） |
-| `TaskbarVisibility.cs` | 系统状态改动的唯一入口 + `RestoreSystemState()` |
-| `ResetAll.cs` | 一键回滚：撤销全部系统改动（8 个步骤，逐项报告） |
-| `CrashGuard.cs` | 崩溃计数、安全模式判定、稳定清除 |
-| `Guard.cs` | 看门狗（`--guard` 模式） |
-| `SafeCall.cs` | UIAutomation/COM 调用的异步包装（界面线程不阻塞） |
+| `AppWatcher.cs` | 监听开始菜单/桌面变化、去抖、定时兜底、桌面清理 |
 | `ResourceWatch.cs` | 内存/句柄自检与缓存清理 |
-| `Native.cs` | P/Invoke 声明 |
-| `Version.cs` | 编译时自动生成（版本号 + 构建时间），版本号取自根目录 `VERSION` |
+| `VirtualizingWrapPanel.cs` | 虚拟化面板（已实现，尚未接入） |
 
 **测试**
 
 | 文件 | 负责 |
 |---|---|
 | `tests\CatalogTest.cs` | 分类规则 / JsonIO / 每日备份 |
+| `tests\CategoryOverrideTest.cs` | 分类覆盖表：优先级 / 重扫保持 / 损坏回退 |
 | `tests\PinyinTest.cs` | 拼音匹配 |
 | `tests\SettingsTest.cs` | 设置读写与开关联动 |
 | `tests\CrashGuardTest.cs` | 崩溃计数与安全模式判定 |
 | `tests\WatcherTest.cs` | 文件监听溢出兜底 / Dispose 泄漏 |
 | `tests\VirtualPanelTest.cs` | 虚拟化面板几何与滚动计算 |
+| `tests\DesktopRestoreTest.cs` | 桌面快捷方式还原（重名不覆盖） |
+| `tests\OpenFolderTest.cs` | 「打开文件所在位置」路径解析 |
 | `tests\FullscreenTest.cs` | 全屏检测（真建无边框全屏窗口） |
 | `tests\TaskbarCreatedTest.cs` | TaskbarCreated 消息注册与接收 |
+| `tests\AcceptanceTest.cs` | **验收测试**：真建面板 + JSON 证据报告 + 拒绝真实目录 |
 | `tests\run-tests.ps1` | 一键编译并运行全部套件 |
 
 ## 健壮性
@@ -462,7 +487,7 @@ CloverStart.exe --restore-system   只还原系统状态然后退出
 
 WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` 逐个创建的实体控件。113 个磁贴约 565 个可视化元素。
 
-已实现 `src\VirtualizingWrapPanel.cs`（继承 `VirtualizingPanel` + `IScrollInfo`，只生成视口内的行），几何计算已通过 19 项测试，理论收益：113 项降到约 70 项（**省 38%**）。
+已实现 `src\ui\VirtualizingWrapPanel.cs`（继承 `VirtualizingPanel` + `IScrollInfo`，只生成视口内的行），几何计算已通过 19 项测试，理论收益：113 项降到约 70 项（**省 38%**）。
 
 **但实测后决定暂不启用**，理由是收益与风险不成比例：
 
@@ -614,14 +639,14 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 
 ## 自定义
 
-- **改分类规则**：编辑 `src\Catalog.cs` 的 `GuessCategory`（按名称关键字）和 `src\NativeScanner.cs` 的 `GuessCategory`（按开始菜单目录），重新编译后右键四叶草 → 重新扫描应用。
+- **改分类规则**：编辑 `src\core\Catalog.cs` 的 `GuessCategory`（按名称关键字）和 `src\core\NativeScanner.cs` 的 `GuessCategory`（按开始菜单目录），重新编译后右键四叶草 → 重新扫描应用。
 - **手动加软件**：编辑 `config\manual-apps.json`，格式 `{ "apps":[{"name":"名称","path":"C:\\...\\app.exe","category":"其他"}] }`。
 - **换图标**：直接替换 `res\clover.ico`（编译用）和 `res\clover.png`（界面用），再运行 `build.ps1`。
-- **重新编译**：`powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1`（自动生成 `src\Version.cs`，版本号取自根目录 `VERSION`，另写入构建时间）
+- **重新编译**：`powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1`（自动生成 `src\core\Version.cs`，版本号取自根目录 `VERSION`，另写入构建时间）
 - **重新生成拼音表**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-pinyin.ps1`（数据源是 pinyin-pro，MIT 许可，约 2 万字；详见 `tools\pinyin-data\README.md`）
 - **改版本号**：编辑根目录 `VERSION`（形如 `1.0.0`），再重新编译。程序内版本、exe 文件属性、发布包名、git tag 都从它取，保证一致。
 - **打包发布**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1`（生成 `dist\CloverStart-v<版本>.zip` 和 `.sha256` 校验文件）
-- **改开关默认值**：编辑 `src\Settings.cs` 的字段初始值。
+- **改开关默认值**：编辑 `src\core\Settings.cs` 的字段初始值。
 - **取消开机自启**：删掉 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\四叶草启动器.lnk`，或右键四叶草把“开机自启”取消勾选。
 - **恢复桌面快捷方式**：把 `desktop-backup\` 里的 `.lnk` 移回桌面即可（`manual-apps.json` 里对应条目可留可删）。
 
@@ -631,7 +656,7 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 - **面板打不开 / 反复崩溃** → 运行 `CloverStart.exe --safe-mode`，它会关掉所有会动系统状态的功能，只留面板和按钮。
 - **新软件没出现在面板里**：确认它确实在开始菜单里有快捷方式，或右键四叶草 → 重新扫描应用。
 - **图标不对/是旧的**：删掉 `config\iconcache\` 目录，重启程序会自动重建。
-- **按钮位置/大小不对**：看 `config\error.log` 里有没有「开始按钮定位失败」，确认任务栏在主屏；改 `src\TriggerWindow.cs` 的 `Width/Height`（44×48）与 `Reposition()` 里的 `right + 4` 间距后重新编译。
+- **按钮位置/大小不对**：看 `config\error.log` 里有没有「开始按钮定位失败」，确认任务栏在主屏；改 `src\ui\TriggerWindow.cs` 的 `Width/Height`（44×48）与 `Reposition()` 里的 `right + 4` 间距后重新编译。
 - **想完全停用某个自动行为**：右键四叶草 → 取消对应勾选项，或直接改 `config\settings.json` 里的开关。
 - **看门狗残留**：正常退出时会自动结束。若看到多余的 `CloverStart.exe --guard` 进程，直接结束即可，它不持有任何资源。
 

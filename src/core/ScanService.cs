@@ -35,7 +35,7 @@ namespace Clover
             if (string.IsNullOrEmpty(baseDir)) return;
             if (Interlocked.CompareExchange(ref running, 1, 0) != 0)
             {
-                Ui.Log("扫描已在运行，忽略本次触发: " + reason);
+                Log.Info("扫描已在运行，忽略本次触发: " + reason);
                 return;
             }
 
@@ -47,12 +47,12 @@ namespace Clover
                     DateTime started = DateTime.Now;
                     ok = AppScan.Run(baseDir);
                     double ms = (DateTime.Now - started).TotalMilliseconds;
-                    Ui.Log("后台扫描完成(" + reason + ") ok=" + ok + " 用时 " + (int)ms + "ms");
+                    Log.Info("后台扫描完成(" + reason + ") ok=" + ok + " 用时 " + (int)ms + "ms");
                     lock (gate) { lastDone = DateTime.Now; }
                 }
                 catch (Exception ex)
                 {
-                    ErrorLog.Hook(ex, "后台扫描(" + reason + ")");
+                    Log.Hook(ex, "后台扫描(" + reason + ")");
                 }
                 finally
                 {
@@ -60,7 +60,7 @@ namespace Clover
                     if (onDone != null)
                     {
                         try { onDone(ok); }
-                        catch (Exception ex) { ErrorLog.Hook(ex, "扫描完成回调"); }
+                        catch (Exception ex) { Log.Hook(ex, "扫描完成回调"); }
                     }
                 }
             });

@@ -74,7 +74,7 @@ namespace Clover
                         state.Save();
                     }
                     Native.ShowWindow(tray, SW_HIDE);
-                    Ui.Log("隐藏系统任务栏（已记录 system-state）");
+                    Log.Info("隐藏系统任务栏（已记录 system-state）");
                 }
                 else
                 {
@@ -84,12 +84,12 @@ namespace Clover
                         state.TaskbarHidden = false;
                         state.Save(); // Dirty 为 false 时会自动清掉文件
                     }
-                    Ui.Log("显示系统任务栏");
+                    Log.Info("显示系统任务栏");
                 }
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("切换系统任务栏显示失败: " + ex.Message);
+                Log.Warn("切换系统任务栏显示失败: " + ex.Message);
             }
         }
 
@@ -120,7 +120,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("设置任务栏透明模式失败: " + ex.Message);
+                Log.Warn("设置任务栏透明模式失败: " + ex.Message);
                 return false;
             }
         }
@@ -140,7 +140,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("恢复任务栏 EX 样式失败: " + ex.Message);
+                Log.Warn("恢复任务栏 EX 样式失败: " + ex.Message);
             }
             finally
             {
@@ -168,14 +168,14 @@ namespace Clover
                     if ((ex & WS_EX_LAYERED) != 0)
                     {
                         Native.SetWindowLong(tray, GWL_EXSTYLE, ex & ~WS_EX_LAYERED);
-                        Ui.Log("恢复任务栏 EX 样式 (" + reason + ")");
+                        Log.Info("恢复任务栏 EX 样式 (" + reason + ")");
                     }
 
                     // 2) 任务栏可见性
                     if (!Native.IsWindowVisible(tray))
                     {
                         Native.ShowWindow(tray, SW_SHOW);
-                        Ui.Log("恢复系统任务栏可见 (" + reason + ")");
+                        Log.Info("恢复系统任务栏可见 (" + reason + ")");
                     }
                 }
 
@@ -193,7 +193,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                try { ErrorLog.Warn("还原系统状态失败: " + ex.Message); } catch { }
+                try { Log.Warn("还原系统状态失败: " + ex.Message); } catch { }
             }
         }
 
@@ -209,8 +209,8 @@ namespace Clover
                 SystemState leftover = SystemState.Load(dir);
                 if (leftover == null || !leftover.Dirty) return false;
 
-                Ui.Log("发现上次未还原的系统状态（" + leftover.Since + "，来源 " + reason + "），开始还原");
-                ErrorLog.Warn("检测到上次异常退出遗留的系统状态（" + leftover.Since + "）："
+                Log.Info("发现上次未还原的系统状态（" + leftover.Since + "，来源 " + reason + "），开始还原");
+                Log.Warn("检测到上次异常退出遗留的系统状态（" + leftover.Since + "）："
                     + "taskbarHidden=" + leftover.TaskbarHidden + " taskbarLayered=" + leftover.TaskbarLayered
                     + "，已自动还原");
 
@@ -222,7 +222,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("启动时清理残留状态失败: " + ex.Message);
+                Log.Warn("启动时清理残留状态失败: " + ex.Message);
                 return false;
             }
         }

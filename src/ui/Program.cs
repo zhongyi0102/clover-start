@@ -57,6 +57,17 @@ namespace Clover
                 baseDir = exeDir;
             }
 
+            // ---------- 日志接线（必须在任何 core 层调用之前）----------
+            // core 层只依赖 Log 抽象，真实实现（error.log / clover.log）在这里注入。
+            // 这样 core 层保持零 WPF 依赖，可以单独编译成 DLL。
+            Log.Wire(
+                delegate(string msg) { ErrorLog.Log(msg); },
+                delegate(string msg) { ErrorLog.Warn(msg); },
+                delegate(Exception ex, string where) { ErrorLog.Hook(ex, where); },
+                delegate(string dir) { ErrorLog.Init(dir); });
+            Settings.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
+            CategoryOverrides.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
+
             // ---------- 看门狗模式：无界面，只等主进程退出后还原系统状态 ----------
             if (guard)
             {
@@ -67,7 +78,7 @@ namespace Clover
             // ---------- 一键回滚所有系统改动然后退出 ----------
             if (resetAll)
             {
-                ErrorLog.Init(baseDir);
+                Log.Init(baseDir);
                 TaskbarVisibility.Init(baseDir);
                 SystemState.Init(baseDir);
                 int failed = 1;

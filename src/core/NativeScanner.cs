@@ -133,12 +133,12 @@ namespace Clover
                 JavaScriptSerializer ser2 = new JavaScriptSerializer();
                 ser2.MaxJsonLength = int.MaxValue;
                 JsonIO.WriteAtomic(appsPath, ser2.Serialize(root));
-                ErrorLog.Log("内置 C# 扫描完成：" + apps.Count + " 个应用");
+                Log.Info("内置 C# 扫描完成：" + apps.Count + " 个应用");
                 return true;
             }
             catch (Exception ex)
             {
-                ErrorLog.Hook(ex, "内置 C# 扫描");
+                Log.Hook(ex, "内置 C# 扫描");
                 return false;
             }
         }
@@ -168,7 +168,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                ErrorLog.Hook(ex, "清理失效应用");
+                Log.Hook(ex, "清理失效应用");
             }
         }
 
@@ -203,7 +203,7 @@ namespace Clover
                 if (keep.Count == total) return null;
 
                 d["apps"] = keep;
-                ErrorLog.Log("清理死链接：移除 " + (total - keep.Count) + " 个失效应用");
+                Log.Info("清理死链接：移除 " + (total - keep.Count) + " 个失效应用");
                 return ser.Serialize(d);
             }
             catch { return null; }

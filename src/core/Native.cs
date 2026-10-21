@@ -1,13 +1,14 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using System.Windows;
-using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 
 namespace Clover
 {
+    /// <summary>
+    /// P/Invoke 声明与 Win32 结构体。
+    ///
+    /// 本文件属于 **core 层**：纯 P/Invoke，零 WPF 依赖，可单独编译成 DLL。
+    /// 需要 WPF 的部分（图标 → ImageSource）已拆到 ui\AppIcons.cs。
+    /// </summary>
     static class Native
     {
         [DllImport("user32.dll")]
@@ -70,8 +71,6 @@ namespace Clover
             public int Y;
         }
 
-
-
         [DllImport("shell32.dll")]
         static extern IntPtr SHAppBarMessage(int message, ref APPBARDATA data);
 
@@ -109,32 +108,6 @@ namespace Clover
             APPBARDATA d = new APPBARDATA();
             d.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
             return SHAppBarMessage(0x04, ref d).ToInt32(); // ABM_GETSTATE
-        }
-
-
-
-        static readonly Dictionary<string, ImageSource> Cache = new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>
-        /// 取应用图标。现在走 IconCache（内存 + 磁盘 PNG 缓存，key 含文件修改时间），
-        /// 进程内仍保留一层字典，避免同一路径反复算 key。
-        /// </summary>
-        public static ImageSource GetAppIcon(string path)
-        {
-            if (string.IsNullOrEmpty(path)) return null;
-            ImageSource cached;
-            if (Cache.TryGetValue(path, out cached))
-                return cached;
-
-            ImageSource result = IconCache.Get(path);
-            Cache[path] = result;
-            return result;
-        }
-
-        /// <summary>清掉进程内缓存（重新扫描后调用，让改了图标的程序重新取图）。</summary>
-        public static void ClearIconCache()
-        {
-            Cache.Clear();
         }
     }
 }

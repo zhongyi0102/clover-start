@@ -61,7 +61,7 @@ namespace Clover
                         {
                             try
                             {
-                                Native.ClearIconCache();
+                                AppIcons.Clear();
                                 Pinyin.ClearCache();
                                 ReloadCatalog();
                                 RebuildNav();

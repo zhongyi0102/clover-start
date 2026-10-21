@@ -85,7 +85,7 @@
 
 版本号只有一个来源：仓库根目录的 **`VERSION`** 文件（形如 `1.0.0`）。
 
-`build.ps1` 读它，写进 `src\Version.cs` 和 exe 的文件属性；
+`build.ps1` 读它，写进 `src\core\Version.cs` 和 exe 的文件属性；
 `tools\make-release.ps1` 读它，决定发布包名；
 git tag 用 `v` + 同样内容。
 

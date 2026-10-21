@@ -32,7 +32,7 @@ namespace Clover
         const int HungSeconds = 10;
 
         /// <summary>心跳超过这个时长没更新就算卡死（2 个心跳周期 + 余量）。</summary>
-        const int HeartbeatTimeoutMs = Heartbeat.IntervalMs * 2 + 1000;
+        const int HeartbeatTimeoutMs = HeartbeatFile.IntervalMs * 2 + 1000;
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool IsHungAppWindow(IntPtr hWnd);
@@ -44,7 +44,7 @@ namespace Clover
         {
             try
             {
-                ErrorLog.Init(baseDir);
+                Log.Init(baseDir);
                 TaskbarVisibility.Init(baseDir);
                 SystemState.Init(baseDir);
 
@@ -81,7 +81,7 @@ namespace Clover
                                     if (st != null && st.Dirty)
                                     {
                                         restoredForHung = true;
-                                        ErrorLog.Warn("看门狗：主进程连续 " + HungSeconds
+                                        Log.Warn("看门狗：主进程连续 " + HungSeconds
                                             + " 秒无响应（疑似卡死），已把系统任务栏还原。"
                                             + "（不会结束主进程）");
                                         TaskbarVisibility.RestoreSystemState("看门狗·卡死检测");
@@ -94,7 +94,7 @@ namespace Clover
                             {
                                 // 主进程恢复响应了：交给主进程自己决定要不要再隐藏
                                 // （主进程侧用 WatchdogResume 限制为最多 1 次）
-                                Ui.Log("看门狗：主进程已恢复响应（本次运行最多允许自动重新隐藏 1 次）");
+                                Log.Info("看门狗：主进程已恢复响应（本次运行最多允许自动重新隐藏 1 次）");
                                 restoredForHung = false;
                                 hungSeconds = 0;
                             }
@@ -115,18 +115,18 @@ namespace Clover
                 SystemState leftover = SystemState.Load(baseDir);
                 if (leftover != null && leftover.Dirty)
                 {
-                    ErrorLog.Warn("看门狗：主进程异常退出，检测到未还原的系统状态（"
+                    Log.Warn("看门狗：主进程异常退出，检测到未还原的系统状态（"
                         + leftover.Since + "），正在还原");
                     TaskbarVisibility.RecoverLeftover(baseDir, "看门狗");
                 }
 
                 // 清理心跳文件，避免下次启动误判
-                Heartbeat.Cleanup(baseDir);
+                HeartbeatFile.Cleanup(baseDir);
             }
             catch (Exception ex)
             {
                 // 看门狗自己绝不能抛到外面，否则会变成错误弹窗
-                try { ErrorLog.Warn("看门狗异常: " + ex.Message); } catch { }
+                try { Log.Warn("看门狗异常: " + ex.Message); } catch { }
             }
         }
 
@@ -144,7 +144,7 @@ namespace Clover
             catch { }
 
             // b. 没有可检测窗口 → 用心跳
-            long ticks = Heartbeat.ReadTicks(baseDir);
+            long ticks = HeartbeatFile.ReadTicks(baseDir);
             if (ticks <= 0) return false; // 读不到就不判断，避免误杀
 
             if (lastHeartbeatTicks == 0)
@@ -181,11 +181,11 @@ namespace Clover
                 psi.CreateNoWindow = true;
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
                 Process.Start(psi);
-                Ui.Log("看门狗已启动");
+                Log.Info("看门狗已启动");
             }
             catch (Exception ex)
             {
-                ErrorLog.Warn("启动看门狗失败（不影响主功能）: " + ex.Message);
+                Log.Warn("启动看门狗失败（不影响主功能）: " + ex.Message);
             }
         }
     }
@@ -220,7 +220,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                try { ErrorLog.Warn("写 guard-restored 标记失败: " + ex.Message); } catch { }
+                try { Log.Warn("写 guard-restored 标记失败: " + ex.Message); } catch { }
             }
         }
 
@@ -234,7 +234,7 @@ namespace Clover
             {
                 if (string.IsNullOrEmpty(markerPath) || !File.Exists(markerPath)) return false;
                 File.Delete(markerPath);
-                Ui.Log("检测到看门狗曾还原任务栏，允许本次自动重新隐藏（整轮仅 1 次）");
+                Log.Info("检测到看门狗曾还原任务栏，允许本次自动重新隐藏（整轮仅 1 次）");
                 return true;
             }
             catch

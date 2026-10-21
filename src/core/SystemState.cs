@@ -73,7 +73,7 @@ namespace Clover
             catch (Exception ex)
             {
                 // 损坏的状态文件不能阻断启动：当成“没有残留”处理，并记一条
-                ErrorLog.Warn("读取 system-state.json 失败（按无残留处理）: " + ex.Message);
+                Log.Warn("读取 system-state.json 失败（按无残留处理）: " + ex.Message);
                 return null;
             }
         }
@@ -113,7 +113,7 @@ namespace Clover
                 }
                 catch (Exception ex)
                 {
-                    ErrorLog.Warn("写 system-state.json 失败: " + ex.Message);
+                    Log.Warn("写 system-state.json 失败: " + ex.Message);
                 }
             }
         }
@@ -132,7 +132,7 @@ namespace Clover
                 }
                 catch (Exception ex)
                 {
-                    ErrorLog.Warn("清除 system-state.json 失败: " + ex.Message);
+                    Log.Warn("清除 system-state.json 失败: " + ex.Message);
                 }
             }
         }
@@ -151,7 +151,7 @@ namespace Clover
                 }
                 catch (Exception ex)
                 {
-                    ErrorLog.Warn("清除 system-state.json 失败: " + ex.Message);
+                    Log.Warn("清除 system-state.json 失败: " + ex.Message);
                 }
             }
         }
