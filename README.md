@@ -236,6 +236,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\OpenFolderTest.cs` | 「打开文件所在位置」路径解析 |
 | `tests\FullscreenTest.cs` | 全屏检测（真建无边框全屏窗口） |
 | `tests\TaskbarCreatedTest.cs` | TaskbarCreated 消息注册与接收 |
+| `tests\ActiveRowTest.cs` | 任务栏行高亮判定（输入回调只读缓存后的纯逻辑） |
 | `tests\AcceptanceTest.cs` | **验收测试**：真建面板 + JSON 证据报告 + 拒绝真实目录 |
 | `tests\run-tests.ps1` | 一键编译并运行全部套件 |
 
@@ -551,7 +552,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十二个套件，共 298 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十三个套件，共 312 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -573,6 +574,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `OpenFolderTest` | 20 | 「打开文件所在位置」路径解析：存在的文件走 `/select`、文件没了退回目录、目录也没了给提示、`.lnk` 解析真实目标、无效 `.lnk` 退回自身、null/空串安全 |
 | `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 确认它成为前台窗口 → 断言 `IsFullscreen()` = true → 关掉后恢复 false |
 | `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
+| `ActiveRowTest` | 14 | 任务栏行高亮判定：只有一行亮、前台句柄为 0 时不高亮任何行、切换后刚好翻转、重复判定幂等 |
 
 **验收测试**（真实创建窗口，验证"界面确实画出来了"）：
 
@@ -593,12 +595,12 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：12 个套件、298 个断言全部通过（2026-10-21，v1.0.0）**
+**最近一次运行结果：13 个套件、312 个断言全部通过（2026-10-21，v1.0.0）**
 
-> 断言数变化：151 → 298。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryOverrideTest` 30、
-> 新增 `AcceptanceTest` 12、`CrashGuardTest` 19→45、`SettingsTest` 18→24、`OpenFolderTest` 新增 20、
-> `DesktopRestoreTest` 新增 21、`VirtualPanelTest` 19→17（合并同类项）。
-> 原有断言**全部保留且继续通过**。
+> 断言数变化：151 → 312。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryOverrideTest` 30、
+> 新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、`CrashGuardTest` 19→45、`SettingsTest` 18→24、
+> `OpenFolderTest` 新增 20、`DesktopRestoreTest` 新增 21、`FullscreenTest` 4→5、
+> `VirtualPanelTest` 19→17（合并同类项）。原有断言**全部保留且继续通过**。
 
 ### 手动用例清单（实测结果）
 

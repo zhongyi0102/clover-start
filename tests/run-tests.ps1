@@ -106,6 +106,10 @@ Invoke-Suite 'FullscreenTest' $wpfRefs `
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))
 
+# 任务栏行高亮判定：输入回调只读缓存后，「哪一行该亮」的纯逻辑
+Invoke-Suite 'ActiveRowTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'ActiveRowTest.cs')))
+
 # ---------------- 验收测试 ----------------
 # 真实创建 PanelWindow，检查界面确实画出来了，并输出 JSON 证据报告。
 # 强制使用临时目录，拒绝接触用户真实 config（见 AcceptanceTest.cs 的安全闸）。

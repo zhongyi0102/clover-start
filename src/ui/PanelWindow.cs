@@ -140,6 +140,9 @@ namespace Clover
             {
                 everActivated = true;
                 Ui.Log("Activated");
+                // 面板被激活时刷新前台窗口缓存：此刻鼠标通常还没移到任务栏列表上，
+                // 先把缓存更新好，划过时高亮就是对的（避免读到最多 1.5 秒前的旧值）。
+                RefreshActiveCache();
             };
             PreviewKeyDown += delegate(object s, KeyEventArgs e)
             {
@@ -244,6 +247,10 @@ namespace Clover
             }
             if (searchHint != null) searchHint.Visibility = Visibility.Visible;
 
+            // 先刷前台窗口缓存（不受枚举限流影响），再决定要不要全量刷新任务列表。
+            // RefreshTaskList 有 800ms 最小间隔，可能整段被跳过；那样缓存的句柄就是旧的，
+            // 面板刚打开时划过任务栏会高亮错行。
+            RefreshActiveCache();
             RefreshTaskList();
             // 只有在内容可能变化时才重建磁贴：反复开关面板不必每次销毁/重建
             // 113 个控件（会持续推高内存，实测 30 次开关涨 100+ MB）。

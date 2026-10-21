@@ -50,6 +50,58 @@ namespace Clover
             taskTimer.Start();
         }
 
+        /// <summary>
+        /// 只刷新前台窗口句柄缓存，不做全量枚举。
+        ///
+        /// 用途：面板刚打开（ShowPanel）或窗口被激活时调用，保证鼠标还没划过来之前
+        /// 缓存就是新值。这样 MouseEnter/MouseLeave 依然只读缓存（输入回调里无系统调用），
+        /// 又不会出现「刚切到某窗口、立刻划过它却高亮不对」的延迟。
+        ///
+        /// 与 RefreshTaskList 的区别：这里**不受 TaskEnumMinIntervalMs 限制**——
+        /// 取一个前台句柄是极轻量的（一次 GetForegroundWindow），
+        /// 被限流跳过反而会留下旧值。
+        /// </summary>
+        void RefreshActiveCache()
+        {
+            try
+            {
+                IntPtr active = TaskList.GetActiveWindow();
+                if (active == cachedActive) return;
+                cachedActive = active;
+                // 句柄变了：就地改各行底色，不必等下一次全量刷新，也不重建整行。
+                ApplyActiveHighlight();
+            }
+            catch { }
+        }
+
+        /// <summary>按缓存的 cachedActive，重新给任务栏各行上底色（不重建控件）。</summary>
+        void ApplyActiveHighlight()
+        {
+            if (taskStack == null) return;
+            try
+            {
+                foreach (object o in taskStack.Children)
+                {
+                    Border b = o as Border;
+                    if (b == null || b.Tag == null) continue;
+                    IntPtr hwnd = (IntPtr)b.Tag;
+                    b.Background = IsActiveRow(hwnd, cachedActive) ? Ui.AccentSoft : Brushes.Transparent;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 判断任务栏某一行是否该显示「当前前台」底色。
+        ///
+        /// 抽成静态纯函数是为了可测：面板的视觉状态由它决定，
+        /// 但它不碰任何控件或系统调用，所以能在没有窗口的环境里断言。
+        /// </summary>
+        public static bool IsActiveRow(IntPtr rowHwnd, IntPtr cachedActive)
+        {
+            return rowHwnd != IntPtr.Zero && rowHwnd == cachedActive;
+        }
+
         void RefreshTaskList()
         {
             if (taskStack == null) return;
@@ -90,7 +142,9 @@ namespace Clover
             b.CornerRadius = new CornerRadius(6);
             b.Margin = new Thickness(0, 1, 0, 1);
             // 用缓存的句柄判断，不在构造时调 GetForegroundWindow
-            b.Background = cachedActive == w.Hwnd ? Ui.AccentSoft : Brushes.Transparent;
+            b.Background = IsActiveRow(w.Hwnd, cachedActive) ? Ui.AccentSoft : Brushes.Transparent;
+            // 记住这行对应哪个窗口，供 RefreshActiveCache 就地改底色（无需重建整行）
+            b.Tag = w.Hwnd;
             b.Cursor = Cursors.Hand;
             b.ToolTip = w.Title;
 

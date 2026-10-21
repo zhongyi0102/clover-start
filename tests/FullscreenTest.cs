@@ -88,6 +88,29 @@ namespace Clover
         static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         static extern IntPtr FindWindow(string cls, string name);
+        [DllImport("user32.dll")]
+        static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
+        [DllImport("user32.dll")]
+        static extern bool BringWindowToTop(IntPtr h);
+        [DllImport("user32.dll")]
+        static extern bool ShowWindowAsync(IntPtr h, int cmd);
+
+        const uint KEYEVENTF_KEYUP = 0x0002;
+        const byte VK_MENU = 0x12; // ALT
+
+        /// <summary>
+        /// ALT 键解锁前台。
+        ///
+        /// Windows 只在「本进程当前拥有前台」或「刚收到用户输入」时才允许
+        /// SetForegroundWindow 生效。测试机常被 Chrome / QQ / 微信 占着前台，
+        /// 光调 SetForegroundWindow 会被系统静默拒绝——这不是功能坏了，是权限问题。
+        /// 按一下 ALT 相当于模拟用户输入，解锁后就能把窗口抢到前台。
+        /// </summary>
+        static void UnlockForeground()
+        {
+            keybd_event(VK_MENU, 0, 0, IntPtr.Zero);
+            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+        }
 
         static IntPtr HostProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
         {
@@ -111,7 +134,18 @@ namespace Clover
             if (hwnd == IntPtr.Zero) return 2;
 
             ShowWindow(hwnd, 5);
-            SetForegroundWindow(hwnd);
+
+            // 抢前台：先按 ALT 解锁，再多次尝试。
+            // 单次 SetForegroundWindow 在有别的程序占着前台时会被系统拒绝。
+            for (int i = 0; i < 30; i++)
+            {
+                UnlockForeground();
+                BringWindowToTop(hwnd);
+                ShowWindowAsync(hwnd, 5);
+                SetForegroundWindow(hwnd);
+                Thread.Sleep(200);
+                if (GetForegroundWindow() == hwnd) break;
+            }
 
             MSG m;
             while (GetMessage(out m, IntPtr.Zero, 0, 0))
@@ -170,13 +204,18 @@ namespace Clover
                 }
 
                 // 把全屏窗口抢到前台。SetForegroundWindow 对非前台进程可能被系统拒绝，
-                // 而且测试机器上常有别的窗口（Chrome/QQ/微信）在抢焦点，所以这里重试几次
-                // 并校验 GetForegroundWindow 确实是它，避免偶发失败被误判成功能坏了。
+                // 而且测试机器上常有别的窗口（Chrome/QQ/微信）在抢焦点，所以这里：
+                //   1. 按 ALT 解锁前台（模拟用户输入，系统才放行）
+                //   2. 反复尝试并校验 GetForegroundWindow 确实是它
+                // 避免偶发失败被误判成功能坏了。
                 bool foreground = false;
-                for (int attempt = 0; attempt < 10; attempt++)
+                for (int attempt = 0; attempt < 20; attempt++)
                 {
+                    UnlockForeground();
+                    BringWindowToTop(hwnd);
+                    ShowWindowAsync(hwnd, 5);
                     SetForegroundWindow(hwnd);
-                    Thread.Sleep(300);
+                    Thread.Sleep(250);
                     if (GetForegroundWindow() == hwnd) { foreground = true; break; }
                 }
                 Check(foreground, "全屏窗口成功成为前台窗口（若失败是环境干扰，非功能问题）");
