@@ -21,7 +21,14 @@ namespace Clover
         public List<string> Order = new List<string>();
         public List<AppItem> Apps = new List<AppItem>();
 
-        public static readonly string[] DefaultOrder = new string[] { "办公", "开发", "网络通讯", "影音娱乐", "系统工具", "其他" };
+        public static readonly string[] DefaultOrder = new string[] { "办公", "开发", "网络通讯", "影音娱乐", "系统工具", "工具/命令行", "其他" };
+
+        /// <summary>
+        /// 「工具/命令行」分类名。
+        /// 命令行工具、驱动、Module Docs、Reset 工具、帮助文档都收在这里，
+        /// 避免它们混在「开发」「网络通讯」里干扰查找。
+        /// </summary>
+        public const string ToolCategory = "工具/命令行";
 
         public static Catalog Load(string baseDir)
         {
@@ -31,6 +38,17 @@ namespace Clover
             ReadInto(c, Path.Combine(cfg, "manual-apps.json"));
 
             foreach (string d in DefaultOrder) EnsureOrder(c, d);
+
+            // 用户手工指定的分类覆盖优先级最高：
+            // 本表 > 开始菜单目录规则 > 关键词规则。
+            // 放在这里，每次加载/重新扫描都会重新应用，所以「重新扫描后保持」。
+            try
+            {
+                CategoryOverrides ov = CategoryOverrides.Load(baseDir);
+                ov.Apply(c.Apps);
+            }
+            catch { }
+
             foreach (AppItem a in c.Apps) EnsureOrder(c, a.Category);
             return c;
         }
@@ -162,14 +180,111 @@ namespace Clover
 
         public static string GuessCategory(string name)
         {
+            if (string.IsNullOrEmpty(name)) return "其他";
             string n = name.ToLowerInvariant();
+
+            // ---------- 工具/命令行（放在最前，避免被「开发」「系统工具」抢走）----------
+            // 命令行工具 / 驱动 / Module Docs / Reset 工具 / 帮助文档 都归这里。
+            // 这些平时用不到，混在开发或网络通讯里只会干扰查找。
+            if (IsToolLike(n)) return ToolCategory;
+
+            // ---------- Windows 自带管理工具 ----------
+            // 这些名字没有共同后缀，只能逐个列举。
+            // 注意：必须在「开发」等规则之前判断，但它们也不该进「工具/命令行」
+            // （那是给命令行窗口和文档用的），所以单独走一条。
+            if (IsSystemTool(n)) return "系统工具";
+
+            // ---------- 其余按原有的优先级 ----------
             if (Regex.IsMatch(n, "steam|epic|wegame|game|游戏|原神|minecraft|league")) return "影音娱乐";
             if (Regex.IsMatch(n, "chrome|edge|firefox|brave|browser|浏览器|telegram|discord|wechat|weixin|qq|微信|抖音|钉钉|迅雷|网盘|clash|v2ray|迅游")) return "网络通讯";
             if (Regex.IsMatch(n, "word|excel|powerpoint|wps|office|notion|obsidian|onenote|飞书|foxit|adobe.*(acrobat|reader)|pdf")) return "办公";
-            if (Regex.IsMatch(n, "code|studio|python|git|node|sql|java|docker|postman|pycharm|idea|anaconda|jupyter|vscode|visual")) return "开发";
+            // 打印机 / 扫描仪 / 传真类硬件工具：不是办公套件，归系统工具
+            if (Regex.IsMatch(n, @"\bhp\b|canon|epson|brother|打印机|扫描仪|传真")) return "系统工具";
+            if (Regex.IsMatch(n, "code|studio|python|git|node|sql|java|docker|postman|pycharm|idea|anaconda|jupyter|vscode|visual|mongo")) return "开发";
             if (Regex.IsMatch(n, "player|vlc|potplayer|music|音乐|vid|video|bilibili|哔哩|剪映|obs|audacity|格式工厂")) return "影音娱乐";
             if (Regex.IsMatch(n, "7-zip|winrar|bandizip|压缩|power|sharex|snip|截图|ditto|defender|清理|disk|分区")) return "系统工具";
+
+            // ---------- 最小补充：早期版本能正确分类、当前关键词覆盖不到的 15 个 ----------
+            // 这些应用在更早的规则里分对了，当前关键词没有对应项。
+            // 若不补，改成「每次重判」后它们会掉进「其他」。
+            // 只补这一批，不再扩大关键词表——后续靠「移到分类」让用户自己纠正。
+            if (Regex.IsMatch(n, "dbeaver|ollama|\\bwsl\\b|wsl settings|harness|\\bdsh\\b|deepseek")) return "开发";
+            if (Regex.IsMatch(n, "karing|localsend|向日葵|直播伴侣")) return "网络通讯";
+            if (Regex.IsMatch(n, "mineradio|faststone|动漫|概念版")) return "影音娱乐";
+            if (Regex.IsMatch(n, "图吧|工具箱|sticky notes|便笺")) return "系统工具";
+
             return "其他";
+        }
+
+        /// <summary>
+        /// 判断是否属于 Windows 自带的系统管理/辅助工具。传入已转小写的名称。
+        ///
+        /// 这些是开始菜单「Windows 管理工具」「辅助功能」等目录里的东西，
+        /// 名字没有共同后缀，只能逐个列举；漏掉的会掉进「其他」。
+        /// </summary>
+        public static bool IsSystemTool(string lowerName)
+        {
+            if (string.IsNullOrEmpty(lowerName)) return false;
+            string n = lowerName;
+
+            string[] keywords = new string[]
+            {
+                // 管理工具
+                "file explorer", "task manager", "control panel", "event viewer",
+                "registry editor", "task scheduler", "system configuration",
+                "system information", "resource monitor", "performance monitor",
+                "component services", "computer management", "services",
+                "memory diagnostics", "steps recorder", "recoverydrive", "recovery drive",
+                "iscsi initiator", "odbc data sources", "remote desktop connection",
+                "windows defender firewall", "disk cleanup", "dfrgui", "defragment",
+                // 辅助功能
+                "magnify", "narrator", "on-screen keyboard", "voiceaccess",
+                "livecaptions", "live captions", "character map",
+                // 常见运行/工具
+                "run", "pe viewer", "system informer", "托盘", "工具箱",
+            };
+
+            foreach (string k in keywords)
+            {
+                if (n == k) return true;                 // 完全相等（如 "run"、"services"）
+                if (k.Length >= 4 && n.Contains(k)) return true;  // 包含（避免过短词误伤）
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 判断是否属于「工具/命令行」分类。传入已转小写的名称。
+        ///
+        /// 覆盖：命令行窗口、驱动、Python Module Docs、Reset 工具、帮助/文档。
+        /// 顺序上这些必须在「开发」等规则之前判断，否则会被抢走。
+        ///
+        /// 注意：词匹配用「包含」而不是严格词边界，因为像 ChromeDriver 这种
+        /// 连写的名称里 driver 前面是字母，用 \b 会漏掉。
+        /// </summary>
+        public static bool IsToolLike(string lowerName)
+        {
+            if (string.IsNullOrEmpty(lowerName)) return false;
+            string n = lowerName;
+
+            // 命令行窗口 / 终端
+            if (Regex.IsMatch(n, "(^|\\W)(prompt|command line|console|terminal|bash|shell|repl|cmd|powershell|命令提示符)(\\W|$)"))
+                return true;
+
+            // 驱动（ChromeDriver、Driver Booster、xxx Driver 等）
+            if (n.Contains("driver")) return true;
+
+            // Python Module Docs 之类
+            if (n.Contains("module docs") || n.Contains("module doc")) return true;
+
+            // Reset xxx 工具
+            if (n.StartsWith("reset ") || n.StartsWith("reset-")) return true;
+
+            // 帮助 / 文档（单独归一类，不混进业务分类）
+            if (Regex.IsMatch(n, "(^|\\W)(guide|manual|help|readme|faq|documentation|docs|about|release notes)(\\W|$)"))
+                return true;
+            if (n.Contains("帮助") || n.Contains("关于") || n.Contains("说明")) return true;
+
+            return false;
         }
 
         public void HideCategories(List<string> hidden)

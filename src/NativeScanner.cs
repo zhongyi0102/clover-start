@@ -16,10 +16,12 @@ namespace Clover
         static readonly string[] ExcludeNameParts = new string[]
         {
             "卸载", "Uninstall", "Help$", "帮助", "ReadMe", "FAQ", "Documentation",
-            "Dokumentation", "Manuals", "User's Guide", "Release Notes", "Homepage",
+            "Dokumentation", "Manuals", "User’s Guide", "User's Guide", "Release Notes", "Homepage",
             "Visit ", "关于", "About", "检查更新", "Check for Update", "配置 Java",
             "新机手册", "发送至", "产品改进", "向导", "Install Additional",
-            "打开日志目录", "SnoreToast", "Administrative Tools"
+            "打开日志目录", "SnoreToast", "Administrative Tools",
+            // 自我引用：不该把启动面板自己列进面板
+            "四叶草启动器", "CloverStart"
         };
 
         public static bool Scan(string baseDir)
@@ -29,9 +31,10 @@ namespace Clover
                 string cfg = Path.Combine(baseDir, "config");
                 string appsPath = Path.Combine(cfg, "apps.json");
 
-                Dictionary<string, string> oldCats = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 List<string> order = new List<string>();
 
+                // 只从旧文件里读 order（分类顺序），不再读 category。
+                // 分类每次按当前规则重判，见下方 GuessCategory 调用处的说明。
                 string oldText = JsonIO.Read(appsPath);
                 if (!string.IsNullOrEmpty(oldText))
                 {
@@ -44,22 +47,6 @@ namespace Clover
                         if (d != null && d.TryGetValue("order", out arr) && arr != null)
                         {
                             foreach (object o in (System.Collections.IEnumerable)arr) order.Add(Convert.ToString(o));
-                        }
-                        if (d != null && d.TryGetValue("apps", out arr) && arr != null)
-                        {
-                            foreach (object o in (System.Collections.IEnumerable)arr)
-                            {
-                                Dictionary<string, object> m = o as Dictionary<string, object>;
-                                if (m == null) continue;
-                                object pv;
-                                if (!m.TryGetValue("path", out pv)) continue;
-                                string p = Convert.ToString(pv);
-                                if (string.IsNullOrEmpty(p)) continue;
-                                string c = "";
-                                object cv;
-                                if (m.TryGetValue("category", out cv)) c = Convert.ToString(cv);
-                                if (!oldCats.ContainsKey(p)) oldCats[p] = c;
-                            }
                         }
                     }
                     catch { }
@@ -105,11 +92,13 @@ namespace Clover
                             }
                             catch { }
 
-                            string cat;
-                            if (!oldCats.TryGetValue(file, out cat) || string.IsNullOrEmpty(cat))
-                            {
-                                cat = GuessCategory(name, folder);
-                            }
+                            // 每次都按当前规则重新判定分类。
+                            //
+                            // 以前这里会保留 apps.json 里的旧分类（oldCats），本意是
+                            // "别覆盖用户改过的"，但实际上用户手工调整的条目都在
+                            // manual-apps.json 里，这里扫描的是开始菜单自动发现的，
+                            // 保留旧值只会让规则改进永远不生效。
+                            string cat = GuessCategory(name, folder);
 
                             Dictionary<string, object> m = new Dictionary<string, object>();
                             m["name"] = name;
@@ -235,7 +224,15 @@ namespace Clover
         static string GuessCategory(string name, string folder)
         {
             string f = (folder == null ? "" : folder).ToLowerInvariant();
-            if (f.Contains("office") || f.Contains("wps") || f.Contains("hp")) return "办公";
+
+            // 工具/命令行优先：命令行、驱动、Module Docs、Reset、帮助文档
+            // 放在最前，否则会被下面的「开发」等目录规则抢走。
+            if (Catalog.IsToolLike(name == null ? "" : name.ToLowerInvariant()))
+                return Catalog.ToolCategory;
+
+            // 注意：这里曾经用 f.Contains("hp") 把 HP 打印机的 4 个工具判成「办公」，
+            // 但 HP 是打印机制造商，不是办公套件。已移除，改由名称规则归「系统工具」。
+            if (f.Contains("office") || f.Contains("wps")) return "办公";
             if (f.Contains("visual studio") || f.Contains("jetbrains") || f.Contains("python") ||
                 f.Contains("anaconda") || f.Contains("git") || f.Contains("node") || f.Contains("mysql") ||
                 f.Contains("mongo") || f.Contains("xshell") || f.Contains("xftp") || f.Contains("sql"))

@@ -55,7 +55,11 @@ function Invoke-Suite($name, $refs, $sources) {
 
 # ---------------- 单元测试 ----------------
 Invoke-Suite 'CatalogTest' ($baseRefs + $webRef) `
-    @((Join-Path $srcDir 'Catalog.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $srcDir 'UsageStore.cs'), (Join-Path $testDir 'CatalogTest.cs'))
+    @((Join-Path $srcDir 'Catalog.cs'), (Join-Path $srcDir 'CategoryOverrides.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $srcDir 'UsageStore.cs'), (Join-Path $testDir 'CatalogTest.cs'))
+
+# 分类覆盖表：优先级、重扫保持、损坏回退
+Invoke-Suite 'CategoryOverrideTest' ($baseRefs + $webRef) `
+    @((Join-Path $srcDir 'CategoryOverrides.cs'), (Join-Path $srcDir 'Catalog.cs'), (Join-Path $srcDir 'JsonIO.cs'), (Join-Path $srcDir 'UsageStore.cs'), (Join-Path $testDir 'CategoryOverrideTest.cs'))
 
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $srcDir 'Pinyin.cs'), (Join-Path $srcDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
@@ -93,6 +97,23 @@ Invoke-Suite 'FullscreenTest' $wpfRefs `
 
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))
+
+# ---------------- 验收测试 ----------------
+# 真实创建 PanelWindow，检查界面确实画出来了，并输出 JSON 证据报告。
+# 强制使用临时目录，拒绝接触用户真实 config（见 AcceptanceTest.cs 的安全闸）。
+$acceptanceReport = Join-Path $outDir 'acceptance-report.json'
+Write-Host '===== AcceptanceTest =====' -ForegroundColor Cyan
+$accExe = Join-Path $outDir 'AcceptanceTest.exe'
+& $csc /nologo /target:exe /codepage:65001 ('/out:' + $accExe) $wpfRefs ($allSrc + @((Join-Path $testDir 'AcceptanceTest.cs'))) 2>&1 |
+    Where-Object { $_ -notmatch 'warning CS' }
+if ($LASTEXITCODE -ne 0) {
+    Write-Host '编译失败: AcceptanceTest' -ForegroundColor Red
+    $script:failed++
+} else {
+    & $accExe --report $acceptanceReport
+    if ($LASTEXITCODE -ne 0) { $script:failed++ }
+}
+Write-Host ''
 
 if ($script:failed -eq 0) {
     Write-Host '全部测试通过' -ForegroundColor Green

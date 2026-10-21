@@ -66,11 +66,15 @@ namespace Clover
 
         Rect normalRect = Rect.Empty;
 
+        /// <summary>用户手工指定的分类覆盖表（右键「移到分类」写入）。</summary>
+        CategoryOverrides overrides;
+
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {
             this.baseDir = baseDir;
             this.trigger = trigger;
             this.settings = settings ?? Settings.Load(baseDir);
+            this.overrides = CategoryOverrides.Load(baseDir);
             catalog = Catalog.Load(baseDir);
             usage = UsageStore.Load(baseDir);
             hiddenCats = this.settings.HiddenCategories;

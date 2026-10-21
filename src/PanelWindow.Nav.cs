@@ -513,6 +513,36 @@ namespace Clover
             openDir.Click += delegate { OpenContainingFolder(a); };
             cm.Items.Add(openDir);
 
+            // ---- 移到分类 →（子菜单）----
+            // 结果存 config\category-overrides.json，优先级高于关键词规则，
+            // 重新扫描后依然保持。
+            MenuItem moveTo = new MenuItem();
+            moveTo.Header = "移到分类";
+            foreach (string cat in MovableCategories())
+            {
+                string target = cat;
+                MenuItem sub = new MenuItem();
+                sub.Header = target;
+                bool isCurrent = string.Equals(a.Category, target, StringComparison.Ordinal);
+                sub.IsChecked = isCurrent;
+                sub.IsEnabled = !isCurrent; // 已在当前分类就没必要再移
+                sub.Click += delegate { MoveAppToCategory(a, target); };
+                moveTo.Items.Add(sub);
+            }
+
+            // 已经有手工覆盖时，提供「恢复自动分类」
+            string overridden = GetOverride(a.Path);
+            if (overridden != null)
+            {
+                moveTo.Items.Add(new Separator());
+                MenuItem reset = new MenuItem();
+                reset.Header = "恢复自动分类";
+                reset.Click += delegate { MoveAppToCategory(a, null); };
+                moveTo.Items.Add(reset);
+            }
+
+            cm.Items.Add(moveTo);
+
             // ---- 从常用移除（只在「常用」分类出现）----
             if (showingCommon)
             {
@@ -536,6 +566,75 @@ namespace Clover
             cm.Closed += delegate { taskMenuOpen = false; };
             cm.Placement = PlacementMode.MousePoint;
             cm.IsOpen = true;
+        }
+
+        /// <summary>可选的目标分类：默认分类 + 当前已存在的其它分类。</summary>
+        List<string> MovableCategories()
+        {
+            List<string> list = new List<string>();
+            foreach (string c in Catalog.DefaultOrder)
+            {
+                if (!list.Contains(c)) list.Add(c);
+            }
+            // 补上数据里出现过、但不在默认表里的分类（例如用户自己加过的）
+            try
+            {
+                if (catalog != null && catalog.Order != null)
+                {
+                    foreach (string c in catalog.Order)
+                    {
+                        if (!string.IsNullOrEmpty(c) && !list.Contains(c)) list.Add(c);
+                    }
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        /// <summary>读某应用的覆盖分类；无覆盖返回 null。</summary>
+        string GetOverride(string appPath)
+        {
+            try
+            {
+                return overrides == null ? null : overrides.Get(appPath);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 把应用移到指定分类（category 传 null 表示恢复自动分类）。
+        /// 写入 category-overrides.json，然后重新加载目录并刷新界面。
+        /// </summary>
+        void MoveAppToCategory(AppItem a, string category)
+        {
+            try
+            {
+                if (a == null || string.IsNullOrEmpty(a.Path)) return;
+                if (overrides == null) overrides = CategoryOverrides.Load(baseDir);
+
+                bool changed;
+                if (string.IsNullOrEmpty(category))
+                {
+                    changed = overrides.Remove(a.Path);
+                    Ui.Log("恢复自动分类: " + a.Name);
+                }
+                else
+                {
+                    changed = overrides.Set(a.Path, category);
+                    Ui.Log("移到分类: " + a.Name + " -> " + category);
+                }
+
+                if (!changed) return;
+
+                // 重新加载目录（会重新应用覆盖表），保持当前选中分类
+                ReloadCatalog();
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "移到分类");
+            }
         }
 
         /// <summary>

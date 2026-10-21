@@ -8,7 +8,7 @@
 - 按钮是任务栏里的一个独立按钮（44×48，原生样式、悬停高亮），位于应用按钮组末尾并自动跟随；不会遮挡任何图标
 - 面板窗口可以像普通软件一样**拖动**（按住顶部标题区拖动）和**调整大小**（拖四边或四角），位置和尺寸保存在 `config\layout.json`
 - 右上角三个窗口按钮：**─ 最小化**（收起面板）/ **□ 最大化·还原**（铺满整个屏幕，再点一次还原）/ **✕ 关闭**（收起面板）
-- 左侧是分类（常用 / 全部 / 办公 / 开发 / 网络通讯 / 影音娱乐 / 其他），点一下切换；「常用」按使用次数自动收集（最多 12 个），「游戏」已并入「影音娱乐」
+- 左侧是分类（常用 / 全部 / 办公 / 开发 / 网络通讯 / 影音娱乐 / 系统工具 / 工具/命令行 / 其他），点一下切换；「常用」按使用次数自动收集（最多 12 个），「游戏」已并入「影音娱乐」
 - 应用图标按**使用频率**排序：从面板启动次数越多越靠前，次数相同按最近使用，没用过的按名称；数据保存在 `config\usage.json`（删掉即可重置）
 - 应用磁贴可以**拖动调整顺序**（像桌面图标一样）：拖动一个磁贴放到另一个磁贴上即可换位，顺序按分类保存到 `config\order.json`，删掉该文件恢复按使用频率排序
 - 顶部搜索框：输入即过滤，支持中文、英文，以及**拼音**——全拼（`weixin` → 微信）和首字母（`wx` → 微信）都行
@@ -16,6 +16,7 @@
 - 点击应用图标直接启动；`Esc` 或点击面板外自动收起
 - 「常用」里右键应用磁贴 → **从常用移除**（清掉该应用的启动次数记录，它仍保留在原分类和「全部」里）；这个菜单项只在「常用」分类里出现
 - **所有分类**里右键应用磁贴 → **打开文件所在位置**：在资源管理器里打开该应用所在目录并选中它。`.lnk` 会先解析出真实目标再定位（不是定位到开始菜单里那个快捷方式）；文件已被卸载但目录还在时直接打开目录；两者都不存在时给出提示
+- **所有分类**里右键应用磁贴 → **移到分类 →**：手工把应用归到你认为对的分类。结果存在 `config\category-overrides.json`，**优先级高于自动分类规则**，重新扫描后依然保持；已经手工指定过的应用，菜单里会多一项「恢复自动分类」
 - 左侧分类下方的**任务栏**区域列出当前打开的所有窗口（图标 + 标题），点一下切换到该窗口；当前前台窗口高亮，每 1.5 秒自动刷新
 - 任务栏里的窗口项右键 → 显示在任务栏（把按钮放到左下角）；左下角的按钮右键可关闭窗口或从任务栏移除，窗口关掉后按钮自动消失
 
@@ -65,6 +66,52 @@
 - **桌面不留快捷方式（默认关闭）**：默认**不**动桌面。用户手动勾选「自动移走桌面快捷方式」后（首次会弹一次说明确认），桌面（含公共桌面）上出现的 `.lnk` 会被移到 `desktop-backup\`（按时间命名）；被移走的快捷方式若指向面板里没有的程序，会自动登记到 `config\manual-apps.json`，仍能启动。
   - **一键还原**：右键菜单「还原桌面快捷方式」把备份放回桌面，重名自动加「-还原N」后缀，绝不覆盖
   - **备份永不自动删除**：超过 200 个只在 `error.log` 写一条 WARN（同一次运行只写一次），不删任何文件
+
+## 分类规则
+
+### 优先级（高 → 低）
+
+| 顺序 | 来源 | 说明 |
+|---|---|---|
+| 1 | **用户手工指定** | `config\category-overrides.json`，来自右键菜单「移到分类」。重新扫描后仍保持 |
+| 2 | **开始菜单目录名** | 辅助提示，**不作主分类**。例如 `Anaconda3 (64-bit)`、`JetBrains` 这类目录会归到「开发」 |
+| 3 | **应用名关键词** | 主分类依据，下表的规则按顺序匹配，命中即返回 |
+| 4 | 兜底 | 都不匹配 → 「其他」 |
+
+> 分类靠关键词枚举，**必然会有判错的**。与其不断堆规则，不如用右键「移到分类」纠正一次——结果优先级最高，之后不会再被自动规则改回去。
+
+### 关键词规则（按匹配顺序）
+
+| 分类 | 命中关键词（节选） |
+|---|---|
+| **工具/命令行** | `prompt`、`command line`、`console`、`terminal`、`bash`、`shell`、`powershell`、`cmd`、`driver`、`module docs`、`reset `（开头）、`guide`/`manual`/`help`/`readme`/`faq`/`documentation`/`docs` |
+| **系统工具** | Windows 自带管理/辅助工具（`file explorer`、`task manager`、`registry editor`、`event viewer`、`narrator`、`magnify`…）；`7-zip`/`winrar`/`sharex`/`snip`/`disk`；打印机扫描仪（`hp`/`canon`/`epson`/`打印机`/`扫描仪`/`传真`） |
+| **办公** | `word`/`excel`/`powerpoint`/`wps`/`office`/`notion`/`obsidian`/`onenote`/`飞书`/`foxit`/`pdf` |
+| **开发** | `code`/`studio`/`python`/`git`/`node`/`sql`/`java`/`docker`/`postman`/`pycharm`/`idea`/`anaconda`/`mongo`/`dbeaver`/`ollama`/`wsl` 等 |
+| **网络通讯** | `chrome`/`edge`/`firefox`/`telegram`/`wechat`/`微信`/`qq`/`抖音`/`钉钉`/`迅雷`/`clash`/`karing`/`localsend`/`向日葵` 等 |
+| **影音娱乐** | `steam`/`game`/`游戏`/`player`/`vlc`/`potplayer`/`music`/`bilibili`/`剪映`/`mineradio`/`faststone` 等 |
+| **其他** | 以上都不命中 |
+
+**注意**：`Git` 归「开发」（版本控制工具），而 `Git Bash` / `Git CMD` 是命令行窗口，归「工具/命令行」。
+「工具/命令行」这类平时用不到的东西单独分出去，是为了让「开发」分类里不再混着十几个命令行窗口。
+
+### 覆盖表文件
+
+```json
+{
+  "version": 1,
+  "updated": "2026-10-21 18:00:00",
+  "overrides": {
+    "C:\\ProgramData\\...\\HP Scan.lnk": "系统工具",
+    "D:\\Software\\Geek\\geek.exe": "系统工具"
+  }
+}
+```
+
+- key 是**应用路径**（唯一且稳定），值是想归入的分类
+- 路径**大小写不敏感**
+- 文件损坏 / 读不出时**回退为空表**（等于全部走默认规则），不阻断启动
+- 删掉该文件即恢复全部自动分类
 
 ## 目录结构
 
@@ -116,6 +163,7 @@ clover-start\
 | `ScanService.cs` | 后台扫描调度（单飞 + 完成后回界面线程） |
 | `AppWatcher.cs` | 监听开始菜单/桌面变化、去抖、定时兜底、桌面清理 |
 | `Catalog.cs` | 软件清单模型、分类规则、排序 |
+| `CategoryOverrides.cs` | 用户手工指定的「应用 → 分类」覆盖表（优先级最高） |
 | `UsageStore.cs` | 启动次数与最近使用时间 |
 | `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
 | `JsonIO.cs` | 原子写 + `.bak` 回退 + 每日备份 |
@@ -478,13 +526,14 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**八个套件，共 151 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十二个套件，共 298 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `CatalogTest` | 43 | `GuessCategory` 分类规则、大小写、优先级、`HideCategories`、`ContainsName/Path`、`JsonIO` 往返、`.bak` 回退、每日备份与裁剪 |
+| `CatalogTest` | 76 | 分类规则（含「工具/命令行」、Windows 系统工具、HP 不再误判办公）、大小写、优先级、`HideCategories`、`ContainsName/Path`、`JsonIO` 往返、`.bak` 回退、每日备份与裁剪 |
+| `CategoryOverrideTest` | 30 | 分类覆盖表：优先级高于关键词规则、重新加载后保持、路径大小写不敏感、**文件损坏时回退到默认规则**、跳过空 key/value、损坏后自愈 |
 | `PinyinTest` | 37 | 单字拼音、首字母、全拼、中英混合、边界值、真实应用名覆盖率、性能 |
 | `SettingsTest` | 24 | 九个键的默认值（含 `desktopAutoClean` 默认 `false`）、老配置显式 `true` 不被覆盖、首次确认标记读写、未知字段保留、损坏 JSON 回退 |
 | `WatcherTest` | 5 | 事件风暴下监听链路、Error 处理器已挂、`Dispose` 后无泄漏回调 |
@@ -497,13 +546,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `CrashGuardTest` | 45 | 崩溃计数、2 分钟窗口边界、安全模式阈值、时钟回拨防护；**运行标记法**：残留标记计数、与钩子计数去重、正常退出清除标记、重复 `EndRun` 幂等、N+1 次启动累计 N 次；**重新隐藏配额**：无标记不放行、首次放行、二次拒绝、消费后删标记、启动清理 |
 | `DesktopRestoreTest` | 21 | 重名不覆盖（内容校验）、多轮还原互不覆盖、还原后从 backup 移除、文件被占用时失败不重试、只处理 `.lnk`、空/不存在目录安全返回 |
 | `OpenFolderTest` | 20 | 「打开文件所在位置」路径解析：存在的文件走 `/select`、文件没了退回目录、目录也没了给提示、`.lnk` 解析真实目标、无效 `.lnk` 退回自身、null/空串安全 |
-| `FullscreenTest` | 4 | 子进程建**真正的无边框全屏窗口** → 断言 `IsFullscreen()` = true → 关掉后恢复 false |
+| `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 确认它成为前台窗口 → 断言 `IsFullscreen()` = true → 关掉后恢复 false |
 | `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
 
-**最近一次运行结果：10 个套件、222 个断言全部通过（2026-10-20，v2026.10.20.2133）**
+**验收测试**（真实创建窗口，验证"界面确实画出来了"）：
 
-> 断言数变化：151 → 222（新增 71）。其中 `SettingsTest` +6、`CrashGuardTest` +26、`DesktopRestoreTest` 新增 21、
-> `OpenFolderTest` 新增 20、`VirtualPanelTest` 从 19 调整为 17（合并同类项）。原有 151 项断言**全部保留且继续通过**。
+| 套件 | 断言数 | 覆盖 |
+|---|---|---|
+| `AcceptanceTest` | 12 | **真实创建 `PanelWindow`** 并 Show → 检查控件树可遍历（约 100 个可视元素）、左侧分类栏有条目、应用磁贴已渲染、搜索框可输入、覆盖表在真实界面链路上生效、显示/隐藏不抛异常 |
+
+`AcceptanceTest` 借鉴了两个做法（**只借鉴形态，不复制代码** —— 参考项目用的是与 MIT 不兼容的非商业许可）：
+
+1. **输出 JSON 证据报告**，而不是只喊"通过"。报告含每项的实测数据（如"共 101 个可视元素"）
+2. **拒绝使用用户真实数据目录**。带 `--data-dir` 指向真实目录时直接退出码 2 并报错，默认强制走临时目录
+
+```
+# 只跑验收测试并查看证据
+tests\bin\AcceptanceTest.exe --report report.json
+
+# 验证安全闸（应退出码 2 并拒绝）
+tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
+```
+
+**最近一次运行结果：12 个套件、298 个断言全部通过（2026-10-21，v1.0.0）**
+
+> 断言数变化：151 → 298。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryOverrideTest` 30、
+> 新增 `AcceptanceTest` 12、`CrashGuardTest` 19→45、`SettingsTest` 18→24、`OpenFolderTest` 新增 20、
+> `DesktopRestoreTest` 新增 21、`VirtualPanelTest` 19→17（合并同类项）。
+> 原有断言**全部保留且继续通过**。
 
 ### 手动用例清单（实测结果）
 

@@ -19,6 +19,13 @@ namespace Clover
         DateTime lastTaskEnum = DateTime.MinValue;
 
         /// <summary>
+        /// 当前前台窗口句柄的缓存。
+        /// 只在 RefreshTaskList 里取一次；鼠标事件（MouseEnter/MouseLeave）只读它，
+        /// 不在输入回调里调 GetForegroundWindow()。
+        /// </summary>
+        IntPtr cachedActive = IntPtr.Zero;
+
+        /// <summary>
         /// 枚举窗口的最小间隔。ShowPanel 每次都会调这里，而枚举会为每个窗口
         /// 创建对象并取图标——即便有签名去重，枚举本身的开销也很大。
         /// 面板刚打开时不必每次都全量枚举。
@@ -52,8 +59,14 @@ namespace Clover
             lastTaskEnum = DateTime.Now;
 
             List<TaskWindow> wins = TaskList.GetWindows(Process.GetCurrentProcess().Id);
+
+            // 前台窗口句柄只在这次刷新时取一次，缓存起来。
+            // 鼠标事件（MouseEnter/MouseLeave）不能再各自调 GetForegroundWindow()——
+            // 那会变成"输入回调里查询系统状态"，鼠标划过列表时每项每次进出都发一次系统调用。
+            cachedActive = TaskList.GetActiveWindow();
+
             StringBuilder sb = new StringBuilder();
-            sb.Append(TaskList.GetActiveWindow()).Append('|');
+            sb.Append(cachedActive).Append('|');
             foreach (TaskWindow tw in wins) sb.Append(tw.Hwnd).Append(':').Append(tw.Title).Append('|');
             string sig = sb.ToString();
             if (sig == taskSig) return;
@@ -76,7 +89,8 @@ namespace Clover
             b.Height = 30;
             b.CornerRadius = new CornerRadius(6);
             b.Margin = new Thickness(0, 1, 0, 1);
-            b.Background = TaskList.IsActive(w.Hwnd) ? Ui.AccentSoft : Brushes.Transparent;
+            // 用缓存的句柄判断，不在构造时调 GetForegroundWindow
+            b.Background = cachedActive == w.Hwnd ? Ui.AccentSoft : Brushes.Transparent;
             b.Cursor = Cursors.Hand;
             b.ToolTip = w.Title;
 
@@ -111,8 +125,10 @@ namespace Clover
             g.Children.Add(t);
 
             b.Child = g;
-            b.MouseEnter += delegate { if (!TaskList.IsActive(w.Hwnd)) b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { if (!TaskList.IsActive(w.Hwnd)) b.Background = Brushes.Transparent; };
+            // 鼠标事件只读缓存的 cachedActive，不再各自调 GetForegroundWindow()。
+            // 这样"输入回调"里没有任何系统调用。
+            b.MouseEnter += delegate { if (cachedActive != w.Hwnd) b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { if (cachedActive != w.Hwnd) b.Background = Brushes.Transparent; };
             b.MouseLeftButtonUp += delegate { TaskList.Activate(w.Hwnd); HidePanel(); };
             b.MouseRightButtonUp += delegate { ShowTaskMenu(w); };
             return b;
