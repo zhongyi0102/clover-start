@@ -595,7 +595,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：13 个套件、312 个断言全部通过（2026-10-21，v1.0.0）**
+**最近一次运行结果：13 个套件、312 个断言全部通过（2026-10-21，v1.0.1）**
 
 > 断言数变化：151 → 312。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryOverrideTest` 30、
 > 新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、`CrashGuardTest` 19→45、`SettingsTest` 18→24、
