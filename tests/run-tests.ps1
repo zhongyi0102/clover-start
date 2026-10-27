@@ -58,12 +58,26 @@ function Invoke-Suite($name, $refs, $sources) {
 }
 
 # ---------------- 单元测试 ----------------
+# Catalog 依赖 CategoryOverrides / CategoryRules / NameMatch，这几个套件都要带上
+$catalogDeps = @(
+    (Join-Path $coreDir 'Catalog.cs'),
+    (Join-Path $coreDir 'CategoryOverrides.cs'),
+    (Join-Path $coreDir 'CategoryRules.cs'),
+    (Join-Path $coreDir 'NameMatch.cs'),
+    (Join-Path $coreDir 'JsonIO.cs'),
+    (Join-Path $coreDir 'UsageStore.cs')
+)
+
 Invoke-Suite 'CatalogTest' ($baseRefs + $webRef) `
-    @((Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'CatalogTest.cs'))
+    ($catalogDeps + @((Join-Path $testDir 'CatalogTest.cs')))
 
 # 分类覆盖表：优先级、重扫保持、损坏回退
 Invoke-Suite 'CategoryOverrideTest' ($baseRefs + $webRef) `
-    @((Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'CategoryOverrideTest.cs'))
+    ($catalogDeps + @((Join-Path $testDir 'CategoryOverrideTest.cs')))
+
+# 分类规则表：外置 TSV、匹配模式、归一化、热加载、坏文件回退
+Invoke-Suite 'CategoryRulesTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $testDir 'CategoryRulesTest.cs')))
 
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))

@@ -74,13 +74,43 @@
 | 顺序 | 来源 | 说明 |
 |---|---|---|
 | 1 | **用户手工指定** | `config\category-overrides.json`，来自右键菜单「移到分类」。重新扫描后仍保持 |
-| 2 | **开始菜单目录名** | 辅助提示，**不作主分类**。例如 `Anaconda3 (64-bit)`、`JetBrains` 这类目录会归到「开发」 |
-| 3 | **应用名关键词** | 主分类依据，下表的规则按顺序匹配，命中即返回 |
-| 4 | 兜底 | 都不匹配 → 「其他」 |
+| 2 | **规则表** | `config\category-rules.tsv`（**首次运行自动生成**）。命中即返回，**改文件即可调整分类，不用改代码** |
+| 3 | **开始菜单目录名** | 辅助提示，**不作主分类**。例如 `Anaconda3 (64-bit)`、`JetBrains` 这类目录会归到「开发」 |
+| 4 | **内置关键词** | 程序内建的兜底规则，见下表。规则表没命中时才走这里 |
+| 5 | 兜底 | 都不匹配 → 「其他」 |
 
-> 分类靠关键词枚举，**必然会有判错的**。与其不断堆规则，不如用右键「移到分类」纠正一次——结果优先级最高，之后不会再被自动规则改回去。
+> 分类靠名字匹配，**必然会有判错的**。两条纠正途径：右键「移到分类」（单次，优先级最高），或编辑规则表（批量、可分享）。
 
-### 关键词规则（按匹配顺序）
+### 规则表 `config\category-rules.tsv`
+
+**首次运行会在 `config\` 下自动生成**这份文件（带完整注释）。改完保存，右键四叶草 →「重新扫描应用」即生效，**不需要重启程序**。
+
+格式：
+
+```
+分类 <TAB> 匹配方式 <TAB> 别名1|别名2|别名3
+```
+
+以 `#` 开头的是注释，空行忽略。四种匹配方式：
+
+| 方式 | 行为 | 适合 |
+|---|---|---|
+| `word`（默认） | **按词匹配**。英文别名要求词边界 → `chrome` 不会命中 `ChromeDriver`；中文别名按子串 → `微信` 能命中 `微信电脑版` | 大多数情况 |
+| `exact` | 归一化后完全相等 | `gta`、`wps` 这类短缩写，避免误判 |
+| `sub` | 包含即可 | 明确知道不会误判时 |
+| `prefix` | 以别名开头 | 系列软件 |
+
+写规则时有几点值得知道：
+
+- **归一化会折叠全角字符**（FormKC）并忽略大小写，所以 `Ｗｏｒｄ` 和 `WORD` 都能命中 `word` 规则
+- **标点会被当作分隔符**：`7-Zip` 归一化后是 `7 zip`，所以规则里写 `7 zip` 或 `7zip`（exact）都能命中
+- **长别名优先**：`visual studio code` 会先于 `visual studio` 命中
+- **别名的中文按子串匹配是有意的**：中文没有空格分词，加词边界会让「微信电脑版」这类名字全部漏判
+- **数字不算词边界**：`gta` 会命中 `gta5tool`，所以 `gta` 这类短缩写该用 `exact`
+
+文件损坏或格式出错时：出错的行被跳过、其余照常生效；整份读不出时回退到内置默认表，**不影响启动**。
+
+### 内置关键词规则（兜底，按匹配顺序）
 
 | 分类 | 命中关键词（节选） |
 |---|---|
@@ -95,12 +125,24 @@
 **注意**：`Git` 归「开发」（版本控制工具），而 `Git Bash` / `Git CMD` 是命令行窗口，归「工具/命令行」。
 「工具/命令行」这类平时用不到的东西单独分出去，是为了让「开发」分类里不再混着十几个命令行窗口。
 
-### 覆盖表文件
+### 默认规则表里有什么
+
+开箱即用，主要是**内置关键词覆盖不到**的部分：
+
+| 分类 | 内容举例 |
+|---|---|
+| 影音娱乐 | **约 60 个游戏别名**：黑神话、艾尔登法环、赛博朋克、GTA、上古卷轴、巫师、博德之门、只狼、原神、崩坏、绝区零、永劫无间…（内置规则只认 Steam 系，单独启动的游戏原本都会掉进「其他」） |
+| 开发 | Mod 管理器（MO2、Vortex、Nexus Mod Manager）、调试工具（Cheat Engine、x64dbg、Ghidra、dnSpy） |
+| 网络通讯 | 下载器（qBittorrent、IDM、Motrix）、远程控制（ToDesk、向日葵）、会议（腾讯会议） |
+| 办公 | Typora、XMind、draw.io、印象笔记 |
+| 系统工具 | Geek Uninstaller、CrystalDiskInfo、图吧工具箱、DirectX Repair |
+
+### 覆盖表文件 `config\category-overrides.json`
 
 ```json
 {
   "version": 1,
-  "updated": "2026-10-21 18:00:00",
+  "updated": "2026-10-27 18:00:00",
   "overrides": {
     "C:\\ProgramData\\...\\HP Scan.lnk": "系统工具",
     "D:\\Software\\Geek\\geek.exe": "系统工具"
@@ -112,6 +154,7 @@
 - 路径**大小写不敏感**
 - 文件损坏 / 读不出时**回退为空表**（等于全部走默认规则），不阻断启动
 - 删掉该文件即恢复全部自动分类
+- 由右键菜单「移到分类」自动维护，一般不用手工编辑
 
 ## 目录结构
 
@@ -166,7 +209,9 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `JsonIO.cs` | 原子写 + `.bak` 回退 + 每日备份 |
 | `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
 | `Catalog.cs` | 软件清单模型、分类规则、排序 |
+| `CategoryRules.cs` | **外置分类规则表**（`config\category-rules.tsv`，首次运行自动生成） |
 | `CategoryOverrides.cs` | 用户手工指定的「应用 → 分类」覆盖表（优先级最高） |
+| `NameMatch.cs` | 应用名归一化与匹配（FormKC 折叠、词边界、exact/sub/prefix） |
 | `UsageStore.cs` | 启动次数与最近使用时间 |
 | `AppScan.cs` | 扫描流程编排（开始菜单 → 死链接清理 → 便携软件） |
 | `NativeScanner.cs` | 遍历开始菜单目录、猜分类、清理死链接 |
@@ -226,6 +271,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | 文件 | 负责 |
 |---|---|
 | `tests\CatalogTest.cs` | 分类规则 / JsonIO / 每日备份 |
+| `tests\CategoryRulesTest.cs` | 外置规则表：优先级 / 匹配模式 / 归一化 / 热加载 / 坏文件回退 |
 | `tests\CategoryOverrideTest.cs` | 分类覆盖表：优先级 / 重扫保持 / 损坏回退 |
 | `tests\PinyinTest.cs` | 拼音匹配 |
 | `tests\SettingsTest.cs` | 设置读写与开关联动 |
@@ -552,7 +598,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十三个套件，共 312 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十四个套件，共 373 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -560,6 +606,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 |---|---|---|
 | `CatalogTest` | 76 | 分类规则（含「工具/命令行」、Windows 系统工具、HP 不再误判办公）、大小写、优先级、`HideCategories`、`ContainsName/Path`、`JsonIO` 往返、`.bak` 回退、每日备份与裁剪 |
 | `CategoryOverrideTest` | 30 | 分类覆盖表：优先级高于关键词规则、重新加载后保持、路径大小写不敏感、**文件损坏时回退到默认规则**、跳过空 key/value、损坏后自愈 |
+| `CategoryRulesTest` | 61 | 外置规则表：三层优先级（覆盖表 > 规则表 > 内置）、四种匹配模式、长别名优先、**全角折叠**、中文按子串、首次自动生成、坏行跳过、空表回退、热加载（改文件重扫即生效） |
 | `PinyinTest` | 37 | 单字拼音、首字母、全拼、中英混合、边界值、真实应用名覆盖率、性能 |
 | `SettingsTest` | 24 | 九个键的默认值（含 `desktopAutoClean` 默认 `false`）、老配置显式 `true` 不被覆盖、首次确认标记读写、未知字段保留、损坏 JSON 回退 |
 | `WatcherTest` | 5 | 事件风暴下监听链路、Error 处理器已挂、`Dispose` 后无泄漏回调 |
@@ -595,12 +642,13 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：13 个套件、312 个断言全部通过（2026-10-21，v1.0.1）**
+**最近一次运行结果：14 个套件、373 个断言全部通过（2026-10-27，v1.0.1）**
 
-> 断言数变化：151 → 312。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryOverrideTest` 30、
-> 新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、`CrashGuardTest` 19→45、`SettingsTest` 18→24、
-> `OpenFolderTest` 新增 20、`DesktopRestoreTest` 新增 21、`FullscreenTest` 4→5、
-> `VirtualPanelTest` 19→17（合并同类项）。原有断言**全部保留且继续通过**。
+> 断言数变化：151 → 373。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryRulesTest` 61、
+> 新增 `CategoryOverrideTest` 30、新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、
+> `CrashGuardTest` 19→45、`SettingsTest` 18→24、`OpenFolderTest` 新增 20、
+> `DesktopRestoreTest` 新增 21、`FullscreenTest` 4→5、`VirtualPanelTest` 19→17（合并同类项）。
+> 原有断言**全部保留且继续通过**。
 
 ### 手动用例清单（实测结果）
 

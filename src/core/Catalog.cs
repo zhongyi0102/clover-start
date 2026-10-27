@@ -34,6 +34,12 @@ namespace Clover
         {
             Catalog c = new Catalog();
             string cfg = Path.Combine(baseDir, "config");
+
+            // 先加载分类规则表（config\category-rules.tsv）。
+            // 必须在任何 GuessCategory 调用之前完成，否则会用到上一次的规则。
+            // 带修改时间检查，文件没改就跳过重复解析。
+            CategoryRules.Init(baseDir);
+
             ReadInto(c, Path.Combine(cfg, "apps.json"));
             ReadInto(c, Path.Combine(cfg, "manual-apps.json"));
 
@@ -178,10 +184,31 @@ namespace Clover
             catch { }
         }
 
+        /// <summary>
+        /// 按名称判定分类。
+        ///
+        /// 三个层次，从高到低：
+        ///   1. 用户手工覆盖（category-overrides.json，在 Catalog.Load 里应用）
+        ///   2. **外部规则表**（config\category-rules.tsv）—— 命中即返回
+        ///   3. 内置规则（下面的正则与逐个列举）
+        ///
+        /// 之所以把规则表放在内置规则**之前**：表是用户/贡献者维护的，
+        /// 应当能覆盖程序内置的判断；而内置规则作为兜底，保证不编辑文件时
+        /// 行为不退化。
+        /// </summary>
         public static string GuessCategory(string name)
         {
             if (string.IsNullOrEmpty(name)) return "其他";
-            string n = name.ToLowerInvariant();
+
+            // ---------- 2. 外部规则表 ----------
+            string fromTable = CategoryRules.Guess(name);
+            if (fromTable != null) return fromTable;
+
+            // ---------- 3. 内置规则 ----------
+            // 用 NameMatch.Fold 而不是裸 ToLowerInvariant：它额外做 FormKC，
+            // 把全角字符折叠成半角（`Ｗｏｒｄ` → `word`），同时保留标点，
+            // 因此下面这些正则（含 `7-zip`、`adobe.*(acrobat|reader)`）照旧可用。
+            string n = NameMatch.Fold(name);
 
             // ---------- 工具/命令行（放在最前，避免被「开发」「系统工具」抢走）----------
             // 命令行工具 / 驱动 / Module Docs / Reset 工具 / 帮助文档 都归这里。

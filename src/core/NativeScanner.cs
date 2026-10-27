@@ -31,6 +31,11 @@ namespace Clover
                 string cfg = Path.Combine(baseDir, "config");
                 string appsPath = Path.Combine(cfg, "apps.json");
 
+                // 必须先加载分类规则表。
+                // 这里是 --rescan（无界面）的入口，它直接调 GuessCategory 而不经过
+                // Catalog.Load；漏了这一步会让规则表在重扫时完全不生效。
+                CategoryRules.Init(baseDir);
+
                 List<string> order = new List<string>();
 
                 // 只从旧文件里读 order（分类顺序），不再读 category。
@@ -227,7 +232,7 @@ namespace Clover
 
             // 工具/命令行优先：命令行、驱动、Module Docs、Reset、帮助文档
             // 放在最前，否则会被下面的「开发」等目录规则抢走。
-            if (Catalog.IsToolLike(name == null ? "" : name.ToLowerInvariant()))
+            if (Catalog.IsToolLike(NameMatch.Fold(name)))
                 return Catalog.ToolCategory;
 
             // 注意：这里曾经用 f.Contains("hp") 把 HP 打印机的 4 个工具判成「办公」，
