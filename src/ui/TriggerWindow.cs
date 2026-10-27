@@ -552,6 +552,27 @@ namespace Clover
 
             cm.Items.Add(new Separator());
 
+            // ---- 主题 ----
+            // 三选一，当前项打勾。切换后立刻生效（颜色刷子是全局的，
+            // 改 .Color 整棵界面就变色，不用重建窗口）。
+            MenuItem themeItem = new MenuItem();
+            themeItem.Header = "主题";
+            Ui.ThemeMode currentTheme = Ui.ParseTheme(settings.Theme);
+            foreach (Ui.ThemeMode m in new Ui.ThemeMode[]
+                { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
+            {
+                Ui.ThemeMode mm = m;
+                MenuItem one = new MenuItem();
+                one.Header = Ui.ThemeDisplayName(mm);
+                one.IsCheckable = true;
+                one.IsChecked = (mm == currentTheme);
+                one.Click += delegate { ApplyThemeAndSave(mm); };
+                themeItem.Items.Add(one);
+            }
+            cm.Items.Add(themeItem);
+
+            cm.Items.Add(new Separator());
+
             MenuItem auto = new MenuItem();
             auto.Header = "开机自启";
             auto.IsCheckable = true;
@@ -579,6 +600,46 @@ namespace Clover
         void ApplyTaskbarVisibility(bool hide)
         {
             TaskbarVisibility.Apply(hide);
+        }
+
+        /// <summary>
+        /// 切换主题并保存。
+        ///
+        /// 为什么不需要重建窗口：颜色刷子是**共享对象**，改 .Color 后
+        /// 所有引用它们的控件会自动重绘。只有那些把颜色**写死**在
+        /// 构造函数里的地方（如悬浮窗的背景、投影）需要显式重画，
+        /// 由 Ui.ThemeChanged 回调通知。
+        /// 菜单项自己的勾选状态由下次打开菜单时重建，不用手动同步。
+        /// </summary>
+        void ApplyThemeAndSave(Ui.ThemeMode mode)
+        {
+            try
+            {
+                settings.Theme = Ui.ThemeToString(mode);
+                settings.Save();
+                Ui.ApplyTheme(mode);
+                Ui.Log("主题 -> " + Ui.ThemeDisplayName(mode)
+                    + "（实际 " + Ui.ThemeDisplayName(Ui.AppliedTheme) + "）");
+
+                // 让三个悬浮窗和面板重画写死的颜色
+                try { RefreshWindowsForTheme(); } catch { }
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("切换主题失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>主题变了以后，通知各窗口重画那些不能自动跟随的颜色。</summary>
+        void RefreshWindowsForTheme()
+        {
+            // 面板：颜色全走 Ui 刷子会**自动跟随**，但 rootBorder 的投影是
+            // 构建时创建的固定黑色效果，深色底上会几乎看不见 —— 需要重设。
+            try { if (panel != null) panel.ApplyTheme(); } catch { }
+
+            // 三个悬浮窗**不用动**：它们的 HoverBg/IdleBg 是半透明白色浮层
+            // （alpha 46 / 1），本意就是叠在任务栏上，深浅主题都成立
+            // （Windows 自己的任务栏悬停高亮也是浅色浮层）。
         }
 
         void ToggleAutostart()

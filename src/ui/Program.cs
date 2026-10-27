@@ -192,6 +192,13 @@ namespace Clover
                 // ---------- 4) 拉起看门狗（安全模式下也拉，它只负责还原） ----------
                 Guard.Spawn(baseDir);
 
+                // ---------- 4b) 应用主题（必须在任何窗口创建之前）----------
+                // 颜色刷子是全局对象，窗口构造时就把它们挂到控件上了；
+                // 这里先定好颜色，后续所有窗口一建出来就是对的。
+                Ui.ApplyTheme(Ui.ParseTheme(settings.Theme));
+                ErrorLog.Log("主题: " + Ui.ThemeDisplayName(Ui.ParseTheme(settings.Theme))
+                    + "（实际应用 " + Ui.ThemeDisplayName(Ui.AppliedTheme) + "）");
+
                 Application app = new Application();
                 app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 ErrorLog.Bind(app);

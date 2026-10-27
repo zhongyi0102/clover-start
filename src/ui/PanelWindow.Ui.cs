@@ -20,7 +20,10 @@ namespace Clover
             root.BorderBrush = Ui.Line;
             root.BorderThickness = new Thickness(1);
             root.Margin = new Thickness(16);
-            root.Effect = Ui.Shadow(30, 0.20, 6);
+            // 投影交给 ApplyShadow()：深色主题下要加深，否则黑投影落在深底上几乎看不见。
+            // 存进 rootBorder 供切主题时重设（见 ApplyTheme）。
+            rootBorder = root;
+            ApplyShadow();
 
             Grid grid = new Grid();
             grid.RowDefinitions.Add(new RowDefinition());
@@ -237,7 +240,6 @@ namespace Clover
 
             root.Child = grid;
             Content = root;
-            rootBorder = root;
 
             // 弹出/收起动画用的位移变换，在这里就接好（而不是等第一次 ShowPanel）。
             // 好处：窗口一构造完就是可断言的状态，测试能直接检查是否接线。
@@ -264,6 +266,34 @@ namespace Clover
             ApplyNavCollapsedFromSettings();
 
             StartTaskTimer();
+        }
+
+        /// <summary>按当前主题重设面板投影（切主题时调用）。</summary>
+        void ApplyShadow()
+        {
+            try
+            {
+                if (rootBorder != null) rootBorder.Effect = Ui.PanelShadow();
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 主题变了以后由 TriggerWindow 调用。
+        ///
+        /// 面板上绝大多数颜色走 Ui 刷子（共享对象），改 .Color 就自动重绘了；
+        /// 这里只需要补那些**构建时定死**的部分：投影效果。
+        /// </summary>
+        public void ApplyTheme()
+        {
+            try
+            {
+                ApplyShadow();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "面板应用主题");
+            }
         }
 
         TextBlock MakeGlyph(string glyph)

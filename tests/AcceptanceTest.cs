@@ -6,6 +6,7 @@ using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 
 namespace Clover
@@ -491,7 +492,79 @@ namespace Clover
                 return string.Format("ok（{0:N0} -> 切走 -> 切回 {1:N0}）", atA, back);
             });
 
-            // ---------- 17. last-category.json 写在临时目录 ----------
+            // ---------- 17. ★主题：刷子真的变色（而不是只改了设置）------------
+            // 为什么必须断言花色值：主题最容易出的问题是"设置改了、界面没变"
+            // —— 因为刷子被 Freeze 过、或控件把颜色写死在自己身上。
+            Verify("★主题切换真的改变颜色刷子", delegate
+            {
+                // 浅色
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+                byte lightBgR = Ui.Bg.Color.R;
+                byte lightFgR = Ui.Fg.Color.R;
+                if (lightBgR < 200) return "浅色底应偏亮，实际 R=" + lightBgR;
+                if (lightFgR > 100) return "浅色前景应偏暗，实际 R=" + lightFgR;
+
+                // 深色
+                Ui.ApplyTheme(Ui.ThemeMode.Dark);
+                byte darkBgR = Ui.Bg.Color.R;
+                byte darkFgR = Ui.Fg.Color.R;
+                if (darkBgR > 80) return "深色底应偏暗，实际 R=" + darkBgR;
+                if (darkFgR < 150) return "深色前景应偏亮，实际 R=" + darkFgR;
+
+                // 关键：必须是同一批刷子对象（引用不变），否则 126 处调用点会拿不到新颜色
+                if (!ReferenceEquals(Ui.Bg, Ui.Bg)) return "刷子对象被替换了";
+
+                // 强调色在深色下也应更亮
+                if (Ui.Accent.Color.R <= 56) return "深色下的强调色没有变亮，R=" + Ui.Accent.Color.R;
+
+                // 切回浅色应完全恢复
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+                if (Ui.Bg.Color.R != lightBgR || Ui.Fg.Color.R != lightFgR)
+                    return "切回浅色没有恢复原值";
+
+                return string.Format("ok（浅 {0} / 深 {1}）", lightBgR, darkBgR);
+            });
+
+            Verify("★主题非法值回退到「跟随系统」", delegate
+            {
+                Ui.ThemeMode m1 = Ui.ParseTheme("dark");
+                Ui.ThemeMode m2 = Ui.ParseTheme("light");
+                Ui.ThemeMode m3 = Ui.ParseTheme("system");
+                Ui.ThemeMode m4 = Ui.ParseTheme("这不是合法值");
+                Ui.ThemeMode m5 = Ui.ParseTheme(null);
+
+                if (m1 != Ui.ThemeMode.Dark) return "dark 解析错";
+                if (m2 != Ui.ThemeMode.Light) return "light 解析错";
+                if (m3 != Ui.ThemeMode.System) return "system 解析错";
+                if (m4 != Ui.ThemeMode.System) return "非法值应回退到 system，实际 " + m4;
+                if (m5 != Ui.ThemeMode.System) return "null 应回退到 system，实际 " + m5;
+
+                // 往返：存的字符串要能读回来
+                if (Ui.ParseTheme(Ui.ThemeToString(Ui.ThemeMode.Dark)) != Ui.ThemeMode.Dark)
+                    return "dark 往返失败";
+                if (Ui.ParseTheme(Ui.ThemeToString(Ui.ThemeMode.Light)) != Ui.ThemeMode.Light)
+                    return "light 往返失败";
+                if (Ui.ParseTheme(Ui.ThemeToString(Ui.ThemeMode.System)) != Ui.ThemeMode.System)
+                    return "system 往返失败";
+
+                return "ok";
+            });
+
+            Verify("★深色下投影会加深（否则面板边界糊在深底里）", delegate
+            {
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+                DropShadowEffect lo = Ui.PanelShadow();
+                Ui.ApplyTheme(Ui.ThemeMode.Dark);
+                DropShadowEffect hi = Ui.PanelShadow();
+
+                if (hi.Opacity <= lo.Opacity)
+                    return string.Format("深色投影不该更淡：浅 {0:N2} 深 {1:N2}", lo.Opacity, hi.Opacity);
+
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+                return string.Format("ok（{0:N2} -> {1:N2}）", lo.Opacity, hi.Opacity);
+            });
+
+            // ---------- 18. last-category.json 写在临时目录 ----------
             Verify("last-category.json 写在临时目录（未污染真实目录）", delegate
             {
                 string p = Path.Combine(root, "config", "last-category.json");

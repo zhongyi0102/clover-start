@@ -53,6 +53,14 @@ namespace Clover
         /// </summary>
         public bool NavCollapsed = false;
 
+        /// <summary>
+        /// 主题：light / dark / system。默认 system（跟随 Windows）。
+        ///
+        /// 存字符串而不是枚举，避免 core 层依赖界面层的类型；
+        /// 非法值统一按 system 处理（见 Ui.ParseTheme）。
+        /// </summary>
+        public string Theme = "system";
+
         string path;
 
         /// <summary>
@@ -83,6 +91,7 @@ namespace Clover
                 if (d.TryGetValue("fullscreenDetect", out v) && v != null) s.FullscreenDetect = Convert.ToBoolean(v);
                 if (d.TryGetValue("safeMode", out v) && v != null) s.SafeMode = Convert.ToBoolean(v);
                 if (d.TryGetValue("navCollapsed", out v) && v != null) s.NavCollapsed = Convert.ToBoolean(v);
+                if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
                     foreach (object o in (System.Collections.IEnumerable)v) s.HiddenCategories.Add(Convert.ToString(o));
@@ -123,6 +132,7 @@ namespace Clover
                 d["fullscreenDetect"] = FullscreenDetect;
                 d["safeMode"] = SafeMode;
                 d["navCollapsed"] = NavCollapsed;
+                d["theme"] = Theme;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();

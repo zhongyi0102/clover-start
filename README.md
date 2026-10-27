@@ -11,6 +11,7 @@
 - 右上角三个窗口按钮：**─ 最小化**（收起面板）/ **□ 最大化·还原**（铺满整个屏幕，再点一次还原）/ **✕ 关闭**（收起面板）
 - 左侧是分类（常用 / 全部 / 办公 / 开发 / 网络通讯 / 影音娱乐 / 系统工具 / 工具/命令行 / 其他），点一下切换；「常用」按使用次数自动收集（最多 12 个），「游戏」已并入「影音娱乐」
 - **侧栏可以收起**：点侧栏右上角的小箭头，整条分类栏收到 44px，磁贴区变宽；再点一下展开。**收起状态会被记住**（存 `settings.json` 的 `navCollapsed`），重启后仍是你上次的样子
+- **主题**：右键四叶草 →「主题」可在**浅色 / 深色 / 跟随系统**之间切换，**默认跟随系统**（读 Windows 的「应用模式」设置）。切换立刻生效，不用重启。深色下强调色会变亮、面板投影会加深
 - **切分类会记住各自滚到哪**：在「全部」滚到第 3 屏，切到「办公」再切回来，仍在第 3 屏（按分类分别记，不是全局一个偏移）
 - 应用图标按**使用频率**排序：从面板启动次数越多越靠前，次数相同按最近使用，没用过的按名称；数据保存在 `config\usage.json`（删掉即可重置）
 - 应用磁贴可以**拖动调整顺序**（像桌面图标一样）：拖动一个磁贴放到另一个磁贴上即可换位，顺序按分类保存到 `config\order.json`，删掉该文件恢复按使用频率排序
@@ -70,9 +71,11 @@
 | `safeMode` | `false` | 强制安全模式 |
 | `hiddenCategories` | `["系统工具"]` | 隐藏的分类 |
 | `navCollapsed` | `false` | 侧栏是否收起（点收起按钮后自动记住） |
+| `theme` | `"system"` | 主题：`light` / `dark` / `system`（跟随 Windows）。右键四叶草 →「主题」也能切 |
 
-> **共 10 个键**：7 个功能开关（`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode`）+
-> `hideTaskbar`（状态）+ `desktopAutoCleanNoticeShown`（提示标记）+ `hiddenCategories`（分类过滤）+ `navCollapsed`（界面偏好）。
+> **共 11 个键**：7 个功能开关（`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode`）+
+> `hideTaskbar`（状态）+ `desktopAutoCleanNoticeShown`（提示标记）+ `hiddenCategories`（分类过滤）+
+> `navCollapsed`（界面偏好）+ `theme`（外观）。
 > 出问题可以单独关掉对应功能，不用卸载。
 >
 > **兼容性**：老配置里如果显式写了 `"desktopAutoClean": true`，升级后**仍保持 `true`**，不会被新默认值覆盖；
@@ -655,7 +658,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十五个套件，共 424 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十五个套件，共 437 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -665,7 +668,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `CategoryOverrideTest` | 30 | 分类覆盖表：优先级高于关键词规则、重新加载后保持、路径大小写不敏感、**文件损坏时回退到默认规则**、跳过空 key/value、损坏后自愈 |
 | `CategoryRulesTest` | 61 | 外置规则表：三层优先级（覆盖表 > 规则表 > 内置）、四种匹配模式、长别名优先、**全角折叠**、中文按子串、首次自动生成、坏行跳过、空表回退、热加载（改文件重扫即生效） |
 | `PinyinTest` | 37 | 单字拼音、首字母、全拼、中英混合、边界值、真实应用名覆盖率、性能 |
-| `SettingsTest` | 24 | 九个键的默认值（含 `desktopAutoClean` 默认 `false`）、老配置显式 `true` 不被覆盖、首次确认标记读写、未知字段保留、损坏 JSON 回退 |
+| `SettingsTest` | 28 | 十一个键的默认值（含 `desktopAutoClean` 默认 `false`）、老配置显式 `true` 不被覆盖、首次确认标记读写、未知字段保留、损坏 JSON 回退 |
 | `WatcherTest` | 5 | 事件风暴下监听链路、Error 处理器已挂、`Dispose` 后无泄漏回调 |
 | `VirtualPanelTest` | 17 | 虚拟化行/列计算、视口范围、滚动边界钳制、ItemsControl 数据层 |
 
@@ -679,13 +682,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 确认它成为前台窗口 → 断言 `IsFullscreen()` = true → 关掉后恢复 false |
 | `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
 | `HiddenAppsTest` | 47 | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
+| （主题断言） | 3 | 见 `AcceptanceTest`：刷子真的变色、非法值回退、深色投影加深 |
 | `ActiveRowTest` | 14 | 任务栏行高亮判定：只有一行亮、前台句柄为 0 时不高亮任何行、切换后刚好翻转、重复判定幂等 |
 
 **验收测试**（真实创建窗口，验证"界面确实画出来了"）：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `AcceptanceTest` | 16 | **真实创建 `PanelWindow`** 并 Show → 检查控件树可遍历（约 100 个可视元素）、左侧分类栏有条目、应用磁贴已渲染、搜索框可输入、覆盖表在真实界面链路上生效、显示/隐藏不抛异常 |
+| `AcceptanceTest` | 25 | **真实创建 `PanelWindow`** 并 Show → 检查控件树可遍历（约 100 个可视元素）、左侧分类栏有条目、应用磁贴已渲染、搜索框可输入、覆盖表在真实界面链路上生效、显示/隐藏不抛异常 |
 
 `AcceptanceTest` 借鉴了两个做法（**只借鉴形态，不复制代码** —— 参考项目用的是与 MIT 不兼容的非商业许可）：
 
@@ -700,7 +704,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：15 个套件、424 个断言全部通过（2026-10-27，v1.0.2）**
+**最近一次运行结果：15 个套件、437 个断言全部通过（2026-10-28，v1.0.2）**
 
 > 断言数变化：151 → 373。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryRulesTest` 61、
 > 新增 `CategoryOverrideTest` 30、新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、
