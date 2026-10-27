@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 
 namespace Clover
@@ -18,6 +19,26 @@ namespace Clover
         Border selectedTile;
         /// <summary>键盘选中项在 renderedApps 中的下标，-1 表示没有选中。</summary>
         int selectedIndex = -1;
+
+        /// <summary>悬停时图标放大的比例（纯视觉，不改布局）。</summary>
+        const double IconHoverScale = 1.12;
+
+        /// <summary>
+        /// 图标悬停动画，**冻结后跨所有磁贴复用**。
+        ///
+        /// 为什么不每块磁贴新建：一次渲染 100+ 块磁贴，每块各建 2 个动画对象
+        /// 会让托管堆持续增长（这个项目踩过同样的坑，见 ShowPanel 里复用
+        /// showAnim/hideAnim 的注释）。冻结的动画是不可变的，可以安全共享。
+        /// </summary>
+        static readonly DoubleAnimation IconZoomIn = FrozenScale(IconHoverScale, 120);
+        static readonly DoubleAnimation IconZoomOut = FrozenScale(1.0, 120);
+
+        static DoubleAnimation FrozenScale(double to, int ms)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.Freeze();
+            return a;
+        }
 
         /// <summary>
         /// 设置键盘选中项。index 越界或 -1 表示清空选中。
@@ -397,6 +418,13 @@ namespace Clover
             StackPanel sp = new StackPanel();
             sp.VerticalAlignment = VerticalAlignment.Center;
 
+            // 图标容器：悬停放大作用在它上面，而不是磁贴本身。
+            // 为什么：磁贴放大（96x90 -> 更大）会让 WrapPanel 重新排版，
+            // 鼠标附近的磁贴会跳位、闪烁；图标用 RenderTransform 放大则完全不碰布局。
+            // RenderTransformOrigin 设成中心，所以放大会从正中向四周扩。
+            ScaleTransform iconScale = new ScaleTransform(1.0, 1.0);
+            FrameworkElement iconVisual;
+
             ImageSource icon = AppIcons.Get(a.Path);
             if (icon != null)
             {
@@ -407,7 +435,7 @@ namespace Clover
                 img.HorizontalAlignment = HorizontalAlignment.Center;
                 img.Margin = new Thickness(0, 0, 0, 6);
                 RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-                sp.Children.Add(img);
+                iconVisual = img;
             }
             else
             {
@@ -423,8 +451,12 @@ namespace Clover
                 init.HorizontalAlignment = HorizontalAlignment.Center;
                 init.VerticalAlignment = VerticalAlignment.Center;
                 ph.Child = init;
-                sp.Children.Add(ph);
+                iconVisual = ph;
             }
+
+            iconVisual.RenderTransformOrigin = new Point(0.5, 0.5);
+            iconVisual.RenderTransform = iconScale;
+            sp.Children.Add(iconVisual);
 
             TextBlock name = new TextBlock();
             name.Text = a.Name;
@@ -449,10 +481,15 @@ namespace Clover
             b.MouseEnter += delegate
             {
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
+                // 悬停放大图标：只动 RenderTransform，不触发布局重排
+                iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomIn);
+                iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomIn);
             };
             b.MouseLeave += delegate
             {
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Brushes.Transparent;
+                iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomOut);
+                iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomOut);
             };
             b.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {

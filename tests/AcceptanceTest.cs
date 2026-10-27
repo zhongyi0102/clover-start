@@ -289,7 +289,48 @@ namespace Clover
                 return "ok";
             });
 
-            // ---------- 11. last-category.json 写在临时目录 ----------
+            // ---------- 11. 悬停放大用的是 RenderTransform（不触发布局）------------
+            // 为什么专门断言：如果用磁贴本身的 Width/Height 做放大，WrapPanel 会重新排版，
+            // 鼠标附近的磁贴会跳位。这里确认放大作用在**图标的 ScaleTransform**上。
+            Verify("★图标悬停放大用 RenderTransform（不触发布局重排）", delegate
+            {
+                // 磁贴尺寸应保持 96x90 —— 没有因为"放大"而被改
+                List<Border> tiles = FindAll<Border>(panel);
+                int tilesAt96 = 0;
+                foreach (Border b in tiles)
+                {
+                    if (Math.Abs(b.Width - 96) < 0.1 && Math.Abs(b.Height - 90) < 0.1) tilesAt96++;
+                }
+                if (tilesAt96 == 0) return "找不到 96x90 的磁贴";
+
+                // 至少有一个 32x32 的图标视觉元素带 ScaleTransform
+                int scaled = 0;
+                foreach (FrameworkElement fe in FindAll<FrameworkElement>(panel))
+                {
+                    ScaleTransform st = fe.RenderTransform as ScaleTransform;
+                    if (st == null) continue;
+                    // 图标是 32x32（Image 或占位 Border）
+                    double w = fe.Width, h = fe.Height;
+                    if (Math.Abs(w - 32) < 0.1 && Math.Abs(h - 32) < 0.1) scaled++;
+                }
+                if (scaled == 0) return "没有任何图标带 ScaleTransform（放大未接线）";
+                return "ok（" + tilesAt96 + " 块磁贴保持 96x90，" + scaled + " 个图标已接放大）";
+            });
+
+            // ---------- 12. 弹出动画用的位移变换已建立 ----------
+            Verify("面板弹出动画的位移变换已建立", delegate
+            {
+                // showShift 是 8px 上移动画用的 TranslateTransform，挂在 rootBorder 上。
+                // 这里只确认它是 TranslateTransform 且接线在根容器上 ——
+                // 具体动画时序无法在离屏环境断言。
+                Border rootB = panel.Content as Border;
+                if (rootB == null) return "根不是 Border";
+                TranslateTransform tt = rootB.RenderTransform as TranslateTransform;
+                if (tt == null) return "根容器上没有 TranslateTransform（动画未接线）";
+                return "ok（根容器已接位移变换）";
+            });
+
+            // ---------- 13. last-category.json 写在临时目录 ----------
             Verify("last-category.json 写在临时目录（未污染真实目录）", delegate
             {
                 string p = Path.Combine(root, "config", "last-category.json");

@@ -287,10 +287,33 @@ namespace Clover
             showAnim.From = 0;
             BeginAnimation(OpacityProperty, showAnim);
 
+            // 轻微上移：淡入的同时从下方 8px 升到原位，让面板"活"一下。
+            //
+            // 用 rootBorder 的 RenderTransform 而不是改 Top/Margin：
+            // RenderTransform 是布局之后应用的渲染变换，**不会触发布局重排**，
+            // 也不会和新窗口位置打架（面板位置由 layout.json 记住，不能动）。
+            // showShift 已由 BuildUi 接好，这里只跑动画。
+            if (showShift != null)
+            {
+                if (showShiftAnim == null)
+                {
+                    showShiftAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(160));
+                }
+                showShiftAnim.From = ShowShiftPx;
+                showShift.BeginAnimation(TranslateTransform.YProperty, showShiftAnim);
+            }
+
             if (searchBox != null) searchBox.Focus();
         }
 
+        /// <summary>弹出时面板从下方升起的距离（像素）。</summary>
+        const double ShowShiftPx = 8;
+
         DoubleAnimation showAnim;
+        /// <summary>面板整体的位移变换（弹出/收起动画用），由 BuildUi 建立。</summary>
+        TranslateTransform showShift;
+        DoubleAnimation showShiftAnim;
+        DoubleAnimation hideShiftAnim;
 
         public void HidePanel()
         {
@@ -310,6 +333,22 @@ namespace Clover
             }
             hideAnim.From = Opacity;
             BeginAnimation(OpacityProperty, hideAnim);
+
+            // 收起时向下方滑出一点，与弹出的上移对称（观感上"缩回去"而不是"凭空消失"）。
+            //
+            // 注意：目标值是 +ShowShiftPx（往下），不是 0 —— 静止位置本来就是 0，
+            // 动画到 0 等于什么都没做。滑走停在下方，下次 ShowPanel 再从 +ShowShiftPx
+            // 动画回 0，两边首尾相接。
+            if (showShift != null)
+            {
+                if (hideShiftAnim == null)
+                {
+                    hideShiftAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(110));
+                }
+                hideShiftAnim.From = showShift.Y;
+                hideShiftAnim.To = ShowShiftPx;
+                showShift.BeginAnimation(TranslateTransform.YProperty, hideShiftAnim);
+            }
         }
 
         DoubleAnimation hideAnim;

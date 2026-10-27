@@ -229,6 +229,11 @@ namespace Clover
             Content = root;
             rootBorder = root;
 
+            // 弹出/收起动画用的位移变换，在这里就接好（而不是等第一次 ShowPanel）。
+            // 好处：窗口一构造完就是可断言的状态，测试能直接检查是否接线。
+            showShift = new TranslateTransform(0, 0);
+            root.RenderTransform = showShift;
+
             RebuildNav();
             RenderApps();
 
