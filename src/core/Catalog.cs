@@ -14,6 +14,14 @@ namespace Clover
         public string Category;
         public int Usage;
         public long LastUsed;
+
+        /// <summary>
+        /// 被用户隐藏（`config\hidden-apps.json`）。
+        ///
+        /// 注意：隐藏的条目**仍然留在 Apps 里**，只是在渲染时被过滤掉。
+        /// 这样「隐藏的项目」视图能把它列出来供恢复，不必重新扫描。
+        /// </summary>
+        public bool Hidden;
     }
 
     class Catalog
@@ -46,12 +54,23 @@ namespace Clover
             foreach (string d in DefaultOrder) EnsureOrder(c, d);
 
             // 用户手工指定的分类覆盖优先级最高：
-            // 本表 > 开始菜单目录规则 > 关键词规则。
+            // 本表 > 规则表 > 开始菜单目录规则 > 关键词规则。
             // 放在这里，每次加载/重新扫描都会重新应用，所以「重新扫描后保持」。
             try
             {
                 CategoryOverrides ov = CategoryOverrides.Load(baseDir);
                 ov.Apply(c.Apps);
+            }
+            catch { }
+
+            // 标记被隐藏的条目（不删除——「隐藏的项目」视图要能看到它们）
+            try
+            {
+                HiddenApps h = HiddenApps.Load(baseDir);
+                foreach (AppItem a in c.Apps)
+                {
+                    if (h.IsHidden(a.Path)) a.Hidden = true;
+                }
             }
             catch { }
 
@@ -349,13 +368,39 @@ namespace Clover
             return string.Compare(a.Name, b.Name, System.Globalization.CultureInfo.GetCultureInfo("zh-CN"), System.Globalization.CompareOptions.None);
         }
 
+        /// <summary>
+        /// 取某个分类的应用（**不含被隐藏的**）。
+        /// 传空串表示「全部」。
+        /// </summary>
         public List<AppItem> ByCategory(string cat)
+        {
+            return ByCategory(cat, false);
+        }
+
+        /// <summary>
+        /// 取某个分类的应用。
+        /// </summary>
+        /// <param name="includeHidden">true = 连被隐藏的也返回（「隐藏的项目」视图用）</param>
+        public List<AppItem> ByCategory(string cat, bool includeHidden)
         {
             List<AppItem> list = new List<AppItem>();
             foreach (AppItem a in Apps)
             {
+                if (!includeHidden && a.Hidden) continue;
                 if (string.IsNullOrEmpty(cat) || a.Category == cat)
                     list.Add(a);
+            }
+            list.Sort(CompareApps);
+            return list;
+        }
+
+        /// <summary>当前被隐藏的条目（供「隐藏的项目」视图使用）。</summary>
+        public List<AppItem> HiddenItems()
+        {
+            List<AppItem> list = new List<AppItem>();
+            foreach (AppItem a in Apps)
+            {
+                if (a.Hidden) list.Add(a);
             }
             list.Sort(CompareApps);
             return list;

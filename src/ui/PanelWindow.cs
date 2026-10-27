@@ -34,6 +34,8 @@ namespace Clover
         /// <summary>面板是否至少被真正激活过一次；从未激活时不要自动收起。</summary>
         bool everActivated;
         string layoutPath;
+        /// <summary>上次浏览的分类（重启后恢复到它，见 config\last-category.json）。</summary>
+        string lastCatPath;
         Border searchBorder;
         Border closeBtn;
         UsageStore usage;
@@ -69,20 +71,32 @@ namespace Clover
         /// <summary>用户手工指定的分类覆盖表（右键「移到分类」写入）。</summary>
         CategoryOverrides overrides;
 
+        /// <summary>被隐藏的应用清单（右键「从面板隐藏」写入）。</summary>
+        HiddenApps hiddenApps;
+
+        /// <summary>
+        /// 「隐藏的项目」虚拟分类的标识。
+        /// 用不可见字符开头，确保和任何真实分类名都不会撞。
+        /// </summary>
+        public const string HiddenCategory = "\u0001hidden";
+
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {
             this.baseDir = baseDir;
             this.trigger = trigger;
             this.settings = settings ?? Settings.Load(baseDir);
             this.overrides = CategoryOverrides.Load(baseDir);
+            this.hiddenApps = HiddenApps.Load(baseDir);
             catalog = Catalog.Load(baseDir);
             usage = UsageStore.Load(baseDir);
             hiddenCats = this.settings.HiddenCategories;
             catalog.ApplyUsage(usage);
             catalog.HideCategories(hiddenCats);
             layoutPath = Path.Combine(baseDir, "config", "layout.json");
+            lastCatPath = Path.Combine(baseDir, "config", "last-category.json");
             orderPath = Path.Combine(baseDir, "config", "order.json");
             LoadCustomOrders();
+            LoadLastCategory();
 
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;

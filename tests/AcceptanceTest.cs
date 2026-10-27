@@ -249,7 +249,72 @@ namespace Clover
                 return "ok（" + p + "）";
             });
 
-            // ---------- 9. 面板显示/隐藏是真的能跑 ----------
+            // ---------- 9. 隐藏应用：分类出现、条目过滤 ----------
+            Verify("隐藏一个应用后「隐藏的项目」分类出现", delegate
+            {
+                HiddenApps h = HiddenApps.Load(root);
+                h.Hide(exeB);
+
+                Catalog after = Catalog.Load(root);
+                if (after.HiddenItems().Count != 1) return "隐藏项数应为 1，实际 " + after.HiddenItems().Count;
+                if (after.ByCategory("开发").Count != 0) return "被隐藏的仍出现在原分类里";
+                if (after.Apps.Count != 3) return "隐藏项不该从 Apps 里消失（总数应为 3）";
+                return "ok";
+            });
+
+            // ---------- 10. ★回归：上次分类已消失时必须回退，不能停在空分类 ----------
+            // 这条对应一个真实 bug：取消隐藏全部后重启，程序会停在已不存在的
+            // 「隐藏的项目」上，面板一片空白。修法是 LoadLastCategory 校验分类**还有内容**。
+            Verify("★回归：上次分类已消失时回退到「全部」", delegate
+            {
+                // 造出 bug 的触发条件：last-category 指向「隐藏的项目」，
+                // 但隐藏清单是空的（分类不该存在）
+                string lastCat = Path.Combine(root, "config", "last-category.json");
+                File.WriteAllText(lastCat,
+                    "{\"category\":\"\\u0001hidden\"}", new UTF8Encoding(false));
+
+                // 清空隐藏清单
+                HiddenApps hidden = HiddenApps.Load(root);
+                hidden.Clear();
+
+                // 重建窗口 = 模拟重启
+                PanelWindow reborn = new PanelWindow(root, null, Settings.Load(root));
+                reborn.UpdateLayout();
+                string cat = reborn.CurrentCategory();
+                reborn.Close();
+
+                if (cat == PanelWindow.HiddenCategory)
+                    return "停在已消失的「隐藏的项目」上（bug 复发）";
+                if (cat != "") return "应回退到「全部」(空串)，实际: " + cat;
+                return "ok";
+            });
+
+            // ---------- 11. last-category.json 写在临时目录 ----------
+            Verify("last-category.json 写在临时目录（未污染真实目录）", delegate
+            {
+                string p = Path.Combine(root, "config", "last-category.json");
+                if (!File.Exists(p)) return "文件不存在: " + p;
+                return "ok";
+            });
+
+            // ---------- 12. order.json 键名往返（「全部」分类不该用空串当键）------------
+            // 背景：空串是合法的 JSON 键，但会让 PowerShell 的 ConvertFrom-Json 报错，
+            // 手工排查 order.json 时很别扭。存盘改成 "__all__"，读取两种都认。
+            Verify("order.json 键名往返且兼容老的\"\"写法", delegate
+            {
+                // 「全部」(空串) 存成 __all__
+                string saved = PanelWindow.FileCatKey("");
+                if (saved == "") return "空串仍被直接写盘（改动未生效）";
+                if (PanelWindow.RestoreCatKey(saved) != "") return "往返失败：读回来不是空串";
+                // 老文件里的 "" 仍能读
+                if (PanelWindow.RestoreCatKey("") != "") return "不兼容老的\"\"写法";
+                // 普通分类名不受影响
+                if (PanelWindow.FileCatKey("办公") != "办公") return "普通分类被改写";
+                if (PanelWindow.RestoreCatKey("办公") != "办公") return "普通分类读回不对";
+                return "ok（空串 -> " + saved + " -> 空串）";
+            });
+
+            // ---------- 13. 面板显示/隐藏是真的能跑 ----------
             Verify("能显示面板（Show 不抛异常）", delegate
             {
                 panel.Show();

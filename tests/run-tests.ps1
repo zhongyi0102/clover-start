@@ -58,11 +58,12 @@ function Invoke-Suite($name, $refs, $sources) {
 }
 
 # ---------------- 单元测试 ----------------
-# Catalog 依赖 CategoryOverrides / CategoryRules / NameMatch，这几个套件都要带上
+# Catalog 依赖这些（覆盖表 / 规则表 / 归一化 / 隐藏清单 / 存储），分类相关套件都要带上
 $catalogDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
     (Join-Path $coreDir 'CategoryOverrides.cs'),
     (Join-Path $coreDir 'CategoryRules.cs'),
+    (Join-Path $coreDir 'HiddenApps.cs'),
     (Join-Path $coreDir 'NameMatch.cs'),
     (Join-Path $coreDir 'JsonIO.cs'),
     (Join-Path $coreDir 'UsageStore.cs')
@@ -78,6 +79,10 @@ Invoke-Suite 'CategoryOverrideTest' ($baseRefs + $webRef) `
 # 分类规则表：外置 TSV、匹配模式、归一化、热加载、坏文件回退
 Invoke-Suite 'CategoryRulesTest' ($baseRefs + $webRef) `
     ($catalogDeps + @((Join-Path $testDir 'CategoryRulesTest.cs')))
+
+# 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存
+Invoke-Suite 'HiddenAppsTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $testDir 'HiddenAppsTest.cs')))
 
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))

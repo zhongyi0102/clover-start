@@ -8,8 +8,8 @@ namespace Clover
     static class BuildInfo
     {
         public const string Version = "1.0.2";
-        public const string Stamp = "2026.10.27.1934";
-        public const string BuildTime = "2026-10-27 19:34:04";
+        public const string Stamp = "2026.10.27.2306";
+        public const string BuildTime = "2026-10-27 23:06:56";
         public static string Describe { get { return "四叶草 v" + Version + "（" + BuildTime + " 构建）"; } }
     }
 }

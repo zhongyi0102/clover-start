@@ -141,13 +141,19 @@ namespace Clover
             cats.Add("");
             cats.AddRange(catalog.ActiveCategories());
 
+            // 「隐藏的项目」只在确实有隐藏项时出现（没有就不占地方）
+            int hiddenCount = catalog.HiddenItems().Count;
+            if (hiddenCount > 0) cats.Add(HiddenCategory);
+
             foreach (string cat in cats)
             {
                 string c = cat;
-                int count = c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count;
+                int count = c == HiddenCategory ? hiddenCount
+                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count);
                 if (c != "" && c != "常用" && count == 0) continue;
 
-                string label = c == "" ? "全部" : c;
+                string label = c == "" ? "全部"
+                             : (c == HiddenCategory ? "隐藏的项目" : c);
 
                 Border item = new Border();
                 item.Height = 34;
@@ -201,6 +207,7 @@ namespace Clover
                 item.MouseLeftButtonUp += delegate
                 {
                     current = c;
+                    SaveLastCategory();   // 记住分类，重启后回到这里
                     UpdateNav();
                     RenderApps();
                 };
@@ -294,7 +301,11 @@ namespace Clover
                 int orderCount = 0;
                 List<string> order;
                 if (customOrders.TryGetValue(current, out order) && order != null) orderCount = order.Count;
-                return current + "\u0001" + q + "\u0001" + catalog.Apps.Count + "\u0001" + orderCount;
+                // 隐藏数进签名：隐藏/取消隐藏会改变内容，但 Apps.Count 不变，
+                // 不带上它的话「按需渲染」会误判成"没变化"而跳过重建。
+                int hiddenCount = catalog == null ? 0 : catalog.HiddenItems().Count;
+                return current + "\u0001" + q + "\u0001" + catalog.Apps.Count +
+                       "\u0001" + orderCount + "\u0001" + hiddenCount;
             }
             catch
             {
@@ -308,10 +319,12 @@ namespace Clover
 
             string q = searchBox == null ? "" : searchBox.Text.Trim();
             showingCommon = (q.Length == 0 && current == "常用");
+            bool showingHidden = (q.Length == 0 && current == HiddenCategory);
             List<AppItem> list;
 
             if (q.Length > 0)
             {
+                // 搜索时**包含隐藏项**：用户主动搜名字，说明就是想找它
                 list = new List<AppItem>();
                 foreach (AppItem a in catalog.Apps)
                 {
@@ -324,6 +337,10 @@ namespace Clover
             else if (current == "常用")
             {
                 list = CommonApps();
+            }
+            else if (current == HiddenCategory)
+            {
+                list = catalog.HiddenItems();
             }
             else
             {
@@ -340,12 +357,21 @@ namespace Clover
 
             if (list.Count == 0)
             {
-                TextBlock none = Ui.T(q.Length > 0 ? "没有找到匹配的应用" : (current == "常用" ? "还没有常用应用：从面板启动几次就会出现" : "这个分类里没有应用"), 13, Ui.Sub);
+                string tip;
+                if (q.Length > 0) tip = "没有找到匹配的应用";
+                else if (current == "常用") tip = "还没有常用应用：从面板启动几次就会出现";
+                else if (current == HiddenCategory) tip = "没有隐藏的应用";
+                else tip = "这个分类里没有应用";
+                TextBlock none = Ui.T(tip, 13, Ui.Sub);
                 none.Margin = new Thickness(18, 18, 0, 0);
                 tilePanel.Children.Add(none);
             }
 
-            footerCount.Text = "共 " + catalog.Apps.Count + " 个应用";
+            // 底部计数：隐藏项不该算进"应用总数"，否则数字对不上眼前的磁贴
+            int visible = catalog.Apps.Count - catalog.HiddenItems().Count;
+            footerCount.Text = showingHidden
+                ? "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏"
+                : "共 " + visible + " 个应用";
         }
 
         static int RenderCompare(AppItem a, AppItem b)
@@ -543,6 +569,26 @@ namespace Clover
 
             cm.Items.Add(moveTo);
 
+            // ---- 隐藏 / 取消隐藏（对所有分类都有）----
+            // 「移到分类」是"归错类了，换个位置"；「隐藏」是"完全不想看到"。
+            // 两者用途不同，所以并列提供。
+            cm.Items.Add(new Separator());
+            if (a.Hidden)
+            {
+                MenuItem show = new MenuItem();
+                show.Header = "取消隐藏";
+                show.Click += delegate { SetAppHidden(a, false); };
+                cm.Items.Add(show);
+            }
+            else
+            {
+                MenuItem hide = new MenuItem();
+                hide.Header = "从面板隐藏";
+                hide.ToolTip = "藏起来，不在任何分类里显示；可在「隐藏的项目」里找回";
+                hide.Click += delegate { SetAppHidden(a, true); };
+                cm.Items.Add(hide);
+            }
+
             // ---- 从常用移除（只在「常用」分类出现）----
             if (showingCommon)
             {
@@ -634,6 +680,42 @@ namespace Clover
             catch (Exception ex)
             {
                 Ui.LogError(ex, "移到分类");
+            }
+        }
+
+        /// <summary>
+        /// 隐藏 / 取消隐藏一个应用。
+        /// 写入 hidden-apps.json，标记内存中的条目，然后刷新界面。
+        /// </summary>
+        void SetAppHidden(AppItem a, bool hidden)
+        {
+            try
+            {
+                if (a == null || string.IsNullOrEmpty(a.Path)) return;
+                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+
+                bool changed = hidden ? hiddenApps.Hide(a.Path) : hiddenApps.Show(a.Path);
+                if (!changed) return;
+
+                // 就地改标记即可，不必全量重载目录：
+                // Catalog.Load 也会重新读 hidden-apps.json，但那样会丢掉 usage 的本次更新。
+                a.Hidden = hidden;
+                Ui.Log((hidden ? "隐藏" : "取消隐藏") + "应用: " + a.Name);
+
+                // 取消隐藏最后一个后，「隐藏的项目」分类会消失——
+                // 若正停在那里，得先离开，否则界面停在空分类上。
+                if (!hidden && current == HiddenCategory && catalog.HiddenItems().Count == 0)
+                {
+                    current = "";
+                    SaveLastCategory();
+                }
+
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "隐藏应用");
             }
         }
 

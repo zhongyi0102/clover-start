@@ -10,12 +10,14 @@ namespace Clover
     {
         const string MutexName = "CloverStart_SingleInstance_7f3a9c";
         const string ShowEventName = "CloverStart_ShowPanel_7f3a9c";
+        const string ExitEventName = "CloverStart_Exit_7f3a9c";
 
         [STAThread]
         static void Main(string[] args)
         {
             bool rescan = false;
             bool show = false;
+            bool exitRequest = false;
             bool forceSafeMode = false;
             bool restoreOnly = false;
             bool resetAll = false;
@@ -29,6 +31,7 @@ namespace Clover
                 string a = args[i];
                 if (string.Compare(a, "--rescan", true) == 0) rescan = true;
                 else if (string.Compare(a, "--show", true) == 0) show = true;
+                else if (string.Compare(a, "--exit", true) == 0) exitRequest = true;
                 else if (string.Compare(a, "--safe-mode", true) == 0) forceSafeMode = true;
                 else if (string.Compare(a, "--restore-system", true) == 0) restoreOnly = true;
                 else if (string.Compare(a, "--reset-all", true) == 0) resetAll = true;
@@ -121,15 +124,27 @@ namespace Clover
             Mutex instanceMutex = new Mutex(true, MutexName, out created);
             if (!created)
             {
-                // 已经有实例在运行：只通知它打开面板，然后自己退出。
+                // 已经有实例在运行：只发信号给它，然后自己退出。
+                //
+                // --exit 走优雅退出（触发正常的 OnExit 清理），
+                // 这样 dev-run.ps1 重启程序时不会累积假的"异常退出"计数
+                // ——强杀 3 次就会误触发安全模式。
                 try
                 {
-                    using (EventWaitHandle ev = EventWaitHandle.OpenExisting(ShowEventName))
+                    using (EventWaitHandle ev = EventWaitHandle.OpenExisting(
+                        exitRequest ? ExitEventName : ShowEventName))
                     {
                         ev.Set();
                     }
                 }
                 catch { }
+                GC.KeepAlive(instanceMutex);
+                return;
+            }
+
+            // 没有实例在跑、但用户要的是"退出"：无事可做
+            if (exitRequest)
+            {
                 GC.KeepAlive(instanceMutex);
                 return;
             }
@@ -190,6 +205,7 @@ namespace Clover
                 };
 
                 EventWaitHandle showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+                EventWaitHandle exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ExitEventName);
 
                 TriggerWindow trigger = new TriggerWindow(baseDir, settings);
                 PanelWindow panel = new PanelWindow(baseDir, trigger, settings);
@@ -233,11 +249,24 @@ namespace Clover
 
                 Thread waiter = new Thread(delegate()
                 {
+                    WaitHandle[] events = new WaitHandle[] { showEvent, exitEvent };
                     while (true)
                     {
                         try
                         {
-                            showEvent.WaitOne();
+                            // WaitAny 返回下标：0 = 显示面板，1 = 请求退出
+                            int which = WaitHandle.WaitAny(events);
+                            if (which == 1)
+                            {
+                                // 优雅退出：走 Shutdown 才会触发 app.Exit -> OnExit 清理，
+                                // 清除运行标记，下次启动不算异常退出。
+                                app.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(delegate
+                                {
+                                    Ui.Log("收到 --exit 请求，正常退出");
+                                    Application.Current.Shutdown();
+                                }));
+                                return;
+                            }
                             app.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(delegate
                             {
                                 panel.ShowPanel();

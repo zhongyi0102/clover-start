@@ -507,6 +507,51 @@ namespace Clover
 
             cm.Items.Add(new Separator());
 
+            // ---- 隐藏的项目管理 ----
+            MenuItem hideTools = new MenuItem();
+            hideTools.Header = "隐藏用不到的";
+            if (panel == null)
+            {
+                hideTools.IsEnabled = false;
+            }
+            else
+            {
+                // 一键藏掉整类（你从没用过「系统工具」和「工具/命令行」）
+                foreach (string cat in new string[] { "系统工具", Catalog.ToolCategory })
+                {
+                    string c = cat;
+                    MenuItem one = new MenuItem();
+                    one.Header = "隐藏全部「" + c + "」";
+                    one.Click += delegate
+                    {
+                        int n = panel.HideCategory(c);
+                        if (n > 0) panel.ShowPanel();
+                    };
+                    hideTools.Items.Add(one);
+                }
+
+                hideTools.Items.Add(new Separator());
+
+                MenuItem showHidden = new MenuItem();
+                showHidden.Header = "查看隐藏的项目";
+                showHidden.IsEnabled = panel.HiddenCount() > 0;
+                showHidden.Click += delegate { panel.ShowHiddenItems(); };
+                hideTools.Items.Add(showHidden);
+
+                MenuItem unhideAll = new MenuItem();
+                unhideAll.Header = "取消隐藏全部";
+                unhideAll.IsEnabled = panel.HiddenCount() > 0;
+                unhideAll.Click += delegate
+                {
+                    int n = panel.UnhideAll();
+                    if (n > 0) panel.ShowPanel();
+                };
+                hideTools.Items.Add(unhideAll);
+            }
+            cm.Items.Add(hideTools);
+
+            cm.Items.Add(new Separator());
+
             MenuItem auto = new MenuItem();
             auto.Header = "开机自启";
             auto.IsCheckable = true;
