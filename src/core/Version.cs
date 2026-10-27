@@ -1,15 +1,15 @@
 // 由 build.ps1 自动生成，请勿手工编辑。
 using System.Reflection;
-[assembly: AssemblyVersion("1.0.1")]
-[assembly: AssemblyFileVersion("1.0.1")]
+[assembly: AssemblyVersion("1.0.2")]
+[assembly: AssemblyFileVersion("1.0.2")]
 [assembly: AssemblyProduct("四叶草启动面板")]
 namespace Clover
 {
     static class BuildInfo
     {
-        public const string Version = "1.0.1";
-        public const string Stamp = "2026.10.27.1843";
-        public const string BuildTime = "2026-10-27 18:43:25";
+        public const string Version = "1.0.2";
+        public const string Stamp = "2026.10.27.1934";
+        public const string BuildTime = "2026-10-27 19:34:04";
         public static string Describe { get { return "四叶草 v" + Version + "（" + BuildTime + " 构建）"; } }
     }
 }
