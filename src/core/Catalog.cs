@@ -75,6 +75,17 @@ namespace Clover
             catch { }
 
             foreach (AppItem a in c.Apps) EnsureOrder(c, a.Category);
+
+            // 应用用户自定义的分类顺序（config\categories.json）。
+            // 放在最后：此时 Order 里已经收齐了所有实际存在的分类，
+            // 重排才有意义。只改内部名的先后，不改分类归属。
+            try
+            {
+                Categories cats = Categories.Load(baseDir);
+                cats.ApplyOrder(c.Order);
+            }
+            catch { }
+
             return c;
         }
 
@@ -99,7 +110,7 @@ namespace Clover
                 object arr;
                 if (data.TryGetValue("apps", out arr) && arr != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)arr)
+                    foreach (object o in JsonIO.AsArray(arr))
                     {
                         Dictionary<string, object> m = o as Dictionary<string, object>;
                         if (m == null) continue;
@@ -163,7 +174,7 @@ namespace Clover
                 object arr;
                 if (data.TryGetValue("apps", out arr) && arr != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)arr)
+                    foreach (object o in JsonIO.AsArray(arr))
                     {
                         Dictionary<string, object> m = o as Dictionary<string, object>;
                         if (m == null) continue;

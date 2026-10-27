@@ -173,8 +173,12 @@ namespace Clover
                           : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count);
                 if (c != "" && c != "常用" && count == 0) continue;
 
-                string label = c == "" ? "全部"
-                             : (c == HiddenCategory ? "隐藏的项目" : c);
+                // 显示名：被改过名的分类查表，其余用内部名本身。
+                // 内部名（c）始终不变——它才是 apps.json / 规则表 / 覆盖表里的键。
+                string label;
+                if (c == "") label = "全部";
+                else if (c == HiddenCategory) label = "隐藏的项目";
+                else label = CategoryDisplayName(c);
 
                 Border item = new Border();
                 item.Height = 34;
@@ -182,6 +186,11 @@ namespace Clover
                 item.Margin = new Thickness(0, 2, 0, 2);
                 item.Background = Brushes.Transparent;
                 item.Cursor = Cursors.Hand;
+                // 改过名的分类，悬停时提示原本叫什么，避免以后认不出来
+                if (c != "" && c != HiddenCategory && categories != null && categories.IsRenamed(c))
+                {
+                    item.ToolTip = "原名：" + c;
+                }
 
                 Grid g = new Grid();
                 g.ColumnDefinitions.Add(new ColumnDefinition());
@@ -235,6 +244,19 @@ namespace Clover
                     RenderApps();
                 };
 
+                // 右键分类：重命名 / 上移下移。
+                // 只对真实分类提供（「常用」「全部」「隐藏的项目」是虚拟分类，
+                // 不参与排序也不该被改名）。
+                if (c != "" && c != "常用" && c != HiddenCategory)
+                {
+                    string cc = c;
+                    item.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e)
+                    {
+                        ShowCategoryMenu(cc);
+                        e.Handled = true;
+                    };
+                }
+
                 navStack.Children.Add(item);
                 navCats.Add(c);
                 navItems.Add(item);
@@ -255,6 +277,133 @@ namespace Clover
                 navBars[i].Visibility = sel ? Visibility.Visible : Visibility.Collapsed;
                 navNames[i].Foreground = sel ? Ui.AccentText : Ui.Fg;
                 navNames[i].FontWeight = sel ? FontWeights.SemiBold : FontWeights.Normal;
+            }
+        }
+
+        /// <summary>
+        /// 分类的显示名。改过名的查表，其余返回内部名。
+        ///
+        /// 内部名永远不变 —— 它是 apps.json / 规则表 / 覆盖表 / order.json
+        /// 里用的键，改了就得四处迁移，而且下次重扫会被写回旧名。
+        /// </summary>
+        string CategoryDisplayName(string internalName)
+        {
+            try
+            {
+                if (categories == null) return internalName;
+                return categories.DisplayName(internalName);
+            }
+            catch { return internalName; }
+        }
+
+        /// <summary>
+        /// 分类的右键菜单：重命名 / 上移 / 下移。
+        /// 「常用」「全部」「隐藏的项目」是虚拟分类，不提供这个菜单。
+        /// </summary>
+        void ShowCategoryMenu(string cat)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(cat)) return;
+
+                ContextMenu cm = new ContextMenu();
+
+                MenuItem rename = new MenuItem();
+                bool renamed = categories != null && categories.IsRenamed(cat);
+                rename.Header = "重命名…";
+                rename.Click += delegate { PromptRenameCategory(cat); };
+                cm.Items.Add(rename);
+
+                if (renamed)
+                {
+                    MenuItem reset = new MenuItem();
+                    reset.Header = "恢复原名（" + cat + "）";
+                    reset.Click += delegate { RenameCategory(cat, null); };
+                    cm.Items.Add(reset);
+                }
+
+                cm.Items.Add(new Separator());
+
+                MenuItem up = new MenuItem();
+                up.Header = "上移";
+                up.Click += delegate { MoveCategory(cat, -1); };
+                cm.Items.Add(up);
+
+                MenuItem down = new MenuItem();
+                down.Header = "下移";
+                down.Click += delegate { MoveCategory(cat, +1); };
+                cm.Items.Add(down);
+
+                // 菜单打开期间抑制面板自动收起（同磁贴菜单的处理）
+                taskMenuOpen = true;
+                cm.Closed += delegate { taskMenuOpen = false; };
+                cm.Placement = PlacementMode.MousePoint;
+                cm.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "分类右键菜单");
+            }
+        }
+
+        /// <summary>弹出输入框让用户改分类显示名。</summary>
+        void PromptRenameCategory(string cat)
+        {
+            try
+            {
+                string currentDisplay = CategoryDisplayName(cat);
+                string input = TextPromptDialog.Ask(
+                    this, "重命名分类", "把「" + cat + "」显示为：", currentDisplay);
+                if (input == null) return;      // 用户取消
+                RenameCategory(cat, input.Trim());
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "重命名分类");
+            }
+        }
+
+        /// <summary>
+        /// 改分类显示名。display 传空表示恢复原名。
+        /// 改完重建侧栏（名字变了）并刷新内容（底部计数等）。
+        /// </summary>
+        void RenameCategory(string cat, string display)
+        {
+            try
+            {
+                if (categories == null) categories = Categories.Load(baseDir);
+                if (!categories.Rename(cat, display)) return;
+
+                Ui.Log("分类重命名: " + cat + " -> " + (string.IsNullOrEmpty(display) ? "(原名)" : display));
+                RebuildNav();
+                RenderApps();
+                SaveLastCategory();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "分类重命名");
+            }
+        }
+
+        /// <summary>把分类在侧栏里上移或下移一位。</summary>
+        void MoveCategory(string cat, int delta)
+        {
+            try
+            {
+                if (categories == null) categories = Categories.Load(baseDir);
+
+                // 顺序表要基于**当前实际显示的顺序**来排，
+                // 否则用户第一次调顺序时，其余分类的相对次序会被默认表覆盖。
+                List<string> cats = new List<string>(catalog.ActiveCategories());
+                if (!categories.MoveCategory(cats, cat, delta)) return;
+
+                Ui.Log("分类" + (delta < 0 ? "上移" : "下移") + ": " + cat);
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "分类排序");
             }
         }
 

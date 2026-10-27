@@ -106,6 +106,9 @@ namespace Clover
         /// <summary>被隐藏的应用清单（右键「从面板隐藏」写入）。</summary>
         HiddenApps hiddenApps;
 
+        /// <summary>分类的顺序与显示名（右键分类「重命名 / 上移下移」写入）。</summary>
+        Categories categories;
+
         /// <summary>
         /// 「隐藏的项目」虚拟分类的标识。
         /// 用不可见字符开头，确保和任何真实分类名都不会撞。
@@ -119,6 +122,7 @@ namespace Clover
             this.settings = settings ?? Settings.Load(baseDir);
             this.overrides = CategoryOverrides.Load(baseDir);
             this.hiddenApps = HiddenApps.Load(baseDir);
+            this.categories = Categories.Load(baseDir);
             catalog = Catalog.Load(baseDir);
             usage = UsageStore.Load(baseDir);
             hiddenCats = this.settings.HiddenCategories;

@@ -62,7 +62,7 @@ namespace Clover
                 object v;
                 if (m.TryGetValue("crashes", out v) && v != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)v)
+                    foreach (object o in JsonIO.AsArray(v))
                     {
                         try { d.Ticks.Add(Convert.ToInt64(o)); } catch { }
                     }

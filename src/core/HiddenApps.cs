@@ -59,7 +59,7 @@ namespace Clover
                 object arr;
                 if (!d.TryGetValue("paths", out arr) || arr == null) return h;
 
-                foreach (object o in (System.Collections.IEnumerable)arr)
+                foreach (object o in JsonIO.AsArray(arr))
                 {
                     string p = Convert.ToString(o);
                     if (!string.IsNullOrEmpty(p)) h.paths.Add(p);

@@ -81,12 +81,12 @@ namespace Clover
                 object arrObj;
                 if (root.TryGetValue("apps", out arrObj) && arrObj != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)arrObj) apps.Add(o);
+                    foreach (object o in JsonIO.AsArray(arrObj)) apps.Add(o);
                 }
                 List<string> order = new List<string>();
                 if (root.TryGetValue("order", out arrObj) && arrObj != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)arrObj) order.Add(Convert.ToString(o));
+                    foreach (string s in JsonIO.AsStringArray(arrObj)) order.Add(s);
                 }
                 if (order.Count == 0)
                 {
@@ -374,7 +374,7 @@ namespace Clover
                 object arr;
                 if (d != null && d.TryGetValue("hiddenCategories", out arr) && arr != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)arr) list.Add(Convert.ToString(o));
+                    foreach (string s in JsonIO.AsStringArray(arr)) list.Add(s);
                 }
             }
             catch { }
@@ -396,7 +396,7 @@ namespace Clover
                     object arr;
                     if (d != null && d.TryGetValue("roots", out arr) && arr != null)
                     {
-                        foreach (object o in (System.Collections.IEnumerable)arr)
+                        foreach (object o in JsonIO.AsArray(arr))
                         {
                             string p = Convert.ToString(o);
                             if (!string.IsNullOrEmpty(p) && Directory.Exists(p)) list.Add(p);

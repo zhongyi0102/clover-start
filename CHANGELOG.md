@@ -45,11 +45,20 @@
   - 「跟随系统」读 Windows 的「应用模式」设置；值非法时回退到「跟随系统」
   - 深色下强调色变亮、面板投影加深（黑投影落在深底上本来几乎看不见）
 - 新增 `HiddenAppsTest`（47 项断言）
+- **右键分类可改名与排序**（`config\categories.json`）：
+  - 重命名（「影音娱乐」→「游戏」）、上移下移，立刻生效
+  - **只改显示名，内部名不变**：`apps.json` 的归类、分类规则表、`order.json` 都不受影响，
+    重新扫描也不会被写回。改过名的分类悬停会提示原名
+- 新增 `CategoriesTest`（63 项断言）
 
 ### 变更（Changed）
 
 - `order.json` 里「全部」分类的键从空串 `""` 改为 `__all__`（读取兼容老写法）。
   空串是合法 JSON 键，但会让 PowerShell 的 `ConvertFrom-Json` 报错，手工排查时很别扭
+- **统一了 JSON 数组的读取方式**（`JsonIO.AsArray` / `AsStringArray`）。
+  原来 11 处直接 `foreach (IEnumerable)v`，而**字符串也是 IEnumerable** ——
+  文件被手写成 `"order":"办公"` 时会遍历**字符**，把「办」「公」当成两个分类名。
+  现在非数组一律返回空数组，不再有这类诡异结果
 
 ### 修复（Fixed）
 

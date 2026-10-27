@@ -10,6 +10,10 @@
 - **重启后回到原样**：面板位置由 `layout.json` 记住，**上次浏览的分类**由 `config\last-category.json` 记住。配合 `dev-run.ps1` 反复重启调界面时，不用每次重新找位置和分类
 - 右上角三个窗口按钮：**─ 最小化**（收起面板）/ **□ 最大化·还原**（铺满整个屏幕，再点一次还原）/ **✕ 关闭**（收起面板）
 - 左侧是分类（常用 / 全部 / 办公 / 开发 / 网络通讯 / 影音娱乐 / 系统工具 / 工具/命令行 / 其他），点一下切换；「常用」按使用次数自动收集（最多 12 个），「游戏」已并入「影音娱乐」
+- **右键分类可以改名和排序**：改显示名（如「影音娱乐」→「游戏」）、上移下移。结果存 `config\categories.json`
+  - **改的只是显示名，内部名不变**——所以 `apps.json` 里的归类、分类规则表、`order.json` 全都不受影响，重新扫描也不会被写回
+  - 改过名的分类，鼠标悬停会提示「原名：xxx」，免得以后认不出来
+  - 「常用」「全部」「隐藏的项目」是虚拟分类，不参与改名和排序
 - **侧栏可以收起**：点侧栏右上角的小箭头，整条分类栏收到 44px，磁贴区变宽；再点一下展开。**收起状态会被记住**（存 `settings.json` 的 `navCollapsed`），重启后仍是你上次的样子
 - **主题**：右键四叶草 →「主题」可在**浅色 / 深色 / 跟随系统**之间切换，**默认跟随系统**（读 Windows 的「应用模式」设置）。切换立刻生效，不用重启。深色下强调色会变亮、面板投影会加深
 - **切分类会记住各自滚到哪**：在「全部」滚到第 3 屏，切到「办公」再切回来，仍在第 3 屏（按分类分别记，不是全局一个偏移）
@@ -332,6 +336,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\CatalogTest.cs` | 分类规则 / JsonIO / 每日备份 |
 | `tests\CategoryRulesTest.cs` | 外置规则表：优先级 / 匹配模式 / 归一化 / 热加载 / 坏文件回退 |
 | `tests\HiddenAppsTest.cs` | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
+| `tests\CategoriesTest.cs` | 分类顺序与重命名：只改显示名 / 不动内部名 |
 | `tests\CategoryOverrideTest.cs` | 分类覆盖表：优先级 / 重扫保持 / 损坏回退 |
 | `tests\PinyinTest.cs` | 拼音匹配 |
 | `tests\SettingsTest.cs` | 设置读写与开关联动 |
@@ -658,7 +663,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十五个套件，共 437 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十六个套件，共 500 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -682,6 +687,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 确认它成为前台窗口 → 断言 `IsFullscreen()` = true → 关掉后恢复 false |
 | `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
 | `HiddenAppsTest` | 47 | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
+| `CategoriesTest` | 63 | 重命名只改显示名（内部名不变）、顺序只重排已存在的分类、上移下移边界、坏文件回退 |
 | （主题断言） | 3 | 见 `AcceptanceTest`：刷子真的变色、非法值回退、深色投影加深 |
 | `ActiveRowTest` | 14 | 任务栏行高亮判定：只有一行亮、前台句柄为 0 时不高亮任何行、切换后刚好翻转、重复判定幂等 |
 
@@ -704,7 +710,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：15 个套件、437 个断言全部通过（2026-10-28，v1.0.2）**
+**最近一次运行结果：16 个套件、500 个断言全部通过（2026-10-28，v1.0.2）**
 
 > 断言数变化：151 → 373。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryRulesTest` 61、
 > 新增 `CategoryOverrideTest` 30、新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、

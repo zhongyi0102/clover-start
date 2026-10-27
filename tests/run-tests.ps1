@@ -63,6 +63,7 @@ $catalogDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
     (Join-Path $coreDir 'CategoryOverrides.cs'),
     (Join-Path $coreDir 'CategoryRules.cs'),
+    (Join-Path $coreDir 'Categories.cs'),
     (Join-Path $coreDir 'HiddenApps.cs'),
     (Join-Path $coreDir 'NameMatch.cs'),
     (Join-Path $coreDir 'JsonIO.cs'),
@@ -83,6 +84,10 @@ Invoke-Suite 'CategoryRulesTest' ($baseRefs + $webRef) `
 # 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存
 Invoke-Suite 'HiddenAppsTest' ($baseRefs + $webRef) `
     ($catalogDeps + @((Join-Path $testDir 'HiddenAppsTest.cs')))
+
+# 分类顺序与重命名：只改显示名、不动内部名
+Invoke-Suite 'CategoriesTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $testDir 'CategoriesTest.cs')))
 
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))

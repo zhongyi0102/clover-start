@@ -51,7 +51,7 @@ namespace Clover
                         object arr;
                         if (d != null && d.TryGetValue("order", out arr) && arr != null)
                         {
-                            foreach (object o in (System.Collections.IEnumerable)arr) order.Add(Convert.ToString(o));
+                            foreach (string s in JsonIO.AsStringArray(arr)) order.Add(s);
                         }
                     }
                     catch { }
@@ -190,7 +190,7 @@ namespace Clover
 
                 List<object> keep = new List<object>();
                 int total = 0;
-                foreach (object o in (System.Collections.IEnumerable)arr)
+                foreach (object o in JsonIO.AsArray(arr))
                 {
                     total++;
                     Dictionary<string, object> m = o as Dictionary<string, object>;

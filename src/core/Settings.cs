@@ -94,7 +94,8 @@ namespace Clover
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
-                    foreach (object o in (System.Collections.IEnumerable)v) s.HiddenCategories.Add(Convert.ToString(o));
+                    // 循环变量名不能叫 s —— 它是外层的 Settings 对象
+                    foreach (string cat in JsonIO.AsStringArray(v)) s.HiddenCategories.Add(cat);
                 }
             }
             catch (Exception ex)
