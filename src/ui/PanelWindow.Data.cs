@@ -154,6 +154,64 @@ namespace Clover
             return current;
         }
 
+        /// <summary>当前磁贴区的滚动偏移（验收测试用；-1 表示取不到）。</summary>
+        public double CurrentScrollOffset()
+        {
+            try { return contentScroll == null ? -1 : contentScroll.VerticalOffset; }
+            catch { return -1; }
+        }
+
+        /// <summary>已记录滚动位置的分类数（验收测试用）。</summary>
+        public int ScrollMemoryCount()
+        {
+            try { return scrollOffsets.Count; }
+            catch { return -1; }
+        }
+
+        /// <summary>某个分类是否已有记录的滚动位置。</summary>
+        public bool HasScrollMemory(string cat)
+        {
+            try { return cat != null && scrollOffsets.ContainsKey(cat); }
+            catch { return false; }
+        }
+
+        /// <summary>供测试直接设置滚动偏移（模拟用户滚动）。</summary>
+        public void ScrollToForTest(double offset)
+        {
+            try
+            {
+                if (contentScroll == null) return;
+                contentScroll.UpdateLayout();
+                contentScroll.ScrollToVerticalOffset(offset);
+                contentScroll.UpdateLayout();
+                scrollOffsets[current] = contentScroll.VerticalOffset;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 供测试切换分类（绕开鼠标点击）。
+        ///
+        /// 为什么不走真实点击：合成鼠标事件会让面板失焦，触发已存在的
+        /// "点击面板外自动收起"，测试就断在中间了。这里直接走切换逻辑，
+        /// 覆盖的是滚动记忆本身。
+        /// </summary>
+        public void SwitchCategoryForTest(string cat)
+        {
+            try
+            {
+                SaveScrollOffset();
+                current = cat;
+                SaveLastCategory();
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "测试切换分类");
+            }
+        }
+
         /// <summary>
         /// 一键隐藏一整类（如「系统工具」45 个）。
         /// 返回实际隐藏的数量。

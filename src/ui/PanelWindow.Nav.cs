@@ -227,6 +227,8 @@ namespace Clover
                 item.MouseLeave += delegate { if (current != c) item.Background = Brushes.Transparent; };
                 item.MouseLeftButtonUp += delegate
                 {
+                    // 先把当前分类的滚动位置存下来（必须在改 current 之前）
+                    SaveScrollOffset();
                     current = c;
                     SaveLastCategory();   // 记住分类，重启后回到这里
                     UpdateNav();
@@ -334,6 +336,59 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 记下当前分类的滚动偏移。
+        ///
+        /// 必须在**切换 current 之前**调用——切完之后 current 已经变了，
+        /// 记下来的偏移会算到新分类头上，越切越乱。
+        /// </summary>
+        void SaveScrollOffset()
+        {
+            try
+            {
+                if (contentScroll == null) return;
+                scrollOffsets[current] = contentScroll.VerticalOffset;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 恢复当前分类上次的滚动偏移。
+        ///
+        /// 时机是关键：内容刚重建时 ExtentHeight 还是 0，
+        /// 此时 ScrollToVerticalOffset 会被钳到 0（表现为"滚了但立刻弹回顶部"）。
+        /// 所以先 UpdateLayout 让布局完成，再设偏移。
+        /// </summary>
+        void RestoreScrollOffset()        {
+            try
+            {
+                if (contentScroll == null) return;
+
+                double target;
+                if (!scrollOffsets.TryGetValue(current, out target) || target <= 0) return;
+
+                // 布局没跑完就设偏移会被钳掉，先强制布局
+                contentScroll.UpdateLayout();
+
+                // 恢复动作本身也会触发 ScrollChanged，不设标记的话
+                // 会把刚恢复的值当成"用户滚动"再记一次，多次切换后逐渐漂移
+                suppressScrollRecord = true;
+                try
+                {
+                    contentScroll.ScrollToVerticalOffset(target);
+                    contentScroll.UpdateLayout();
+                }
+                finally
+                {
+                    suppressScrollRecord = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "恢复滚动位置");
+            }
+        }
+
         void RenderAppsCore()
         {
             tilePanel.Children.Clear();
@@ -393,6 +448,9 @@ namespace Clover
             footerCount.Text = showingHidden
                 ? "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏"
                 : "共 " + visible + " 个应用";
+
+            // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
+            RestoreScrollOffset();
         }
 
         static int RenderCompare(AppItem a, AppItem b)

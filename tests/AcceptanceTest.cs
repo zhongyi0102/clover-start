@@ -139,6 +139,26 @@ namespace Clover
                 new string[] { "GammaApp", exeC, "其他" },
             });
 
+            // 再造一批填充应用，让磁贴区**真的能滚动**。
+            // 为什么需要：滚动位置恢复只有在"内容超出视口"时才有意义，
+            // 3 个磁贴撑不满一屏，ScrollToVerticalOffset 会被钳到 0，
+            // 那样的断言等于没测。
+            {
+                List<object> filler = new List<object>();
+                for (int i = 0; i < 60; i++)
+                {
+                    string p = Path.Combine(root, "fill" + i + ".exe");
+                    File.WriteAllText(p, "x", new UTF8Encoding(false));
+                    Dictionary<string, object> m = new Dictionary<string, object>();
+                    m["name"] = "Fill" + i.ToString("D2");
+                    m["path"] = p;
+                    m["category"] = (i % 2 == 0) ? "" : "办公";   // 一半进「全部」，一半进「办公」
+                    filler.Add(m);
+                }
+                // 追加到 manual-apps.json
+                AppendManualApps(root, filler);
+            }
+
             // ---------- 2. 真实创建 PanelWindow ----------
             PanelWindow panel = null;
 
@@ -250,6 +270,11 @@ namespace Clover
             });
 
             // ---------- 9. 隐藏应用：分类出现、条目过滤 ----------
+            // 先记下隐藏前的总数做基线（后面用相对对比，不写死数字）
+            int hiddenBaseline = 0;
+            try { hiddenBaseline = Catalog.Load(root).Apps.Count; }
+            catch { }
+
             Verify("隐藏一个应用后「隐藏的项目」分类出现", delegate
             {
                 HiddenApps h = HiddenApps.Load(root);
@@ -258,8 +283,16 @@ namespace Clover
                 Catalog after = Catalog.Load(root);
                 if (after.HiddenItems().Count != 1) return "隐藏项数应为 1，实际 " + after.HiddenItems().Count;
                 if (after.ByCategory("开发").Count != 0) return "被隐藏的仍出现在原分类里";
-                if (after.Apps.Count != 3) return "隐藏项不该从 Apps 里消失（总数应为 3）";
-                return "ok";
+
+                // 总数不该变：隐藏只是打标记，条目仍留在 Apps 里（「隐藏的项目」要能看到）
+                // 用 **基线对比** 而不是写死数字 —— 夹具里还有一批填充应用，
+                // 写死数字的话以后一改夹具这条断言就假失败。
+                int baseline = hiddenBaseline;
+                if (baseline <= 0) return "缺少基线（TestsCatalogCount 未初始化）";
+                if (after.Apps.Count != baseline)
+                    return string.Format("隐藏项不该从 Apps 里消失（应有 {0} 个，实际 {1}）",
+                        baseline, after.Apps.Count);
+                return "ok（总数保持 " + baseline + "）";
             });
 
             // ---------- 10. ★回归：上次分类已消失时必须回退，不能停在空分类 ----------
@@ -330,7 +363,135 @@ namespace Clover
                 return "ok（根容器已接位移变换）";
             });
 
-            // ---------- 13. last-category.json 写在临时目录 ----------
+            // ---------- 14. 侧栏折叠按钮：位置在侧栏内、可收起可恢复 ----------
+            // 为什么专门断言位置：按钮用 HorizontalAlignment.Right 定位，
+            // 一旦落在错的地方，用户点不到（表现是"点了没反应"）。
+            Verify("★侧栏折叠按钮落在侧栏区域内", delegate
+            {
+                Border t = panel.NavToggle;
+                if (t == null) return "navToggle 为 null（按钮没建立）";
+                if (!t.IsVisible) return "按钮不可见";
+
+                try
+                {
+                    GeneralTransform gt = t.TransformToAncestor(panel);
+                    Point p = gt.Transform(new Point(0, 0));
+                    double left = p.X, right = p.X + t.ActualWidth;
+                    string d = string.Format("按钮 @({0:N0},{1:N0}) {2:N0}x{3:N0}，右边缘 {4:N0}",
+                        p.X, p.Y, t.ActualWidth, t.ActualHeight, right);
+
+                    // root.Margin=16，侧栏宽 160 → 侧栏在面板坐标 16 .. 176
+                    if (left < 10) return d + " —— 跑到侧栏左边了";
+                    if (right > 200) return d + " —— 跑到侧栏外面了";
+                    return "ok（" + d + "）";
+                }
+                catch (Exception ex)
+                {
+                    return "取坐标失败: " + ex.Message;
+                }
+            });
+
+            Verify("★侧栏可收起并恢复", delegate
+            {
+                if (panel.NavColumnValue < 0) return "navColumn 为 null";
+
+                double before = panel.NavColumnValue;
+                panel.ToggleNavNow();
+                double collapsed = panel.NavColumnValue;
+                bool isCollapsed = panel.NavIsCollapsed;
+
+                panel.ToggleNavNow();
+                double back = panel.NavColumnValue;
+                bool isBack = panel.NavIsCollapsed;
+
+                if (Math.Abs(before - PanelWindow.NavWidthExpanded) > 0.1)
+                    return "初始宽度应为 160，实际 " + before;
+                if (!isCollapsed || Math.Abs(collapsed - PanelWindow.NavWidthCollapsed) > 0.1)
+                    return string.Format("收起失败：collapsed={0} 宽度={1}", isCollapsed, collapsed);
+                if (isBack || Math.Abs(back - PanelWindow.NavWidthExpanded) > 0.1)
+                    return string.Format("恢复失败：collapsed={0} 宽度={1}", isBack, back);
+
+                return string.Format("ok（160 -> {0:N0} -> 160）", collapsed);
+            });
+
+            // ---------- 15. ★命中测试：折叠按钮那个点上真的是它吗 ----------
+            // 为什么单独测这个：按钮位置对、逻辑也对，但真实鼠标点不到 ——
+            // 只有 InputHitTest 能告诉我们"那个坐标上实际是谁"。
+            // WPF 里后来的子元素会盖住先加的（同一个 Grid 单元格尤其容易踩）。
+            Verify("★折叠按钮那个点上点得到它（无遮挡）", delegate
+            {
+                Border t = panel.NavToggle;
+                if (t == null) return "navToggle 为 null";
+                if (t.ActualWidth <= 0 || t.ActualHeight <= 0)
+                    return string.Format("按钮尺寸为 0：{0}x{1}", t.ActualWidth, t.ActualHeight);
+
+                // 按钮中心（相对 panel）
+                Point inPanel = t.TransformToAncestor(panel)
+                    .Transform(new Point(t.ActualWidth / 2, t.ActualHeight / 2));
+
+                // 改成相对 panel 的 root 内容坐标做命中测试
+                // （panel 是 Window，InputHitTest 要作用于它的内容元素）
+                FrameworkElement content = panel.Content as FrameworkElement;
+                if (content == null) return "panel.Content 不是 FrameworkElement";
+
+                Point inContent = t.TransformToAncestor(content)
+                    .Transform(new Point(t.ActualWidth / 2, t.ActualHeight / 2));
+
+                IInputElement hit = content.InputHitTest(inContent);
+                DependencyObject hitObj = hit as DependencyObject;
+
+                string hitDesc = "null";
+                if (hitObj != null)
+                {
+                    FrameworkElement fe = hitObj as FrameworkElement;
+                    hitDesc = hitObj.GetType().Name;
+                    if (fe != null && !string.IsNullOrEmpty(fe.Name)) hitDesc += "#" + fe.Name;
+                }
+
+                if (hitObj == null) return "命中测试返回 null（该点没有任何可交互元素）";
+
+                // 命中结果应是按钮本身或它的直接子元素（那个字形 TextBlock）
+                if (hitObj == t) return "ok（命中 = 按钮本身）";
+                if (hitObj is TextBlock && IsDescendantOfVisual(hitObj, t))
+                    return "ok（命中 = 按钮内的字形）";
+
+                return "被别的元素盖住了：命中 " + hitDesc + "，坐标 " + inContent;
+            });
+
+            // ---------- 16. ★滚动位置按分类分别记住 ----------
+            // 为什么按分类记：切走再回来应该还在原处，而不是全局共用一个偏移
+            // （那样从长分类切到短分类会滚到看不见的位置）。
+            Verify("★滚动位置按分类记住并能恢复", delegate
+            {
+                string catA = "";          // 全部（应用最多，一定可滚）
+                string catB = "办公";
+
+                panel.SwitchCategoryForTest(catA);
+                panel.UpdateLayout();
+
+                // 滚到 120px 处
+                panel.ScrollToForTest(120);
+                double atA = panel.CurrentScrollOffset();
+                if (!panel.HasScrollMemory(catA))
+                    return "滚动后没有记录 " + (catA == "" ? "全部" : catA) + " 的偏移";
+                if (atA < 50) return "滚不动或偏移过小：" + atA;
+
+                // 切到另一个分类，再切回来
+                panel.SwitchCategoryForTest(catB);
+                panel.UpdateLayout();
+                panel.SwitchCategoryForTest(catA);
+                panel.UpdateLayout();
+
+                double back = panel.CurrentScrollOffset();
+                if (Math.Abs(back - atA) > 2)
+                    return string.Format("切回后偏移不一致：原 {0:N0} -> 现在 {1:N0}", atA, back);
+
+                // 两个分类各自有记录
+                if (panel.ScrollMemoryCount() < 1) return "记录数为 0";
+                return string.Format("ok（{0:N0} -> 切走 -> 切回 {1:N0}）", atA, back);
+            });
+
+            // ---------- 17. last-category.json 写在临时目录 ----------
             Verify("last-category.json 写在临时目录（未污染真实目录）", delegate
             {
                 string p = Path.Combine(root, "config", "last-category.json");
@@ -440,6 +601,22 @@ namespace Clover
             return all.Count > 0 ? all[0] : null;
         }
 
+        /// <summary>子元素是否在视觉树上属于某个祖先（命中测试用）。</summary>
+        static bool IsDescendantOfVisual(DependencyObject child, DependencyObject ancestor)
+        {
+            try
+            {
+                DependencyObject cur = child;
+                while (cur != null)
+                {
+                    if (cur == ancestor) return true;
+                    cur = VisualTreeHelper.GetParent(cur);
+                }
+            }
+            catch { }
+            return false;
+        }
+
         static List<T> FindAll<T>(DependencyObject d) where T : DependencyObject
         {
             List<T> list = new List<T>();
@@ -492,6 +669,34 @@ namespace Clover
             JavaScriptSerializer ser = new JavaScriptSerializer();
             File.WriteAllText(Path.Combine(root, "config", "manual-apps.json"),
                 ser.Serialize(d), new UTF8Encoding(false));
+        }
+
+        /// <summary>往 manual-apps.json 追加一批条目（用于造出可滚动的内容）。</summary>
+        static void AppendManualApps(string root, List<object> extra)
+        {
+            string p = Path.Combine(root, "config", "manual-apps.json");
+            JavaScriptSerializer ser = new JavaScriptSerializer();
+            List<object> arr = new List<object>();
+
+            if (File.Exists(p))
+            {
+                try
+                {
+                    Dictionary<string, object> old =
+                        ser.Deserialize<Dictionary<string, object>>(File.ReadAllText(p, Encoding.UTF8));
+                    object o;
+                    if (old != null && old.TryGetValue("apps", out o) && o != null)
+                    {
+                        foreach (object x in (System.Collections.IEnumerable)o) arr.Add(x);
+                    }
+                }
+                catch { }
+            }
+
+            arr.AddRange(extra);
+            Dictionary<string, object> d = new Dictionary<string, object>();
+            d["apps"] = arr;
+            File.WriteAllText(p, ser.Serialize(d), new UTF8Encoding(false));
         }
 
         static string Argument(string[] args, string name)

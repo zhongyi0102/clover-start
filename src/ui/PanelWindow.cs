@@ -60,6 +60,38 @@ namespace Clover
         TextBlock searchHint;
         TextBlock footerCount;
 
+        /// <summary>
+        /// 侧栏所在列（折叠时改它的宽度）。由 BuildUi 赋值。
+        /// 折叠用 ColumnDefinition 的宽度动画，不碰 navGrid 的 Visibility——
+        /// 后者会把内容整棵丢掉，展开时还得重建。
+        /// </summary>
+        ColumnDefinition navColumn;
+        /// <summary>侧栏容器（折叠时整体隐藏内部内容）。</summary>
+        Grid navGrid;
+        /// <summary>分类列表的滚动容器（折叠时隐藏）。</summary>
+        ScrollViewer navScroll;
+        /// <summary>侧栏下半部分（任务栏列表，折叠时隐藏）。</summary>
+        Grid taskGrid;
+        /// <summary>侧栏收起/展开的切换按钮。</summary>
+        Border navToggle;
+        /// <summary>侧栏是否已收起。</summary>
+        bool navCollapsed;
+
+        /// <summary>磁贴区的滚动容器（记住滚动位置要用）。</summary>
+        ScrollViewer contentScroll;
+
+        /// <summary>
+        /// 各分类的滚动偏移（分类名 -> 垂直偏移）。
+        /// 按分类分别记：切走再回来还在原处，而不是全局共用一个值。
+        /// </summary>
+        Dictionary<string, double> scrollOffsets = new Dictionary<string, double>();
+
+        /// <summary>
+        /// 程序自己要恢复滚动位置时置 true，避免那次位移被当成"用户滚动"记下来。
+        /// 不设它的话：恢复动作本身会覆盖掉刚读到的值，多切几次就漂了。
+        /// </summary>
+        bool suppressScrollRecord;
+
         List<string> navCats = new List<string>();
         List<Border> navItems = new List<Border>();
         List<Border> navBars = new List<Border>();

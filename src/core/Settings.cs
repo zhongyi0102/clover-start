@@ -45,6 +45,14 @@ namespace Clover
         /// <summary>要隐藏的分类（「系统工具」默认隐藏）。</summary>
         public List<string> HiddenCategories = new List<string>();
 
+        /// <summary>
+        /// 侧栏是否已收起。默认 false（展开）。
+        ///
+        /// 放进 settings.json 而不是单独一个文件：它和 miniTaskbar 一样是
+        /// "用户对界面的一个持久偏好"，没必要为它多一个配置文件。
+        /// </summary>
+        public bool NavCollapsed = false;
+
         string path;
 
         /// <summary>
@@ -74,6 +82,7 @@ namespace Clover
                 if (d.TryGetValue("hoverReveal", out v) && v != null) s.HoverReveal = Convert.ToBoolean(v);
                 if (d.TryGetValue("fullscreenDetect", out v) && v != null) s.FullscreenDetect = Convert.ToBoolean(v);
                 if (d.TryGetValue("safeMode", out v) && v != null) s.SafeMode = Convert.ToBoolean(v);
+                if (d.TryGetValue("navCollapsed", out v) && v != null) s.NavCollapsed = Convert.ToBoolean(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
                     foreach (object o in (System.Collections.IEnumerable)v) s.HiddenCategories.Add(Convert.ToString(o));
@@ -113,6 +122,7 @@ namespace Clover
                 d["hoverReveal"] = HoverReveal;
                 d["fullscreenDetect"] = FullscreenDetect;
                 d["safeMode"] = SafeMode;
+                d["navCollapsed"] = NavCollapsed;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();

@@ -36,6 +36,7 @@ namespace Clover
             Check(s1.DesktopAutoClean == false, "默认**不**自动移走桌面快捷方式（本轮改为 false）");
             Check(s1.DesktopAutoCleanNoticeShown == false, "默认未展示过自动移走确认说明");
             Check(s1.HiddenCategories.Count == 0, "默认没有隐藏分类");
+            Check(s1.NavCollapsed == false, "默认侧栏展开（不收起）");
 
             // ---------- 1b. 老配置里显式的 desktopAutoClean=true 必须保持不变 ----------
             string rOld = NewRoot();
@@ -68,6 +69,7 @@ namespace Clover
             s1.TaskbarHiding = false;
             s1.DesktopAutoClean = true;
             s1.HiddenCategories.Add("系统工具");
+            s1.NavCollapsed = true;
             s1.Save();
 
             Settings s2 = Settings.Load(r1);
@@ -76,6 +78,7 @@ namespace Clover
             Check(s2.TaskbarHiding == false, "taskbarHiding 往返");
             Check(s2.DesktopAutoClean == true, "desktopAutoClean 往返");
             Check(s2.HiddenCategories.Count == 1 && s2.HiddenCategories[0] == "系统工具", "hiddenCategories 往返");
+            Check(s2.NavCollapsed == true, "navCollapsed 往返（侧栏收起状态持久化）");
 
             // ---------- 3. 保留未知字段 ----------
             string r3 = NewRoot();

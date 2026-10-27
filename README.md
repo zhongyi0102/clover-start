@@ -10,6 +10,8 @@
 - **重启后回到原样**：面板位置由 `layout.json` 记住，**上次浏览的分类**由 `config\last-category.json` 记住。配合 `dev-run.ps1` 反复重启调界面时，不用每次重新找位置和分类
 - 右上角三个窗口按钮：**─ 最小化**（收起面板）/ **□ 最大化·还原**（铺满整个屏幕，再点一次还原）/ **✕ 关闭**（收起面板）
 - 左侧是分类（常用 / 全部 / 办公 / 开发 / 网络通讯 / 影音娱乐 / 系统工具 / 工具/命令行 / 其他），点一下切换；「常用」按使用次数自动收集（最多 12 个），「游戏」已并入「影音娱乐」
+- **侧栏可以收起**：点侧栏右上角的小箭头，整条分类栏收到 44px，磁贴区变宽；再点一下展开。**收起状态会被记住**（存 `settings.json` 的 `navCollapsed`），重启后仍是你上次的样子
+- **切分类会记住各自滚到哪**：在「全部」滚到第 3 屏，切到「办公」再切回来，仍在第 3 屏（按分类分别记，不是全局一个偏移）
 - 应用图标按**使用频率**排序：从面板启动次数越多越靠前，次数相同按最近使用，没用过的按名称；数据保存在 `config\usage.json`（删掉即可重置）
 - 应用磁贴可以**拖动调整顺序**（像桌面图标一样）：拖动一个磁贴放到另一个磁贴上即可换位，顺序按分类保存到 `config\order.json`，删掉该文件恢复按使用频率排序
 - 顶部搜索框：输入即过滤，支持中文、英文，以及**拼音**——全拼（`weixin` → 微信）和首字母（`wx` → 微信）都行
@@ -67,9 +69,10 @@
 | `fullscreenDetect` | `true` | 全屏检测（全屏时自动隐藏悬浮按钮） |
 | `safeMode` | `false` | 强制安全模式 |
 | `hiddenCategories` | `["系统工具"]` | 隐藏的分类 |
+| `navCollapsed` | `false` | 侧栏是否收起（点收起按钮后自动记住） |
 
-> **共 9 个键**：7 个功能开关（`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode`）+
-> `hideTaskbar`（状态）+ `desktopAutoCleanNoticeShown`（提示标记）+ `hiddenCategories`（分类过滤）。
+> **共 10 个键**：7 个功能开关（`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode`）+
+> `hideTaskbar`（状态）+ `desktopAutoCleanNoticeShown`（提示标记）+ `hiddenCategories`（分类过滤）+ `navCollapsed`（界面偏好）。
 > 出问题可以单独关掉对应功能，不用卸载。
 >
 > **兼容性**：老配置里如果显式写了 `"desktopAutoClean": true`，升级后**仍保持 `true`**，不会被新默认值覆盖；
