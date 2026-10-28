@@ -401,10 +401,25 @@ namespace Clover
             rescan.Click += delegate { if (panel != null) panel.Rescan(); };
             cm.Items.Add(rescan);
 
+            // ---- 设置子菜单 ----
+            //
+            // 为什么把开关收进来：顶层原先有 16 项，一眼扫不完，而且
+            // 「退出」（每天用）和「一键回滚」（用一次）平铺在同一层。
+            // 这些开关都是"设置一次就不动"的低频项，收进子菜单后
+            // 顶层只剩 8 项：打开面板 / 重新扫描 / 隐藏用不到的 / 主题 /
+            // 设置 / 诊断 / 开机自启 / 退出。
+            //
+            // 勾选状态在子菜单里照常显示，行为完全不变。
+            cm.Items.Add(new Separator());
+
+            MenuItem settingsMenu = new MenuItem();
+            settingsMenu.Header = "设置";
+
+            // 桌面快捷方式的清理/还原也放进设置：低频，且与上面的开关同属"桌面行为"
             MenuItem clean = new MenuItem();
             clean.Header = "立即清理桌面快捷方式";
             clean.Click += delegate { if (panel != null) panel.CleanDesktopFromMenu(); };
-            cm.Items.Add(clean);
+            settingsMenu.Items.Add(clean);
 
             MenuItem restore = new MenuItem();
             restore.Header = "还原桌面快捷方式";
@@ -419,10 +434,9 @@ namespace Clover
                         : "没有可还原的快捷方式。\r\n（desktop-backup 里没有 .lnk 文件）",
                     "四叶草");
             };
-            cm.Items.Add(restore);
+            settingsMenu.Items.Add(restore);
 
-            // ---- 开关区 ----
-            cm.Items.Add(new Separator());
+            settingsMenu.Items.Add(new Separator());
 
             MenuItem miniItem = new MenuItem();
             miniItem.Header = "启用迷你任务栏";
@@ -436,7 +450,7 @@ namespace Clover
                 if (panel != null) panel.ApplyMiniTaskbarSetting();
                 Ui.Log("迷你任务栏开关 -> " + settings.MiniTaskbar);
             };
-            cm.Items.Add(miniItem);
+            settingsMenu.Items.Add(miniItem);
 
             MenuItem autoCleanItem = new MenuItem();
             autoCleanItem.Header = "自动移走桌面快捷方式";
@@ -476,7 +490,7 @@ namespace Clover
                 if (panel != null) panel.ApplyDesktopCleanSetting();
                 Ui.Log("桌面快捷方式自动移走开关 -> " + settings.DesktopAutoClean);
             };
-            cm.Items.Add(autoCleanItem);
+            settingsMenu.Items.Add(autoCleanItem);
 
             MenuItem taskbarHidingItem = new MenuItem();
             taskbarHidingItem.Header = "允许隐藏系统任务栏";
@@ -501,7 +515,7 @@ namespace Clover
                 OverlayGate.Refresh();
                 Ui.Log("允许隐藏系统任务栏 -> " + settings.TaskbarHiding);
             };
-            cm.Items.Add(taskbarHidingItem);
+            settingsMenu.Items.Add(taskbarHidingItem);
 
             MenuItem taskbarItem = new MenuItem();
             taskbarItem.Header = "隐藏系统任务栏";
@@ -531,13 +545,13 @@ namespace Clover
                 Reposition();
                 OverlayGate.Refresh();
             };
-            cm.Items.Add(taskbarItem);
+            settingsMenu.Items.Add(taskbarItem);
 
-            // ---- 悬浮按钮显示策略 ----
+            // ---- 悬浮按钮显示策略（同样收在设置里）----
             // fullscreenDetect / hoverReveal 原先只能手改 settings.json，
             // 界面上没有开关 —— 这两个设置恰好也是被安全模式降级的项，
             // 一旦被固化就永久失效、还查不出原因（现在安全模式已不再改它们）。
-            cm.Items.Add(new Separator());
+            settingsMenu.Items.Add(new Separator());
 
             MenuItem fullscreenItem = new MenuItem();
             fullscreenItem.Header = "全屏时隐藏悬浮按钮";
@@ -555,7 +569,7 @@ namespace Clover
                 OverlayGate.Refresh();
                 Ui.Log("全屏检测 -> " + settings.FullscreenDetect);
             };
-            cm.Items.Add(fullscreenItem);
+            settingsMenu.Items.Add(fullscreenItem);
 
             MenuItem hoverItem = new MenuItem();
             hoverItem.Header = "全屏时鼠标移过去临时显示";
@@ -571,9 +585,10 @@ namespace Clover
                 OverlayGate.Refresh();
                 Ui.Log("悬停唤出 -> " + settings.HoverReveal);
             };
-            cm.Items.Add(hoverItem);
+            settingsMenu.Items.Add(hoverItem);
 
-            cm.Items.Add(new Separator());
+            // 设置子菜单到此组装完毕，挂到顶层
+            cm.Items.Add(settingsMenu);
 
             // ---- 隐藏的项目管理 ----
             MenuItem hideTools = new MenuItem();
