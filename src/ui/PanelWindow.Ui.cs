@@ -31,14 +31,21 @@ namespace Clover
             ApplyShadow();
 
             Grid grid = new Grid();
+            // 布局：三行（原来是四行，快速启动区已删除）
+            //   0 = header（搜索框 + 窗口按钮）
+            //   1 = body（分类胶囊 + 内容区）
+            //   2 = footer（提示 + 计数）
+            //
+            // 为什么删掉快速启动区：它和分类栏的「常用」页完全重复 ——
+            // 同一批应用在同一屏里出现两次，占了 40px 高度却没有任何
+            // 新信息。要快速启动就用「常用」分类（那里还有完整的
+            // 右键菜单、拖拽排序、运行中圆点）。
             grid.RowDefinitions.Add(new RowDefinition());   // 0 header
-            grid.RowDefinitions.Add(new RowDefinition());   // 1 快速启动区
-            grid.RowDefinitions.Add(new RowDefinition());   // 2 body
-            grid.RowDefinitions.Add(new RowDefinition());   // 3 footer
+            grid.RowDefinitions.Add(new RowDefinition());   // 1 body
+            grid.RowDefinitions.Add(new RowDefinition());   // 2 footer
             grid.RowDefinitions[0].Height = new GridLength(64);
-            grid.RowDefinitions[1].Height = GridLength.Auto;   // 没有常用项时自动收成 0
-            grid.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
-            grid.RowDefinitions[3].Height = new GridLength(32);
+            grid.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
+            grid.RowDefinitions[2].Height = new GridLength(32);
 
             // ---------------- header ----------------
             Grid header = new Grid();
@@ -175,7 +182,7 @@ namespace Clover
             body.RowDefinitions[0].Height = GridLength.Auto;                        // 分类条
             body.RowDefinitions[1].Height = new GridLength(1);                      // 分隔线
             body.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);   // 内容
-            Grid.SetRow(body, 2);   // 第 0 行 header、第 1 行快速启动区、第 2 行 body
+            Grid.SetRow(body, 1);   // 第 0 行 header、第 1 行 body、第 2 行 footer
 
             navGrid = new Grid();
             navGrid.ColumnDefinitions.Add(new ColumnDefinition());
@@ -313,22 +320,6 @@ namespace Clover
 
             grid.Children.Add(body);
 
-            // ---------------- 快速启动区 ----------------
-            //
-            // 固定的几个常用应用，一眼能点，不占分类也不占磁贴区。
-            //
-            // 为什么单独放一行而不是塞进 tilePanel：
-            // 键盘导航靠 `tilePanel.Children[index]` 与 `renderedApps[index]` **一一对应**
-            // （见 SelectTile/MoveSelection）。往 tilePanel 里插非应用元素会让下标错位，
-            // 方向键就会跳到错误的磁贴上。所以这里用独立的容器。
-            //
-            // Height=Auto：没有常用项时整行收成 0，不占地方。
-            quickBar = new StackPanel();
-            quickBar.Orientation = Orientation.Horizontal;
-            quickBar.Margin = new Thickness(Ui.S.Lg, 0, Ui.S.Md, Ui.S.Sm);
-            Grid.SetRow(quickBar, 1);
-            grid.Children.Add(quickBar);
-
             // ---------------- footer ----------------
             Grid footer = new Grid();
             footer.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, 0);
@@ -338,7 +329,7 @@ namespace Clover
             footerCount = Ui.T("", 11, Ui.Sub);
             footerCount.HorizontalAlignment = HorizontalAlignment.Right;
             footer.Children.Add(footerCount);
-            Grid.SetRow(footer, 3);
+            Grid.SetRow(footer, 2);
             grid.Children.Add(footer);
 
             // ---------------- 毛玻璃底 ----------------

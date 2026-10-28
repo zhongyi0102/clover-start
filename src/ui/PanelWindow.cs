@@ -95,16 +95,6 @@ namespace Clover
         bool suppressScrollRecord;
 
         /// <summary>
-        /// 快速启动区（顶部固定几个常用应用）。
-        ///
-        /// **独立于 tilePanel**：键盘导航靠 tilePanel.Children 与 renderedApps 一一对应，
-        /// 往 tilePanel 里插非应用元素会让下标错位、方向键跳错磁贴。
-        /// </summary>
-        StackPanel quickBar;
-
-        /// <summary>快速启动区显示几个（0 = 关闭该功能）。</summary>
-        const int QuickBarCount = 7;
-
         /// <summary>
         /// 毛玻璃背景（截桌面 → 缩 1/8 → 模糊 → 垫底）。
         /// 由 BuildUi 创建；软件渲染时内部自动禁用。

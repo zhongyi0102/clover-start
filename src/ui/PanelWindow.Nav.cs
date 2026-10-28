@@ -588,56 +588,7 @@ namespace Clover
             return list;
         }
 
-        /// <summary>
-        /// 重建顶部快速启动区。
-        ///
-        /// 取"用过的里面最常用的几个"（沿用 CommonApps 的排序口径），
-        /// 而不是用户手动指定 —— 手选要再加一套配置和一个设置界面，
-        /// 而使用频率本来就已经反映了"常用的"。
-        ///
-        /// 一件都没用过时整个区域不显示（Height=Auto 会收成 0），
-        /// 新装用户不会看到一排空位。
-        /// </summary>
-        void RebuildQuickBar()
-        {
-            try
-            {
-                if (quickBar == null) return;
-                quickBar.Children.Clear();
 
-                // 注意：不要在这里写 `if (QuickBarCount <= 0) return;` ——
-                // QuickBarCount 是 const，编译器能判定该分支恒不成立，
-                // 会报 CS0162「检测到无法访问的代码」。要关掉这个功能就把常量改成 0，
-                // 并同步删掉这里的取用逻辑。
-                List<AppItem> top = CommonApps();
-                if (top.Count == 0) return;
-
-                if (top.Count > QuickBarCount) top = top.GetRange(0, QuickBarCount);
-
-                // 左侧小标签，说明这一排是什么（否则用户会以为它们是"置顶的普通磁贴"）
-                TextBlock label = Ui.T("常用", 10.5, Ui.Sub);
-                label.VerticalAlignment = VerticalAlignment.Center;
-                label.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
-                quickBar.Children.Add(label);
-
-                foreach (AppItem a in top)
-                    quickBar.Children.Add(MakeQuickButton(a));
-
-                Ui.Log("快速启动区: " + top.Count + " 个");
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "重建快速启动区");
-            }
-        }
-
-        /// <summary>
-        /// 按当前状态同步一块磁贴的"运行中"小圆点（增或删）。
-        ///
-        /// 就地操作，不重建磁贴：面板开着期间应用可能刚启动/刚退出，
-        /// 为几颗 8px 的点重建 700+ 控件不值得。
-        /// 圆点放在 iconBox 的最后一个子元素，所以"有没有"就是看末位类型。
-        /// </summary>
         void SyncRunningDot(AppItem a, Grid iconBox)
         {
             try
@@ -709,56 +660,6 @@ namespace Clover
         /// 快速启动按钮：图标 + 名字（横排，比磁贴小）。
         ///
         /// 单独做而不复用 MakeTile：磁贴是 96x90 的竖排大块，
-        /// 一排 7 个会占掉 700px 宽，把内容区挤扁。
-        /// </summary>
-        Border MakeQuickButton(AppItem a)
-        {
-            Border b = new Border();
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
-            b.Height = 30;
-            b.Padding = new Thickness(Ui.S.Sm, 0, Ui.S.Sm + 2, 0);
-            b.Margin = new Thickness(0, 0, Ui.S.Xs, 0);
-            b.Cursor = Cursors.Hand;
-            b.Background = Ui.SearchBg;
-            b.ToolTip = a.Name;
-            b.VerticalAlignment = VerticalAlignment.Center;
-
-            StackPanel sp = new StackPanel();
-            sp.Orientation = Orientation.Horizontal;
-            sp.VerticalAlignment = VerticalAlignment.Center;
-
-            ImageSource icon = AppIcons.Get(a.Path);
-            if (icon != null)
-            {
-                Image img = new Image();
-                img.Source = icon;
-                img.Width = 18;
-                img.Height = 18;
-                img.Margin = new Thickness(0, 0, Ui.S.Xs + 2, 0);
-                img.VerticalAlignment = VerticalAlignment.Center;
-                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-                sp.Children.Add(img);
-            }
-
-            TextBlock name = Ui.T(a.Name, 12, Ui.Fg);
-            name.VerticalAlignment = VerticalAlignment.Center;
-            name.MaxWidth = 96;
-            name.TextTrimming = TextTrimming.CharacterEllipsis;
-            sp.Children.Add(name);
-
-            b.Child = sp;
-
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
-            b.MouseLeftButtonDown += delegate { b.Background = Ui.Pressed; };
-            b.MouseLeftButtonUp += delegate
-            {
-                b.Background = Ui.Hover;
-                Launch(a);
-            };
-            return b;
-        }
-
         /// <summary>当前已渲染内容的签名，用于判断是否真的需要重建磁贴。</summary>
         string renderedSig = "";
 
@@ -927,14 +828,12 @@ namespace Clover
             {
                 if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Visible;
                 if (tilePanel != null) tilePanel.Visibility = Visibility.Collapsed;
-                if (quickBar != null) quickBar.Visibility = Visibility.Collapsed;
                 if (searchResults != null) searchResults.Search(q);
             }
             else
             {
                 if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Collapsed;
                 if (tilePanel != null) tilePanel.Visibility = Visibility.Visible;
-                if (quickBar != null) quickBar.Visibility = Visibility.Visible;
                 if (searchResults != null) searchResults.Clear();
             }
 
@@ -1065,10 +964,6 @@ namespace Clover
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
             RestoreScrollOffset();
 
-            // 快速启动区跟着一起刷新（它取的是"最常用的几个"，
-            // 而启动次数只会在 Launch 之后变，所以重渲染时同步一次即可）。
-            // 搜索时快速启动区已隐藏，重建是白费——等退出搜索再刷。
-            if (!searching) RebuildQuickBar();
         }
 
         /// <summary>
