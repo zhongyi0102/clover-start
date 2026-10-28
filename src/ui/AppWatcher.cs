@@ -17,7 +17,11 @@ namespace Clover
     {
         string baseDir;
         PanelWindow panel;
-        Settings settings;
+        /// <summary>
+        /// readonly：构造函数已保证非 null（settings ?? Settings.Load(baseDir)），
+        /// 编译期锁住这一点，就不必在每个用法前写 null 检查。
+        /// </summary>
+        readonly Settings settings;
         List<FileSystemWatcher> watchers = new List<FileSystemWatcher>();
         DispatcherTimer debounce;
         DispatcherTimer periodic;
@@ -36,10 +40,14 @@ namespace Clover
         /// <summary>是否自动把桌面快捷方式移到 desktop-backup。对应设置 desktopAutoClean。</summary>
         public bool AutoCleanEnabled
         {
-            get { return settings == null || settings.DesktopAutoClean; }
+            // 原来这里是 `settings == null || settings.DesktopAutoClean`。
+            // 这是个危险的死代码：settings 已被构造函数保证非 null，语句永不生效；
+            // 而万一真为 null，它会返回 true —— 也就是"自动移走桌面文件"**默认打开**，
+            // 与该设置的默认值（false）相反。对一个会动用户桌面文件的功能，
+            // 错误方向的回退不能留。现在靠 readonly 从编译期保证非 null。
+            get { return settings.DesktopAutoClean; }
             set
             {
-                if (settings == null) return;
                 settings.DesktopAutoClean = value;
                 settings.Save();
                 Ui.Log("桌面快捷方式自动移走 -> " + value);

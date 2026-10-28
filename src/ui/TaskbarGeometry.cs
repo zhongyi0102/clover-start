@@ -16,6 +16,15 @@ namespace Clover
         public static double Thickness = 48;
         public static Rect StartCell = Rect.Empty;
 
+        /// <summary>最近一次几何来源：workArea / trayWindow / fallback。供诊断显示。</summary>
+        public static string LastSource = "";
+
+        /// <summary>
+        /// 是否已用 UIAutomation 精确校准过开始按钮位置。
+        /// false 表示 StartCell 只是估算值（按钮可能偏几个像素），供诊断显示。
+        /// </summary>
+        public static bool PreciseLocated;
+
         public static double ScaleFactor()
         {
             try
@@ -80,6 +89,7 @@ namespace Clover
                 if (thickness < 1) thickness = 48;
                 CurrentEdge = e;
                 Thickness = thickness;
+                LastSource = source;
 
                 switch (e)
                 {
@@ -100,7 +110,7 @@ namespace Clover
                 // 先用估算值（上面已经算好），再异步尝试用 UIAutomation 精确校正。
                 // 关键：界面线程绝不能同步等 UIAutomation——FindFirst 要往目标窗口发消息，
                 // 界面线程被占住会导致消息泵停转，反而必然超时。所以这里只发起，不等待。
-                ReportUiState(null, source);
+                ReportUiState(source);
                 StartUiProbe();
             }
             catch (Exception ex)
@@ -164,6 +174,7 @@ namespace Clover
                         if (!changed) return;
 
                         StartCell = next;
+                        PreciseLocated = true;
                         // 记为“已用 uia 精确定位”，Refresh 再报 workArea 时就不会重复刷
                         lastUiState = "ok/uia";
                         Ui.Log("开始按钮定位: ok/uia");
@@ -183,14 +194,32 @@ namespace Clover
 
         static string lastUiState;
 
-        /// <summary>只在状态变化时写一条日志，避免每 2 秒刷屏。</summary>
-        static void ReportUiState(string fail, string source)
+        /// <summary>
+        /// 只在状态变化时写一条日志，避免每 2 秒刷屏。
+        ///
+        /// 原先签名是 ReportUiState(fail, source)，但**所有调用点都传 fail=null**，
+        /// 于是 `else` 分支（写"定位失败"WARN）永远不会执行：
+        /// 退到估算位置（workArea / trayWindow / fallback）时记的是 `ok/workArea`，
+        /// 日志里看不出"其实没精确定位"。现在按来源判断：
+        /// fallback = 推断失败，trayWindow = 有任务栏但没精确校准。
+        /// </summary>
+        static void ReportUiState(string source)
         {
-            string state = fail == null ? ("ok/" + source) : ("fallback/" + source + "/" + fail);
+            bool degraded = string.Equals(source, "fallback", StringComparison.Ordinal);
+
+            string state = degraded ? ("degraded/" + source) : ("ok/" + source);
             if (string.Equals(state, lastUiState, StringComparison.Ordinal)) return;
             lastUiState = state;
-            if (fail == null) Ui.Log("开始按钮定位: " + state);
-            else ErrorLog.Warn("开始按钮定位失败，使用估算位置：" + fail + "（来源 " + source + "）");
+
+            if (degraded)
+            {
+                ErrorLog.Warn("开始按钮定位降级：任务栏几何推断失败，回退到底部 48（来源 " + source + "）"
+                    + "。按钮位置可能不准，这通常是任务栏刚重建或第三方任务栏工具导致的，稍后会自动重试。");
+            }
+            else
+            {
+                Ui.Log("开始按钮定位: " + state + (PreciseLocated ? "" : "（尚未精确校准，用估算值）"));
+            }
         }
 
         /// <summary>让下一次 Refresh 重新写一条定位日志（例如任务栏重建后）。</summary>

@@ -89,6 +89,16 @@ Invoke-Suite 'HiddenAppsTest' ($baseRefs + $webRef) `
 Invoke-Suite 'CategoriesTest' ($baseRefs + $webRef) `
     ($catalogDeps + @((Join-Path $testDir 'CategoriesTest.cs')))
 
+# 扫描链：便携条目每轮不能被 NativeScanner 抹掉（真实 bug 回归）
+Invoke-Suite 'ScanChainTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @(
+        (Join-Path $coreDir 'NativeScanner.cs'),
+        (Join-Path $coreDir 'PortableScanner.cs'),
+        (Join-Path $coreDir 'Native.cs'),
+        (Join-Path $coreDir 'Log.cs'),
+        (Join-Path $testDir 'ScanChainTest.cs')
+    ))
+
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
 

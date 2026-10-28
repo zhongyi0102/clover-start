@@ -337,6 +337,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\CategoryRulesTest.cs` | 外置规则表：优先级 / 匹配模式 / 归一化 / 热加载 / 坏文件回退 |
 | `tests\HiddenAppsTest.cs` | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
 | `tests\CategoriesTest.cs` | 分类顺序与重命名：只改显示名 / 不动内部名 |
+| `tests\ScanChainTest.cs` | 扫描链：便携条目保留 / 淘汰死条目 / 不累积重复 |
 | `tests\CategoryOverrideTest.cs` | 分类覆盖表：优先级 / 重扫保持 / 损坏回退 |
 | `tests\PinyinTest.cs` | 拼音匹配 |
 | `tests\SettingsTest.cs` | 设置读写与开关联动 |
@@ -663,7 +664,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十六个套件，共 500 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十七个套件，共 513 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -687,6 +688,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 确认它成为前台窗口 → 断言 `IsFullscreen()` = true → 关掉后恢复 false |
 | `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
 | `HiddenAppsTest` | 47 | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
+| `ScanChainTest` | 13 | 扫描链：便携条目不会被每轮扫描抹掉（真实 bug 回归，已用注入验证） |
 | `CategoriesTest` | 63 | 重命名只改显示名（内部名不变）、顺序只重排已存在的分类、上移下移边界、坏文件回退 |
 | （主题断言） | 3 | 见 `AcceptanceTest`：刷子真的变色、非法值回退、深色投影加深 |
 | `ActiveRowTest` | 14 | 任务栏行高亮判定：只有一行亮、前台句柄为 0 时不高亮任何行、切换后刚好翻转、重复判定幂等 |
@@ -710,7 +712,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：16 个套件、500 个断言全部通过（2026-10-28，v1.0.2）**
+**最近一次运行结果：17 个套件、513 个断言全部通过（2026-10-28，v1.0.2）**
 
 > 断言数变化：151 → 373。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryRulesTest` 61、
 > 新增 `CategoryOverrideTest` 30、新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、

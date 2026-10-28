@@ -14,6 +14,13 @@ namespace Clover
     /// </summary>
     static class PortableScanner
     {
+        /// <summary>
+        /// 便携条目的 folder 标记。
+        /// 提成常量是因为 NativeScanner 要靠它把上一轮的便携条目认回来
+        /// （否则每轮扫描都会把它们整批抹掉），两处字面量必须一致。
+        /// </summary>
+        public const string FolderMarker = "便携识别";
+
         const int MaxDepth = 5;
         const int MaxDirs = 8000;
         const long MinExeSize = 200 * 1024;
@@ -138,7 +145,7 @@ namespace Clover
                     m["name"] = name;
                     m["path"] = c.Path;
                     m["category"] = cat;
-                    m["folder"] = "便携识别";
+                    m["folder"] = FolderMarker;
                     apps.Add(m);
                     added++;
                 }

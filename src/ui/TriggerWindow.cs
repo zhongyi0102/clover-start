@@ -573,6 +573,27 @@ namespace Clover
 
             cm.Items.Add(new Separator());
 
+            // ---- 诊断 ----
+            // 定位状态原先只写进日志，界面上看不到。定位降级时按钮会偏几像素，
+            // 用户只会觉得"按钮位置怪怪的"却查不出原因，所以给一个可见入口。
+            MenuItem diag = new MenuItem();
+            diag.Header = "诊断";
+            diag.ToolTip = "查看任务栏定位、看门狗、崩溃计数等运行状态";
+
+            MenuItem loc = new MenuItem();
+            loc.Header = "任务栏定位";
+            loc.Click += delegate { ShowLocationStatus(); };
+            diag.Items.Add(loc);
+
+            MenuItem health = new MenuItem();
+            health.Header = "运行状态";
+            health.Click += delegate { ShowHealthStatus(); };
+            diag.Items.Add(health);
+
+            cm.Items.Add(diag);
+
+            cm.Items.Add(new Separator());
+
             MenuItem auto = new MenuItem();
             auto.Header = "开机自启";
             auto.IsCheckable = true;
@@ -595,6 +616,168 @@ namespace Clover
             cm.Placement = PlacementMode.Bottom;
             cm.PlacementTarget = root;
             cm.IsOpen = true;
+        }
+
+        /// <summary>
+        /// 显示任务栏定位状态。
+        ///
+        /// 为什么要给这个入口：定位降级（推断不出任务栏几何、或 UIAutomation
+        /// 没能精确校准）时按钮会偏几个像素，用户只觉得"位置怪怪的"，
+        /// 但原因只写在日志里。这里把来源和是否精确校准直接摆出来。
+        /// </summary>
+        void ShowLocationStatus()
+        {
+            try
+            {
+                TaskbarGeometry.Refresh();
+
+                string edgeName;
+                switch (TaskbarGeometry.CurrentEdge)
+                {
+                    case TaskbarGeometry.Edge.Top: edgeName = "顶部"; break;
+                    case TaskbarGeometry.Edge.Left: edgeName = "左侧"; break;
+                    case TaskbarGeometry.Edge.Right: edgeName = "右侧"; break;
+                    default: edgeName = "底部"; break;
+                }
+
+                string sourceName = TaskbarGeometry.LastSource;
+                if (sourceName == "workArea") sourceName = "工作区推断";
+                else if (sourceName == "trayWindow") sourceName = "任务栏窗口矩形";
+                else sourceName = "回退估算（降级）";
+
+                Rect s = TaskbarGeometry.StartCell;
+                Rect c = TaskbarGeometry.CloverRect();
+
+                string msg =
+                    "任务栏位置：" + edgeName + "，厚度 " + Math.Round(TaskbarGeometry.Thickness) + " px\r\n"
+                    + "几何来源：" + sourceName + "\r\n"
+                    + "精确校准：" + (TaskbarGeometry.PreciseLocated ? "已校准（UIAutomation）" : "未校准，用估算值")
+                    + "\r\n"
+                    + "DPI 缩放：" + TaskbarGeometry.ScaleFactor().ToString("0.##") + "\r\n"
+                    + "\r\n"
+                    + "开始按钮格：" + Fmt(s) + "\r\n"
+                    + "四叶草按钮：" + Fmt(c) + "\r\n"
+                    + "\r\n";
+
+                if (TaskbarGeometry.LastSource == "fallback")
+                {
+                    msg += "⚠ 几何推断失败，已回退到底部 48px。\r\n"
+                        + "按钮位置可能不准。常见原因：任务栏刚重建、或被第三方任务栏工具接管。\r\n"
+                        + "程序会自动重试，通常几秒后恢复。";
+                }
+                else if (!TaskbarGeometry.PreciseLocated)
+                {
+                    msg += "说明：尚未取得原生开始按钮的精确矩形，当前是估算位置。\r\n"
+                        + "按钮仍可正常点击，只是可能横向偏几像素。";
+                }
+                else
+                {
+                    msg += "定位正常。";
+                }
+
+                MessageBox.Show(msg, "任务栏定位 · 四叶草");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("读取定位状态失败：" + ex.Message, "四叶草");
+            }
+        }
+
+        /// <summary>显示运行状态（崩溃计数、安全模式、内存句柄）。</summary>
+        void ShowHealthStatus()
+        {
+            try
+            {
+                string msg = "";
+
+                // 崩溃计数 / 安全模式
+                try
+                {
+                    string p = Path.Combine(baseDir, "config", "crash-guard.json");
+                    if (File.Exists(p))
+                    {
+                        JavaScriptSerializer ser = new JavaScriptSerializer();
+                        Dictionary<string, object> d = ser.Deserialize<Dictionary<string, object>>(
+                            File.ReadAllText(p, System.Text.Encoding.UTF8));
+                        if (d != null)
+                        {
+                            object v;
+                            int crashes = 0;
+                            if (d.TryGetValue("crashes", out v) && v != null)
+                            {
+                                foreach (object o in JsonIO.AsArray(v))
+                                    crashes++;
+                            }
+                            bool safe = d.TryGetValue("safeMode", out v) && v != null && Convert.ToBoolean(v);
+
+                            msg += "异常退出记录（2 分钟内累计到 3 次会进安全模式）：\r\n"
+                                + "  最近窗口内 " + crashes + " 次\r\n"
+                                + "  安全模式：" + (safe ? "已进入（任务栏不隐藏、不做全屏检测）" : "否") + "\r\n\r\n";
+                        }
+                    }
+                    else
+                    {
+                        msg += "异常退出记录：无（crash-guard.json 不存在）\r\n\r\n";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    msg += "读崩溃记录失败：" + ex.Message + "\r\n\r\n";
+                }
+
+                // 内存 / 句柄
+                try
+                {
+                    System.Diagnostics.Process self = System.Diagnostics.Process.GetCurrentProcess();
+                    msg += "当前进程：\r\n"
+                        + "  内存 " + Math.Round(self.WorkingSet64 / 1024.0 / 1024.0) + " MB（阈值 400 MB 时自动清缓存）\r\n"
+                        + "  句柄 " + self.HandleCount + " 个（阈值 3000 个）\r\n"
+                        + "  启动于 " + self.StartTime.ToString("MM-dd HH:mm") + "\r\n\r\n";
+                }
+                catch { }
+
+                // 看门狗
+                try
+                {
+                    string hb = Path.Combine(baseDir, "config", "heartbeat");
+                    if (File.Exists(hb))
+                    {
+                        DateTime t = File.GetLastWriteTime(hb);
+                        double age = (DateTime.Now - t).TotalSeconds;
+                        msg += "看门狗心跳：" + t.ToString("HH:mm:ss") + "（" + Math.Round(age) + " 秒前）\r\n"
+                            + "  " + (age < 30 ? "正常" : "⚠ 心跳偏旧，看门狗可能重启过程序") + "\r\n\r\n";
+                    }
+                    else
+                    {
+                        msg += "看门狗心跳：文件不存在（看门狗可能未启用）\r\n\r\n";
+                    }
+                }
+                catch { }
+
+                // 隐藏 / 分类
+                try
+                {
+                    if (panel != null)
+                    {
+                        msg += "应用：隐藏 " + panel.HiddenCount() + " 个，当前分类「"
+                            + panel.CurrentCategory() + "」";
+                    }
+                }
+                catch { }
+
+                MessageBox.Show(msg.TrimEnd(), "运行状态 · 四叶草");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("读取运行状态失败：" + ex.Message, "四叶草");
+            }
+        }
+
+        static string Fmt(Rect r)
+        {
+            if (r.IsEmpty) return "(空)";
+            return "(" + Math.Round(r.X) + ", " + Math.Round(r.Y) + ")  "
+                + Math.Round(r.Width) + "×" + Math.Round(r.Height);
         }
 
         void ApplyTaskbarVisibility(bool hide)

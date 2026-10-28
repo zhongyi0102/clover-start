@@ -40,6 +40,16 @@ namespace Clover
 
                 // 只从旧文件里读 order（分类顺序），不再读 category。
                 // 分类每次按当前规则重判，见下方 GuessCategory 调用处的说明。
+                // 上一轮由 PortableScanner 补进来的便携软件条目，先捡出来。
+                //
+                // 为什么必须保留：本方法是 apps.json 的**唯一写入者**，但它只扫开始菜单，
+                // 一个便携软件都不认识。若不保留，每轮扫描都会把便携条目整批删掉，
+                // 只能靠随后的 PortableScanner.Merge 再补回来 ——
+                // 而 Merge 一旦超时中止（60 秒上限 / 8000 目录上限）就**不写文件**，
+                // 那几条会悄无声息地从面板里消失，直到某次完整扫描成功。
+                // 实测过：扫前 119 个（含 7 个便携），只跑 Scan 后剩 112 个，便携归零。
+                List<Dictionary<string, object>> portableKept = new List<Dictionary<string, object>>();
+
                 string oldText = JsonIO.Read(appsPath);
                 if (!string.IsNullOrEmpty(oldText))
                 {
@@ -48,10 +58,22 @@ namespace Clover
                         JavaScriptSerializer ser = new JavaScriptSerializer();
                         ser.MaxJsonLength = int.MaxValue;
                         Dictionary<string, object> d = ser.Deserialize<Dictionary<string, object>>(oldText);
+
                         object arr;
                         if (d != null && d.TryGetValue("order", out arr) && arr != null)
                         {
                             foreach (string s in JsonIO.AsStringArray(arr)) order.Add(s);
+                        }
+
+                        object oldApps;
+                        if (d != null && d.TryGetValue("apps", out oldApps) && oldApps != null)
+                        {
+                            foreach (object o in JsonIO.AsArray(oldApps))
+                            {
+                                Dictionary<string, object> m = o as Dictionary<string, object>;
+                                if (m == null) continue;
+                                if (IsPortableEntry(m)) portableKept.Add(m);
+                            }
                         }
                     }
                     catch { }
@@ -114,6 +136,31 @@ namespace Clover
                         }
                         catch { }
                     }
+                }
+
+                // 把上一轮的便携条目并回来。
+                //
+                // 分类按当前规则重判（与开始菜单条目一致）—— 这样改进了分类规则表之后，
+                // 便携条目的分类也会跟着更新，而不是永远停在首次识别时的结果。
+                // 用 Catalog.GuessCategory(name) 而不是 GuessCategory(name, folder)：
+                // 前者正是 PortableScanner.Merge 识别它们时用的那个，保持一致。
+                foreach (Dictionary<string, object> m in portableKept)
+                {
+                    string name = Convert.ToString(m.ContainsKey("name") ? m["name"] : null);
+                    string path = Convert.ToString(m.ContainsKey("path") ? m["path"] : null);
+                    if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(path)) continue;
+
+                    // 路径或名字已被这轮开始菜单扫描收录：不要重复（开始菜单的优先）
+                    if (seenPaths.Contains(path)) continue;
+                    if (seenNames.Contains(name.ToLowerInvariant())) continue;
+
+                    // 目标文件已不在了（用户删了那个便携软件）：自然淘汰，不保留死条目
+                    try { if (!File.Exists(path)) continue; } catch { continue; }
+
+                    m["category"] = Catalog.GuessCategory(name);
+                    apps.Add(m);
+                    seenPaths.Add(path);
+                    seenNames.Add(name.ToLowerInvariant());
                 }
 
                 apps.Sort(delegate(Dictionary<string, object> a, Dictionary<string, object> b)
@@ -212,6 +259,21 @@ namespace Clover
                 return ser.Serialize(d);
             }
             catch { return null; }
+        }
+
+        /// <summary>
+        /// 这个条目是不是便携软件识别出来的。
+        ///
+        /// 判据是 folder 标记（PortableScanner 写入 PortableScanner.FolderMarker），
+        /// 不是"路径是否在某个目录下"——因为用户可以用 portable-roots.json
+        /// 把扫描根指到任意盘符，路径特征不可靠。
+        /// </summary>
+        static bool IsPortableEntry(Dictionary<string, object> m)
+        {
+            if (m == null) return false;
+            object f;
+            if (!m.TryGetValue("folder", out f) || f == null) return false;
+            return string.Equals(Convert.ToString(f), PortableScanner.FolderMarker, StringComparison.Ordinal);
         }
 
         static bool IsExcluded(string name)
