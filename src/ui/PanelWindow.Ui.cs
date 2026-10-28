@@ -243,6 +243,34 @@ namespace Clover
             Grid contentStack = new Grid();
             contentStack.Children.Add(tilePanel);
             contentStack.Children.Add(searchResultPanel);
+
+            // ---- 拖拽插入标记（参考 GlassBoard 的 insertMarker）----
+            //
+            // 拖动磁贴时，在"将要插入的位置"画一根竖条，
+            // 让用户明确知道松手后会插到哪里。
+            //
+            // 为什么叠在 contentStack 而不是塞进 tilePanel：
+            // tilePanel 是 WrapPanel，往里插非磁贴元素会被当成一个"格子"
+            // 参与排版，导致磁贴位置跳动。用独立的 Canvas 覆盖层，
+            // 用绝对坐标定位，完全不影响布局。
+            insertCanvas = new Canvas();
+            insertCanvas.IsHitTestVisible = false;   // 不挡鼠标
+            insertCanvas.Visibility = Visibility.Collapsed;
+
+            insertMarker = new Border();
+            insertMarker.Width = 3;
+            // 圆角用「高度的一半」= 胶囊形（设计令牌体系里的合法档位之一）。
+            // 3px 宽竖条配胶囊圆角，正是现代落点指示的做法（Notion / Linear 同款）。
+            // 不能写死数值：令牌测试只认 Sm/Md/Lg/细条(2)/圆点(4)/胶囊(Height/2)，
+            // 写 1.5 或 999 都会被判为"不在体系内"。
+            insertMarker.CornerRadius = new CornerRadius(2);
+            insertMarker.Background = Ui.Accent;
+            insertMarker.Opacity = 0.9;
+            insertMarker.Visibility = Visibility.Collapsed;
+            insertCanvas.Children.Add(insertMarker);
+
+            contentStack.Children.Add(insertCanvas);
+
             contentScroll.Content = contentStack;
             Grid.SetColumn(contentScroll, 2);
             body.Children.Add(contentScroll);

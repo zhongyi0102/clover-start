@@ -1720,24 +1720,45 @@ namespace Clover
             {
                 if (e.LeftButton != MouseButtonState.Pressed) return;
                 Point p = e.GetPosition(tilePanel);
+
+                // 拖动阈值 6px：低于这个距离算点击（避免手抖变成拖动）
                 if (!tileDrag && (Math.Abs(p.X - downPt.X) > 6 || Math.Abs(p.Y - downPt.Y) > 6))
                 {
                     tileDrag = true;
-                    b.Opacity = 0.45;
+                    b.Opacity = 0.35;          // 拖动项半透明（GlassBoard 用 0.3）
+                    b.Cursor = Cursors.SizeAll;
+                    // 拖动时取消悬停放大，否则拖动项又大又淡，很怪
+                    iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomOut);
+                    iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomOut);
+                    iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftDown);
+                    BeginDragVisual(a);
+                    Ui.Log("DragStart " + a.Name);
+                }
+
+                if (tileDrag)
+                {
+                    // 拖动过程中持续更新插入标记位置
+                    UpdateDragPreview(a, p);
                 }
             };
             b.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
             {
                 try { b.ReleaseMouseCapture(); } catch { }
                 b.Opacity = 1.0;
+                b.Cursor = Cursors.Hand;
                 // 松开：回到悬停态（鼠标还在磁贴上），而不是透明 ——
                 // 否则刚点完会闪一下，像"点完就灭了"
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
-                Ui.Log("tile up drag=" + tileDrag + " " + a.Name);
                 if (tileDrag)
                 {
                     tileDrag = false;
-                    DropTile(a);
+                    // 顺序很重要：先提交（要用 insertIndex），再收标记。
+                    // 第一版写反了 —— EndDragVisual 把 insertIndex 重置成 -1，
+                    // CommitDrag 拿到的永远是 -1，拖拽完全不生效（实测日志
+                    // "CommitDrag ... target=-1" 而 DragPreview 明明算出了 idx=2）。
+                    int target = insertIndex;
+                    EndDragVisual();
+                    CommitDrag(a, target);
                 }
                 else
                 {
@@ -1747,6 +1768,217 @@ namespace Clover
             b.MouseRightButtonUp += delegate { ShowTileMenu(a); };
             return b;
         }
+
+        /// <summary>
+        /// 拖拽开始：把整个 tilePanel 的磁贴位置快照下来，
+        /// 供"实时让位"计算每个磁贴该偏移多少。
+        /// </summary>
+        void BeginDragVisual(AppItem dragged)
+        {
+            try
+            {
+                if (tilePanel == null) return;
+                draggedApp = dragged;
+                if (insertCanvas != null) insertCanvas.Visibility = Visibility.Visible;
+
+                // 磁贴实际列数 = 面板宽度 / 磁贴宽度
+                tileColumns = Math.Max(1, (int)(tilePanel.ActualWidth / (TileWidthPx + 4)));
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 拖动中：更新插入标记位置 + **让磁贴实时滑开**（GlassBoard 的 livePreview）。
+        ///
+        /// 落点用**网格坐标**（列/行）算，不遍历子元素边界。
+        /// 原实现用 `Mouse.GetPosition` 逐个判断 `p.X >= tl.X && p.X <= tl.X+width`，
+        /// 有两个致命问题：
+        ///   · 空状态时 tilePanel.Children[0] 是 StackPanel 不是磁贴，index 对不上
+        ///   · 鼠标落在磁贴间隙时所有判断都失败 → target = -1（实测日志确实如此）
+        ///
+        /// 让位动画（这才是"丝滑"的关键）：
+        /// 拖动时把 idx 之后的所有磁贴往右推一格，空出落点位置；
+        /// 用 TranslateTransform + 120ms EaseOut 滑过去，而不是瞬间跳。
+        /// 松手后 RenderApps 重建，位移归零。
+        /// </summary>
+        void UpdateDragPreview(AppItem dragged, Point p)
+        {
+            try
+            {
+                if (tilePanel == null || insertCanvas == null || insertMarker == null) return;
+                if (renderedApps == null || renderedApps.Count == 0) return;
+
+                double cellW = TileWidthPx + 4;    // 磁贴宽 + 左右 Margin
+                double cellH = TileHeightPx + 4;
+                int cols = Math.Max(1, tileColumns);
+
+                int col = (int)Math.Floor(Math.Max(0, p.X) / cellW);
+                int row = (int)Math.Floor(Math.Max(0, p.Y) / cellH);
+                if (col < 0) col = 0;
+                if (col >= cols) col = cols - 1;
+                if (row < 0) row = 0;
+
+                int idx = row * cols + col;
+                if (idx > renderedApps.Count) idx = renderedApps.Count;
+                if (idx == insertIndex) return;    // 没变化就不重画，省开销
+
+                int prev = insertIndex;
+                insertIndex = idx;
+
+                // ---- 插入标记位置（胶囊竖条）----
+                double mx = col * cellW - 2;
+                double my = row * cellH + 6;
+                Canvas.SetLeft(insertMarker, mx);
+                Canvas.SetTop(insertMarker, my);
+                insertMarker.Height = Math.Max(24, TileHeightPx - 12);
+                insertMarker.Visibility = Visibility.Visible;
+
+                // ---- 磁贴让位（丝滑的核心）----
+                AnimateTilesForInsert(idx, prev);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 让 idx 之后的磁贴往右滑一格，给落点腾位置。
+        ///
+        /// 实现方式：给每个磁贴的**内容**挂一个 TranslateTransform，
+        /// 按"是否需要让位"设偏移量，用 120ms EaseOut 动画过渡。
+        /// 为什么动画作用在内容而不是 Border 本身：
+        /// Border 是 WrapPanel 的直接子元素，动它会影响布局测量；
+        /// 内容用 RenderTransform 则完全不碰布局，只是视觉上滑过去。
+        ///
+        /// 为什么不真的改 Children 顺序做"真实占位"：
+        /// 拖动过程中每改一次顺序都要重建磁贴（重新取图标 = 卡顿），
+        /// 而视觉上"滑开"已经足够说明落点，松手时一次性提交即可。
+        /// </summary>
+        void AnimateTilesForInsert(int idx, int prev)
+        {
+            try
+            {
+                if (tilePanel == null || renderedApps == null) return;
+
+                int from = renderedApps.IndexOf(draggedApp);
+                double shift = TileWidthPx + 4;   // 一格的宽度
+
+                for (int i = 0; i < renderedApps.Count && i < tilePanel.Children.Count; i++)
+                {
+                    Border b = tilePanel.Children[i] as Border;
+                    if (b == null) continue;
+
+                    // 拖动项自己不动（它跟着鼠标，由 Opacity 表示）
+                    if (i == from) continue;
+
+                    // 让位规则：
+                    //   拖动项往前移（from < idx）→ [from, idx) 的磁贴左移一格
+                    //   拖动项往后移（from > idx）→ [idx, from) 的磁贴右移一格
+                    double dx = 0;
+                    if (from >= 0 && from < idx && i >= from && i < idx) dx = -shift;
+                    else if (from >= 0 && from > idx && i >= idx && i < from) dx = shift;
+
+                    FrameworkElement content = b.Child as FrameworkElement;
+                    if (content == null) continue;
+
+                    TranslateTransform tt = content.RenderTransform as TranslateTransform;
+                    if (tt == null || tt.IsFrozen)
+                    {
+                        tt = new TranslateTransform();
+                        content.RenderTransform = tt;
+                    }
+
+                    // 目标位置没变就不动它（避免每帧重启动画）
+                    double cur = tt.X;
+                    if (Math.Abs(cur - dx) < 0.5) continue;
+
+                    DoubleAnimation anim = new DoubleAnimation(dx, TimeSpan.FromMilliseconds(120));
+                    anim.EasingFunction = FrozenCubic();
+                    tt.BeginAnimation(TranslateTransform.XProperty, anim);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>当前被拖动的磁贴（让位计算要跳过它）。</summary>
+        AppItem draggedApp;
+
+        /// <summary>拖拽结束：收起标记，把让位产生的位移平滑归零。</summary>
+        void EndDragVisual()
+        {
+            try
+            {
+                insertIndex = -1;
+                draggedApp = null;
+                if (insertMarker != null) insertMarker.Visibility = Visibility.Collapsed;
+                if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
+
+                // 让位位移归零。
+                // 为什么要动画而不是直接设 0：松手后 RenderApps 会重建磁贴，
+                // 但在"取消拖拽"（落点无效）的情况下不重建 ——
+                // 那时如果位移瞬间归零，会看到磁贴"啪"地跳回原位。
+                // 用 120ms 滑回去，与让位时的动画对称。
+                if (tilePanel != null)
+                {
+                    foreach (UIElement u in tilePanel.Children)
+                    {
+                        Border b = u as Border;
+                        if (b == null) continue;
+                        FrameworkElement content = b.Child as FrameworkElement;
+                        if (content == null) continue;
+                        TranslateTransform tt = content.RenderTransform as TranslateTransform;
+                        if (tt == null) continue;
+                        if (Math.Abs(tt.X) < 0.5) continue;
+
+                        DoubleAnimation back = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(120));
+                        back.EasingFunction = FrozenCubic();
+                        tt.BeginAnimation(TranslateTransform.XProperty, back);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 提交拖拽：按插入下标重排 renderedApps，写入 customOrders 并重渲染。
+        ///
+        /// target 由调用方传入（在 EndDragVisual 重置之前取好的值）。
+        /// </summary>
+        void CommitDrag(AppItem a, int target)
+        {
+            try
+            {
+                int from = renderedApps == null ? -1 : renderedApps.IndexOf(a);
+                Ui.Log("CommitDrag " + a.Name + " from=" + from + " target=" + target);
+
+                if (target < 0) return;
+                if (from < 0) return;
+                if (from == target) return;
+
+                List<AppItem> newOrder = new List<AppItem>(renderedApps);
+                AppItem moved = newOrder[from];
+                newOrder.RemoveAt(from);
+
+                // 目标下标是"移除前"的位置，移除后要修正：
+                // 若目标在源之后，删掉源会让目标前移一位
+                if (target > from) target--;
+                if (target < 0) target = 0;
+                if (target > newOrder.Count) target = newOrder.Count;
+
+                newOrder.Insert(target, moved);
+
+                List<string> paths = new List<string>();
+                foreach (AppItem it in newOrder) paths.Add(it.Path);
+                customOrders[current] = paths;
+                SaveCustomOrders();
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "提交拖拽");
+            }
+        }
+
+        /// <summary>当前磁贴区的列数（拖动落点计算用）。</summary>
+        int tileColumns = 1;
 
         void DropTile(AppItem a)
         {

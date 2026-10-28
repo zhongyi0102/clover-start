@@ -173,6 +173,19 @@ namespace Clover
         /// <summary>桌面项目缓存（进入「桌面」视图时重新读取）。</summary>
         List<DesktopItem> desktopItems = new List<DesktopItem>();
 
+        /// <summary>
+        /// 拖拽插入标记的覆盖层（Canvas，绝对定位）。
+        ///
+        /// 为什么用独立 Canvas 而不是往 tilePanel 里插元素：
+        /// WrapPanel 会把任何子元素当成一个格子参与排版，
+        /// 插进去会让磁贴位置跳动。Canvas 是绝对坐标，不影响布局。
+        /// </summary>
+        Canvas insertCanvas;
+        Border insertMarker;
+
+        /// <summary>当前拖动会插入到哪个下标（-1 = 无）。</summary>
+        int insertIndex = -1;
+
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {
             this.baseDir = baseDir;
@@ -359,10 +372,51 @@ namespace Clover
         void PositionPanel()
         {
             Rect wa = SystemParameters.WorkArea;
-            // 面板左缘对齐开始按钮右侧（开始按钮 0-55），开始按钮保持可见可点
-            Left = 55 + 6 - 16;
+
+            // 面板位置**跟随四叶草按钮**，而不是硬编码。
+            //
+            // 原先写的是 `Left = 55 + 6 - 16`，即假设"开始按钮固定占屏幕 0-55px"。
+            // 但四叶草按钮的真实位置来自 TaskbarGeometry（UIAutomation 探测 +
+            // 三级回退），两者用不同参考系 —— 任务栏不在底部、或开始按钮不居中时，
+            // 面板就会和按钮错位（按钮在 A 处，面板从 B 处开始）。
+            //
+            // 现在统一：面板左缘 = 四叶草按钮右缘 + 间距，纵向贴任务栏。
+            try
+            {
+                Rect clover = TaskbarGeometry.CloverRect();
+                if (!clover.IsEmpty && clover.Width > 0)
+                {
+                    switch (TaskbarGeometry.CurrentEdge)
+                    {
+                        case TaskbarGeometry.Edge.Top:
+                            Left = clover.X - 16;
+                            Top = wa.Top + TaskbarGeometry.Thickness + 6;
+                            break;
+                        case TaskbarGeometry.Edge.Left:
+                            Left = wa.Left + TaskbarGeometry.Thickness + 6;
+                            Top = clover.Bottom + 6;
+                            break;
+                        case TaskbarGeometry.Edge.Right:
+                            Left = wa.Right - Width - 6;
+                            Top = clover.Bottom + 6;
+                            break;
+                        default:   // Bottom
+                            Left = clover.Right + 6 - 16;   // 16 = root 的 Margin
+                            Top = wa.Bottom - Height + 10;
+                            break;
+                    }
+                    if (Top < 0) Top = 0;
+                    if (Left < 0) Left = 0;
+                    return;
+                }
+            }
+            catch { }
+
+            // 兜底：拿不到按钮位置时用工作区右下角（不依赖"开始按钮在 0-55"这个假设）
+            Left = wa.Left + 8;
             Top = wa.Bottom - Height + 10;
             if (Top < 0) Top = 0;
+            if (Left < 0) Left = 0;
         }
 
         public void ShowPanel()
