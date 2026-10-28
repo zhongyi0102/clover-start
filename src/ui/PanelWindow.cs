@@ -197,6 +197,25 @@ namespace Clover
         /// </summary>
         bool needPosition;
 
+        /// <summary>
+        /// 拖动时跟随鼠标的"浮层"磁贴（幽灵）。
+        ///
+        /// 为什么需要它：原来的实现里，被拖的磁贴**留在原位**、只是变半透明，
+        /// 用户拖动时看到的是"插入标记在动、磁贴在原地不动"，
+        /// 完全不符合"图标跟着手走"的直觉。
+        ///
+        /// 做法：拖动开始时把磁贴的样子复制一份到 Canvas 上（绝对定位），
+        /// 每帧跟着鼠标移动；原磁贴保持半透明当"占位幽灵"。
+        /// 松手后浮层平滑飞到目标格，然后隐藏、重建列表。
+        /// </summary>
+        Border dragGhost;
+        /// <summary>浮层里的图标（缩放用）。</summary>
+        ScaleTransform dragGhostScale;
+        /// <summary>浮层当前的 X/Y（用 TranslateTransform，避免每帧改 Canvas.Left 触发重排）。</summary>
+        TranslateTransform dragGhostPos;
+        /// <summary>拖动开始时鼠标相对磁贴中心的偏移，保证浮层不跳。</summary>
+        Point dragGrabOffset;
+
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {
             this.baseDir = baseDir;

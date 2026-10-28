@@ -117,14 +117,14 @@ namespace Clover
             Bg = 0xE6172A30,        // 深青黑，90% 不透明
             Line = 0x3CD5E3FF,      // 冷白发丝线
             Edge = 0x30D5E3FF,      // 外框更淡
-            Fg = 0xF0F4F5,          // 近白（深底上要够亮）
-            Sub = 0xA8B6BC,         // 青灰（比原先亮一档，小字要可读）
+            Fg = 0xFFF0F4F5,          // 近白（深底上要够亮）
+            Sub = 0xFFA8B6BC,         // 青灰（比原先亮一档，小字要可读）
             Hover = 0x38FFFFFF,     // 白 22%（玻璃上的悬停是高光，不是加深）
             Pressed = 0x50FFFFFF,   // 白 31%
             SearchBg = 0x2EFFFFFF,  // 白 18%（搜索框比周围略亮）
-            Accent = 0x4FC3D9,      // 青蓝强调色（与主色调同族，比绿更协调）
+            Accent = 0xFF4FC3D9,      // 青蓝强调色（与主色调同族，比绿更协调）
             AccentSoft = 0x332E8FA3,
-            AccentText = 0x8FDCE8
+            AccentText = 0xFF8FDCE8
         };
 
         /// <summary>32 位 ARGB（含 alpha）。</summary>

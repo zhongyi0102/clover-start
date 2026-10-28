@@ -284,6 +284,14 @@ namespace Clover
             insertCanvas = new Canvas();
             insertCanvas.IsHitTestVisible = false;   // 不挡鼠标
             insertCanvas.Visibility = Visibility.Collapsed;
+            // ★ Canvas 在 Grid 里**不会自动撑满**（它不像 Grid/Border 那样
+            // 有默认的 Stretch 行为），必须显式设对齐方式。
+            // 不设的话 Canvas 尺寸是 0x0，里面的标记和浮层全被裁掉 ——
+            // 实测拖动时只看到浮层（因为浮层用 TranslateTransform 移出了
+            // Canvas 边界仍能渲染），但插入标记（用 Canvas.Left/Top 定位）
+            // 完全不可见。
+            insertCanvas.HorizontalAlignment = HorizontalAlignment.Stretch;
+            insertCanvas.VerticalAlignment = VerticalAlignment.Stretch;
 
             insertMarker = new Border();
             insertMarker.Width = 3;

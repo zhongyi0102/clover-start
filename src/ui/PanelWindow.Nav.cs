@@ -8,6 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 
 namespace Clover
@@ -50,6 +51,16 @@ namespace Clover
         /// </summary>
         const double IconBouncePx = 6.0;
         const int IconBounceMs = 350;
+
+        /// <summary>
+        /// 拖拽让位/落入的动画时长（毫秒）。
+        ///
+        /// 200ms 是需求区间 150~250 的中间值：
+        ///   · 150 太快 —— 磁贴像被"弹"开，看不出是滑动
+        ///   · 250 太慢 —— 快速拖动时让位跟不上鼠标，显得拖沓
+        /// 缓动用 CubicEase + EaseOut（快起慢收），这是"丝滑"的标准配方。
+        /// </summary>
+        const int DragShiftMs = 200;
 
         /// <summary>磁贴图标边长。
         ///
@@ -1741,19 +1752,28 @@ namespace Clover
                 if (!tileDrag && (Math.Abs(p.X - downPt.X) > 6 || Math.Abs(p.Y - downPt.Y) > 6))
                 {
                     tileDrag = true;
-                    b.Opacity = 0.35;          // 拖动项半透明（GlassBoard 用 0.3）
+                    b.Opacity = 0.25;          // 原位磁贴变淡，当"占位幽灵"
                     b.Cursor = Cursors.SizeAll;
-                    // 拖动时取消悬停放大，否则拖动项又大又淡，很怪
+                    // 拖动时取消悬停放大，否则原位磁贴又大又淡，很怪
                     iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomOut);
                     iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomOut);
                     iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftDown);
+
+                    // 抓取点：鼠标相对磁贴左上角的偏移，
+                    // 这样浮层不会在开始拖动瞬间"跳"到鼠标中心
+                    Point local = e.GetPosition(b);
+                    dragGrabOffset = local;
+
                     BeginDragVisual(a);
+                    ShowDragGhost(a, p);
                     Ui.Log("DragStart " + a.Name);
                 }
 
                 if (tileDrag)
                 {
-                    // 拖动过程中持续更新插入标记位置
+                    // 浮层跟随鼠标（每帧只改 Transform，不碰布局）
+                    MoveDragGhost(p);
+                    // 落点计算 + 让位动画
                     UpdateDragPreview(a, p);
                 }
             };
@@ -1768,13 +1788,19 @@ namespace Clover
                 if (tileDrag)
                 {
                     tileDrag = false;
-                    // 顺序很重要：先提交（要用 insertIndex），再收标记。
+                    // 顺序很重要：先取 insertIndex（要用它算落点），
+                    // 再让浮层飞过去，最后提交 + 重建。
+                    //
                     // 第一版写反了 —— EndDragVisual 把 insertIndex 重置成 -1，
                     // CommitDrag 拿到的永远是 -1，拖拽完全不生效（实测日志
                     // "CommitDrag ... target=-1" 而 DragPreview 明明算出了 idx=2）。
                     int target = insertIndex;
-                    EndDragVisual();
-                    CommitDrag(a, target);
+
+                    // 收起插入标记和让位位移，但**保留浮层**做落入动画
+                    EndDragVisualKeepGhost();
+
+                    // 浮层平滑飞到目标格 → 完成后提交并重建
+                    DropDragGhost(a, target);
                 }
                 else
                 {
@@ -1804,6 +1830,158 @@ namespace Clover
         }
 
         /// <summary>
+        /// 创建拖动浮层（幽灵磁贴）：图标 + 名字 + 放大 + 投影。
+        ///
+        /// 为什么复制一份而不是直接移动原磁贴：
+        /// 原磁贴是 WrapPanel 的子元素，移动它会触发整个网格重排
+        /// （其他磁贴全部跳位，卡顿且闪烁）。复制到 Canvas 上绝对定位，
+        /// 完全不碰布局 —— 这是所有成熟拖拽实现的通行做法。
+        ///
+        /// 放大 1.08 + 投影：这是"拿起来了"的视觉暗示。
+        /// 不给放大会显得浮层和原位磁贴一样大，看不出哪块被拖。
+        /// </summary>
+        void ShowDragGhost(AppItem a, Point p)
+        {
+            try
+            {
+                if (insertCanvas == null) return;
+                HideDragGhost();
+
+                Border ghost = new Border();
+                ghost.Width = TileWidthPx;
+                ghost.Height = TileHeightPx;
+                ghost.CornerRadius = new CornerRadius(Ui.R.Sm);
+                ghost.Background = Ui.Bg;          // 实体背景，否则透出下面的磁贴
+                ghost.IsHitTestVisible = false;    // 不挡鼠标事件
+                ghost.Opacity = 0.96;
+
+                // 投影：拖动时的"悬浮"感
+                DropShadowEffect sh = new DropShadowEffect();
+                sh.BlurRadius = 18;
+                sh.ShadowDepth = 4;
+                sh.Direction = 270;
+                sh.Opacity = 0.42;
+                sh.Color = Colors.Black;
+                sh.RenderingBias = RenderingBias.Performance;
+                ghost.Effect = sh;
+
+                // 内容：图标 + 名字（与 MakeTile 同构，但不带事件）
+                StackPanel sp = new StackPanel();
+                sp.VerticalAlignment = VerticalAlignment.Center;
+
+                ImageSource icon = AppIcons.Get(a.Path);
+                if (icon != null)
+                {
+                    Image img = new Image();
+                    img.Source = icon;
+                    img.Width = IconSizePx;
+                    img.Height = IconSizePx;
+                    img.HorizontalAlignment = HorizontalAlignment.Center;
+                    RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                    sp.Children.Add(img);
+                }
+                else
+                {
+                    Border ph = new Border();
+                    ph.Width = IconSizePx;
+                    ph.Height = IconSizePx;
+                    ph.CornerRadius = new CornerRadius(Ui.R.Sm);
+                    ph.Background = Ui.AccentSoft;
+                    ph.HorizontalAlignment = HorizontalAlignment.Center;
+                    string initial = string.IsNullOrEmpty(a.Name) ? "?" : a.Name.Substring(0, 1);
+                    TextBlock init = Ui.T(initial, 14.5, Ui.AccentText, FontWeights.SemiBold);
+                    init.HorizontalAlignment = HorizontalAlignment.Center;
+                    init.VerticalAlignment = VerticalAlignment.Center;
+                    ph.Child = init;
+                    sp.Children.Add(ph);
+                }
+
+                TextBlock name = new TextBlock();
+                name.Text = a.Name;
+                name.FontFamily = Ui.YaHei;
+                name.FontSize = 11.5;
+                name.Foreground = Ui.Fg;
+                name.TextWrapping = TextWrapping.Wrap;
+                name.TextAlignment = TextAlignment.Center;
+                name.LineHeight = 15;
+                name.MaxWidth = 88;
+                name.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+
+                Border clip = new Border();
+                clip.MaxHeight = 30;
+                clip.ClipToBounds = true;
+                clip.Child = name;
+                clip.HorizontalAlignment = HorizontalAlignment.Center;
+                sp.Children.Add(clip);
+
+                ghost.Child = sp;
+
+                // 位移用 TranslateTransform（每帧改 X/Y 不触发重排）
+                dragGhostPos = new TranslateTransform(0, 0);
+                ghost.RenderTransform = dragGhostPos;
+
+                // 缩放用 RenderTransformOrigin 中心放大
+                dragGhostScale = new ScaleTransform(1.08, 1.08);
+                ghost.RenderTransformOrigin = new Point(0.5, 0.5);
+                TransformGroup tg = new TransformGroup();
+                tg.Children.Add(dragGhostScale);
+                tg.Children.Add(dragGhostPos);
+                ghost.RenderTransform = tg;
+
+                insertCanvas.Children.Add(ghost);
+                insertCanvas.Visibility = Visibility.Visible;
+                dragGhost = ghost;
+
+                // ★ 把插入标记提到最上层：浮层后加入，会盖住标记。
+                // 实测拖动时只看到浮层、看不到竖条标记 —— 就是层叠顺序问题。
+                // 移除再添加 = 移到 Children 末尾（WPF 的 z-order 就是列表顺序）。
+                if (insertMarker != null && insertCanvas.Children.Contains(insertMarker))
+                {
+                    insertCanvas.Children.Remove(insertMarker);
+                    insertCanvas.Children.Add(insertMarker);
+                }
+
+                // 初始位置：让鼠标正好落在"抓取点"上（不跳）
+                Canvas.SetLeft(ghost, 0);
+                Canvas.SetTop(ghost, 0);
+                dragGhostPos.X = p.X - dragGrabOffset.X;
+                dragGhostPos.Y = p.Y - dragGrabOffset.Y;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "创建拖动浮层");
+            }
+        }
+
+        /// <summary>浮层跟随鼠标（每帧调用，只改 Transform）。</summary>
+        void MoveDragGhost(Point p)
+        {
+            try
+            {
+                if (dragGhost == null || dragGhostPos == null) return;
+                dragGhostPos.X = p.X - dragGrabOffset.X;
+                dragGhostPos.Y = p.Y - dragGrabOffset.Y;
+            }
+            catch { }
+        }
+
+        /// <summary>移除浮层。</summary>
+        void HideDragGhost()
+        {
+            try
+            {
+                if (dragGhost != null && insertCanvas != null)
+                {
+                    insertCanvas.Children.Remove(dragGhost);
+                }
+                dragGhost = null;
+                dragGhostScale = null;
+                dragGhostPos = null;
+            }
+            catch { }
+        }
+
+        /// <summary>
         /// 拖动中：更新插入标记位置 + **让磁贴实时滑开**（GlassBoard 的 livePreview）。
         ///
         /// 落点用**网格坐标**（列/行）算，不遍历子元素边界。
@@ -1814,7 +1992,7 @@ namespace Clover
         ///
         /// 让位动画（这才是"丝滑"的关键）：
         /// 拖动时把 idx 之后的所有磁贴往右推一格，空出落点位置；
-        /// 用 TranslateTransform + 120ms EaseOut 滑过去，而不是瞬间跳。
+        /// 用 TranslateTransform + 200ms EaseOut 滑过去，而不是瞬间跳。
         /// 松手后 RenderApps 重建，位移归零。
         /// </summary>
         void UpdateDragPreview(AppItem dragged, Point p)
@@ -1828,8 +2006,13 @@ namespace Clover
                 double cellH = TileHeightPx + 4;
                 int cols = Math.Max(1, tileColumns);
 
-                int col = (int)Math.Floor(Math.Max(0, p.X) / cellW);
-                int row = (int)Math.Floor(Math.Max(0, p.Y) / cellH);
+                // 用浮层的**中心**判断落点，而不是鼠标位置 ——
+                // 鼠标可能抓在磁贴边角，用中心更符合"这块磁贴会掉到哪"的直觉
+                double cx = p.X - dragGrabOffset.X + TileWidthPx / 2.0;
+                double cy = p.Y - dragGrabOffset.Y + TileHeightPx / 2.0;
+
+                int col = (int)Math.Floor(Math.Max(0, cx) / cellW);
+                int row = (int)Math.Floor(Math.Max(0, cy) / cellH);
                 if (col < 0) col = 0;
                 if (col >= cols) col = cols - 1;
                 if (row < 0) row = 0;
@@ -1906,7 +2089,7 @@ namespace Clover
                     double cur = tt.X;
                     if (Math.Abs(cur - dx) < 0.5) continue;
 
-                    DoubleAnimation anim = new DoubleAnimation(dx, TimeSpan.FromMilliseconds(120));
+                    DoubleAnimation anim = new DoubleAnimation(dx, TimeSpan.FromMilliseconds(DragShiftMs));
                     anim.EasingFunction = FrozenCubic();
                     tt.BeginAnimation(TranslateTransform.XProperty, anim);
                 }
@@ -1926,31 +2109,156 @@ namespace Clover
                 draggedApp = null;
                 if (insertMarker != null) insertMarker.Visibility = Visibility.Collapsed;
                 if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
+                HideDragGhost();
 
                 // 让位位移归零。
                 // 为什么要动画而不是直接设 0：松手后 RenderApps 会重建磁贴，
                 // 但在"取消拖拽"（落点无效）的情况下不重建 ——
                 // 那时如果位移瞬间归零，会看到磁贴"啪"地跳回原位。
-                // 用 120ms 滑回去，与让位时的动画对称。
-                if (tilePanel != null)
-                {
-                    foreach (UIElement u in tilePanel.Children)
-                    {
-                        Border b = u as Border;
-                        if (b == null) continue;
-                        FrameworkElement content = b.Child as FrameworkElement;
-                        if (content == null) continue;
-                        TranslateTransform tt = content.RenderTransform as TranslateTransform;
-                        if (tt == null) continue;
-                        if (Math.Abs(tt.X) < 0.5) continue;
+                // 用 200ms 滑回去，与让位时的动画对称。
+                ResetTileShifts();
+            }
+            catch { }
+        }
 
-                        DoubleAnimation back = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(120));
-                        back.EasingFunction = FrozenCubic();
-                        tt.BeginAnimation(TranslateTransform.XProperty, back);
-                    }
+        /// <summary>
+        /// 拖拽结束但**保留浮层**：用于"平滑落入"动画。
+        ///
+        /// 与 EndDragVisual 的区别：不清 dragGhost、不隐藏 Canvas，
+        /// 因为接下来要让浮层飞到目标格再消失。
+        /// </summary>
+        void EndDragVisualKeepGhost()
+        {
+            try
+            {
+                insertIndex = -1;
+                draggedApp = null;
+                if (insertMarker != null) insertMarker.Visibility = Visibility.Collapsed;
+                // 注意：不调 HideDragGhost()、不隐藏 insertCanvas
+                ResetTileShifts();
+            }
+            catch { }
+        }
+
+        /// <summary>把所有磁贴的让位位移平滑归零。</summary>
+        void ResetTileShifts()
+        {
+            try
+            {
+                if (tilePanel == null) return;
+                foreach (UIElement u in tilePanel.Children)
+                {
+                    Border b = u as Border;
+                    if (b == null) continue;
+                    FrameworkElement content = b.Child as FrameworkElement;
+                    if (content == null) continue;
+                    TranslateTransform tt = content.RenderTransform as TranslateTransform;
+                    if (tt == null) continue;
+                    if (Math.Abs(tt.X) < 0.5) continue;
+
+                    DoubleAnimation back = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(DragShiftMs));
+                    back.EasingFunction = FrozenCubic();
+                    tt.BeginAnimation(TranslateTransform.XProperty, back);
                 }
             }
             catch { }
+        }
+
+        /// <summary>
+        /// 松手后：浮层平滑飞到目标格，落地后提交排序并重建列表。
+        ///
+        /// 为什么要有这一步：如果松手瞬间直接 RenderApps()，
+        /// 浮层消失 + 磁贴重建是同一帧发生的，视觉上是"啪"地跳过去。
+        /// 让浮层先飞 200ms 到目标位置，用户看到的是"图标落进格子里"，
+        /// 之后重建时磁贴已经在正确位置，看不出切换。
+        ///
+        /// 落点无效（target &lt; 0）时直接取消，浮层飞回原位。
+        /// </summary>
+        void DropDragGhost(AppItem a, int target)
+        {
+            try
+            {
+                if (dragGhost == null || dragGhostPos == null || insertCanvas == null)
+                {
+                    // 没有浮层（异常情况）：直接提交
+                    HideDragGhost();
+                    if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
+                    CommitDrag(a, target);
+                    return;
+                }
+
+                Border ghost = dragGhost;
+
+                // 目标格的中心坐标（tilePanel 坐标系）
+                double cellW = TileWidthPx + 4;
+                double cellH = TileHeightPx + 4;
+                int cols = Math.Max(1, tileColumns);
+                double dstX = 0, dstY = 0;
+                if (target >= 0 && renderedApps != null)
+                {
+                    int t = target;
+                    if (t > renderedApps.Count) t = renderedApps.Count;
+                    int col = t % cols;
+                    int row = t / cols;
+                    dstX = col * cellW + 2;    // +2 = 磁贴 Margin
+                    dstY = row * cellH + 2;
+                }
+                else
+                {
+                    // 落点无效：飞回原位（用当前浮层位置，等于原地淡出）
+                    dstX = dragGhostPos.X;
+                    dstY = dragGhostPos.Y;
+                }
+
+                CubicEase ease = FrozenCubic();
+
+                // 位置：200ms 飞到目标格
+                DoubleAnimation ax = new DoubleAnimation(dstX, TimeSpan.FromMilliseconds(DragShiftMs));
+                ax.EasingFunction = ease;
+                DoubleAnimation ay = new DoubleAnimation(dstY, TimeSpan.FromMilliseconds(DragShiftMs));
+                ay.EasingFunction = ease;
+
+                // 缩放：从 1.08 回落到 1.0（"放下"的手感）
+                if (dragGhostScale != null)
+                {
+                    DoubleAnimation sx = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(DragShiftMs));
+                    sx.EasingFunction = ease;
+                    DoubleAnimation sy = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(DragShiftMs));
+                    sy.EasingFunction = ease;
+                    dragGhostScale.BeginAnimation(ScaleTransform.ScaleXProperty, sx);
+                    dragGhostScale.BeginAnimation(ScaleTransform.ScaleYProperty, sy);
+                }
+
+                // 阴影淡出
+                DropShadowEffect sh = ghost.Effect as DropShadowEffect;
+                if (sh != null)
+                {
+                    DoubleAnimation fade = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(DragShiftMs));
+                    fade.EasingFunction = ease;
+                    sh.BeginAnimation(DropShadowEffect.OpacityProperty, fade);
+                }
+
+                // 落地后：移除浮层 → 提交排序 → 重建
+                ay.Completed += delegate
+                {
+                    try
+                    {
+                        HideDragGhost();
+                        if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
+                        CommitDrag(a, target);
+                    }
+                    catch { }
+                };
+
+                dragGhostPos.BeginAnimation(TranslateTransform.XProperty, ax);
+                dragGhostPos.BeginAnimation(TranslateTransform.YProperty, ay);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "拖动落入动画");
+                HideDragGhost();
+                CommitDrag(a, target);
+            }
         }
 
         /// <summary>
