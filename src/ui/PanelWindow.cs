@@ -159,8 +159,19 @@ namespace Clover
         /// </summary>
         public const string PinnedCategory = "\u0001pinned";
 
+        /// <summary>
+        /// 「桌面」虚拟分类的标识（虚拟桌面视图）。
+        ///
+        /// 内容不是 AppItem 而是 DesktopItem，走单独渲染路径。
+        /// **只读真实桌面，不移动任何文件** —— 这是与"桌面整理"方案的关键区别。
+        /// </summary>
+        public const string DesktopCategory = "\u0001desktop";
+
         /// <summary>收藏的文件夹/文件（config\pinned-folders.json）。</summary>
         List<PinnedItem> pinnedFolders = new List<PinnedItem>();
+
+        /// <summary>桌面项目缓存（进入「桌面」视图时重新读取）。</summary>
+        List<DesktopItem> desktopItems = new List<DesktopItem>();
 
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {

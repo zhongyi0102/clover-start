@@ -204,6 +204,10 @@ namespace Clover
             int pinnedCount = pinnedFolders == null ? 0 : pinnedFolders.Count;
             if (pinnedCount > 0) cats.Add(PinnedCategory);
 
+            // 「桌面」常驻：它是虚拟视图，与"桌面上有几个文件"无关 ——
+            // 桌面空了也该能进去看（用户会疑惑"我的桌面去哪了"）
+            cats.Add(DesktopCategory);
+
             // 「隐藏的项目」只在确实有隐藏项时出现（没有就不占地方）
             int hiddenCount = catalog.HiddenItems().Count;
             if (hiddenCount > 0) cats.Add(HiddenCategory);
@@ -213,8 +217,9 @@ namespace Clover
                 string c = cat;
                 int count = c == HiddenCategory ? hiddenCount
                           : (c == PinnedCategory ? pinnedCount
-                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count));
-                if (c != "" && c != "常用" && c != PinnedCategory && count == 0) continue;
+                          : (c == DesktopCategory ? 0
+                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count)));
+                if (c != "" && c != "常用" && c != PinnedCategory && c != DesktopCategory && count == 0) continue;
 
                 // 显示名：被改过名的分类查表，其余用内部名本身。
                 // 内部名（c）始终不变——它才是 apps.json / 规则表 / 覆盖表里的键。
@@ -222,6 +227,7 @@ namespace Clover
                 if (c == "") label = "全部";
                 else if (c == HiddenCategory) label = "隐藏的项目";
                 else if (c == PinnedCategory) label = "收藏夹";
+                else if (c == DesktopCategory) label = "桌面";
                 else label = CategoryDisplayName(c);
 
                 Border item = new Border();
@@ -775,6 +781,13 @@ namespace Clover
                 return;
             }
 
+            // ---- 虚拟桌面：只读真实桌面，不动任何文件 ----
+            if (q.Length == 0 && current == DesktopCategory)
+            {
+                RenderDesktop();
+                return;
+            }
+
             List<AppItem> list;
 
             // ---- 系统级搜索（开始菜单 + 注册表 + 磁盘）----
@@ -939,6 +952,292 @@ namespace Clover
             // 而启动次数只会在 Launch 之后变，所以重渲染时同步一次即可）。
             // 搜索时快速启动区已隐藏，重建是白费——等退出搜索再刷。
             if (!searching) RebuildQuickBar();
+        }
+
+        /// <summary>
+        /// 渲染「桌面」视图（虚拟桌面）。
+        ///
+        /// **只读**：读取桌面文件列表并显示，不移动、不删除、不改名。
+        /// 真实桌面保持原样 —— 用户不满意这个视图，随时切走即可。
+        ///
+        /// 按类型分组显示（程序 / 文件夹 / 文档 / 图片 / 视频 / 压缩包 / 其他），
+        /// 每组前加小标题。这样即使桌面很乱，面板里也是有条理的。
+        /// </summary>
+        void RenderDesktop()
+        {
+            try
+            {
+                if (tilePanel == null) return;
+
+                // 每次进入都重读：桌面文件随时可能变（下载、新建、删除）
+                desktopItems = DesktopItems.Load();
+
+                int n = desktopItems == null ? 0 : desktopItems.Count;
+
+                if (n == 0)
+                {
+                    StackPanel empty = new StackPanel();
+                    empty.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl, 0, 0);
+
+                    TextBlock ico = new TextBlock();
+                    ico.Text = "\uE7C4";   // Desktop
+                    ico.FontFamily = Ui.Mdl;
+                    ico.FontSize = 22;
+                    ico.Foreground = Ui.Sub;
+                    ico.Opacity = 0.55;
+                    empty.Children.Add(ico);
+
+                    TextBlock main = Ui.T("桌面是空的", 13.5, Ui.Fg, FontWeights.SemiBold);
+                    main.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+                    empty.Children.Add(main);
+
+                    TextBlock hint = Ui.T("这里显示桌面上的文件和文件夹（只读，不会移动任何东西）",
+                        12, Ui.Sub);
+                    hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+                    hint.TextWrapping = TextWrapping.Wrap;
+                    hint.MaxWidth = 380;
+                    empty.Children.Add(hint);
+
+                    tilePanel.Children.Add(empty);
+                }
+                else
+                {
+                    // 按分组渲染：每组先插一个占满整行的标题，再放磁贴
+                    string lastGroup = null;
+                    foreach (DesktopItem it in desktopItems)
+                    {
+                        if (!string.Equals(it.Group, lastGroup, StringComparison.Ordinal))
+                        {
+                            lastGroup = it.Group;
+                            int cnt = DesktopItems.CountGroup(desktopItems, lastGroup);
+                            tilePanel.Children.Add(MakeGroupHeader(lastGroup + " · " + cnt));
+                        }
+                        tilePanel.Children.Add(MakeDesktopTile(it));
+                    }
+                }
+
+                if (footerCount != null)
+                    footerCount.Text = "桌面 " + n + " 项 · 只读，不会移动任何文件";
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "渲染虚拟桌面");
+            }
+        }
+
+        /// <summary>
+        /// 分组标题（占满整行的横条）。
+        ///
+        /// 为什么要占满一行：WrapPanel 里如果标题不撑满宽度，
+        /// 后面的磁贴会挤到它右边，标题就"悬在半空"。
+        /// 用 Width 绑定到容器宽度做不到（WrapPanel 无此概念），
+        /// 所以给一个足够大的 MinWidth + 让它独占一行（靠一个换行占位）。
+        /// </summary>
+        FrameworkElement MakeGroupHeader(string text)
+        {
+            StackPanel wrap = new StackPanel();
+            wrap.Orientation = Orientation.Vertical;
+            wrap.Margin = new Thickness(2, Ui.S.Sm, 2, 2);
+
+            TextBlock t = Ui.T(text, 10.5, Ui.Sub);
+            t.Margin = new Thickness(Ui.S.Xs, 0, 0, 0);
+            wrap.Children.Add(t);
+
+            // 用一个不可见的全宽占位把后续磁贴推到下一行
+            Border spacer = new Border();
+            spacer.Width = Math.Max(200, tilePanel.ActualWidth > 100 ? tilePanel.ActualWidth - 20 : 900);
+            spacer.Height = 0.1;
+            wrap.Children.Add(spacer);
+
+            return wrap;
+        }
+
+        /// <summary>
+        /// 桌面项目磁贴：与普通应用同尺寸，图标按类型给字形。
+        ///
+        /// 为什么用字形而不是真实图标：
+        /// 真实图标要 SHGetFileInfo（每个几十 ms），桌面几十项就要上百 ms。
+        /// 而这里的目的是"看清桌面有什么"，字形已足够区分类型。
+        /// </summary>
+        Border MakeDesktopTile(DesktopItem it)
+        {
+            Border b = new Border();
+            b.Width = TileWidthPx;
+            b.Height = TileHeightPx;
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Margin = new Thickness(2);
+            b.Background = Brushes.Transparent;
+            b.Cursor = Cursors.Hand;
+
+            string sizeText = it.IsFolder ? "文件夹" : DesktopItems.FormatSize(it.Size);
+            b.ToolTip = it.Path + (string.IsNullOrEmpty(sizeText) ? "" : "\n" + sizeText);
+
+            StackPanel sp = new StackPanel();
+            sp.VerticalAlignment = VerticalAlignment.Center;
+
+            TextBlock ico = new TextBlock();
+            ico.Text = GlyphOf(it);
+            ico.FontFamily = Ui.Mdl;
+            ico.FontSize = 26;
+            ico.Foreground = ColorOf(it);
+            ico.HorizontalAlignment = HorizontalAlignment.Center;
+            ico.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            sp.Children.Add(ico);
+
+            TextBlock name = new TextBlock();
+            name.Text = it.Name;
+            name.FontFamily = Ui.YaHei;
+            name.FontSize = 11.5;
+            name.Foreground = Ui.Fg;
+            name.TextWrapping = TextWrapping.Wrap;
+            name.TextAlignment = TextAlignment.Center;
+            name.LineHeight = 15;
+            name.MaxWidth = 88;
+
+            Border clip = new Border();
+            clip.MaxHeight = 30;
+            clip.ClipToBounds = true;
+            clip.Child = name;
+            clip.HorizontalAlignment = HorizontalAlignment.Center;
+            sp.Children.Add(clip);
+
+            b.Child = sp;
+
+            b.MouseEnter += delegate { b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
+            b.MouseLeftButtonDown += delegate { b.Background = Ui.Pressed; };
+            b.MouseLeftButtonUp += delegate
+            {
+                b.Background = Ui.Hover;
+                OpenDesktopItem(it);
+            };
+            b.MouseRightButtonUp += delegate { ShowDesktopItemMenu(it); };
+
+            return b;
+        }
+
+        /// <summary>按分组选字形。</summary>
+        static string GlyphOf(DesktopItem it)
+        {
+            if (it.IsFolder) return "\uE8B7";        // Folder
+            switch (it.Group)
+            {
+                case "程序": return "\uE7B8";        // 应用
+                case "文档": return "\uE8A5";        // Document
+                case "图片": return "\uEB9F";        // Photo
+                case "视频": return "\uE714";        // Video
+                case "压缩包": return "\uE7B8";      // Archive（MDL2 无专门图标）
+                default: return "\uE7C3";            // Page
+            }
+        }
+
+        /// <summary>按分组选颜色，让不同类型一眼可分。</summary>
+        static Brush ColorOf(DesktopItem it)
+        {
+            if (it.IsFolder) return Ui.AccentText;
+            switch (it.Group)
+            {
+                case "程序": return Ui.AccentText;
+                case "文档": return Ui.Sub;
+                case "图片": return Ui.Accent;
+                case "视频": return Ui.Accent;
+                case "压缩包": return Ui.Sub;
+                default: return Ui.Sub;
+            }
+        }
+
+        /// <summary>打开桌面项目：文件夹用资源管理器，文件用默认程序。</summary>
+        void OpenDesktopItem(DesktopItem it)
+        {
+            try
+            {
+                if (it == null || string.IsNullOrEmpty(it.Path)) return;
+
+                if (it.IsFolder)
+                {
+                    if (Directory.Exists(it.Path))
+                        Process.Start("explorer.exe", "\"" + it.Path + "\"");
+                    else
+                        MessageBox.Show("文件夹已不存在：\r\n" + it.Path, "四叶草");
+                }
+                else
+                {
+                    if (File.Exists(it.Path))
+                        Process.Start(new ProcessStartInfo(it.Path) { UseShellExecute = true });
+                    else
+                        MessageBox.Show("文件已不存在：\r\n" + it.Path, "四叶草");
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "打开桌面项目");
+            }
+        }
+
+        /// <summary>
+        /// 桌面项目右键：打开 / 在资源管理器中显示 / 固定到收藏夹 / 复制路径。
+        ///
+        /// **刻意不提供"删除"和"重命名"**：
+        /// 这是只读视图。给个删除按钮，用户误点就真的删了桌面文件，
+        /// 而"整理桌面"的心理预期是"看清楚"，不是"在这里管理文件"。
+        /// 真要管理，用「在资源管理器中显示」跳过去。
+        /// </summary>
+        void ShowDesktopItemMenu(DesktopItem it)
+        {
+            try
+            {
+                ContextMenu cm = new ContextMenu();
+
+                MenuItem open = new MenuItem();
+                open.Header = "打开";
+                open.Click += delegate { OpenDesktopItem(it); };
+                cm.Items.Add(open);
+
+                MenuItem loc = new MenuItem();
+                loc.Header = "在资源管理器中显示";
+                loc.Click += delegate
+                {
+                    try
+                    {
+                        if (it.IsFolder)
+                            Process.Start("explorer.exe", "\"" + Path.GetDirectoryName(it.Path) + "\"");
+                        else
+                            Process.Start("explorer.exe", "/select,\"" + it.Path + "\"");
+                    }
+                    catch { }
+                };
+                cm.Items.Add(loc);
+
+                cm.Items.Add(new Separator());
+
+                MenuItem pin = new MenuItem();
+                pin.Header = "固定到收藏夹";
+                pin.Click += delegate
+                {
+                    if (AddPinned(it.Path, it.Name))
+                        MessageBox.Show("已加入收藏夹。", "四叶草");
+                    else
+                        MessageBox.Show("这个项目已经在收藏夹里了。", "四叶草");
+                };
+                cm.Items.Add(pin);
+
+                MenuItem copy = new MenuItem();
+                copy.Header = "复制路径";
+                copy.Click += delegate
+                {
+                    try { Clipboard.SetText(it.Path); } catch { }
+                };
+                cm.Items.Add(copy);
+
+                taskMenuOpen = true;
+                cm.Closed += delegate { taskMenuOpen = false; };
+                cm.Placement = PlacementMode.MousePoint;
+                cm.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "桌面项目菜单");
+            }
         }
 
         /// <summary>
