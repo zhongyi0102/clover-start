@@ -380,6 +380,14 @@ namespace Clover
             try
             {
                 ApplyShadow();
+
+                // 毛玻璃也要重截：缓存键里含主题（深浅色影响图片透明度），
+                // 不重截的话切主题后背景还是旧亮度，看起来像"没生效"。
+                ApplyGlassTint();
+                if (glassBackdrop != null && settings != null && settings.GlassOpacity > 0)
+                {
+                    if (IsVisible) RefreshGlassSoon(120);
+                }
             }
             catch (Exception ex)
             {
