@@ -341,19 +341,47 @@ namespace Clover
                 }
                 if (sizedTiles == 0) return string.Format("找不到 {0}x{1} 的磁贴", tw, th);
 
-                // 至少有一个图标尺寸的视觉元素带 ScaleTransform
+                // 至少有一个图标尺寸的视觉元素带缩放变换
+                //
+                // 注意：不能只认 `RenderTransform as ScaleTransform` ——
+                // 现在用的是 TransformGroup（缩放 + 位移组合），
+                // 直接 as 会得到 null，断言就假失败。
+                // 所以要能从 TransformGroup 里把 ScaleTransform 找出来。
                 int scaled = 0;
+                int lifted = 0;
                 foreach (FrameworkElement fe in FindAll<FrameworkElement>(panel))
                 {
-                    ScaleTransform st = fe.RenderTransform as ScaleTransform;
-                    if (st == null) continue;
-                    // 图标是 icon x icon（Image 或占位 Border）
                     double w = fe.Width, h = fe.Height;
-                    if (Math.Abs(w - icon) < 0.1 && Math.Abs(h - icon) < 0.1) scaled++;
+                    if (Math.Abs(w - icon) >= 0.1 || Math.Abs(h - icon) >= 0.1) continue;
+
+                    ScaleTransform st = null;
+                    TranslateTransform tt = null;
+
+                    Transform tr = fe.RenderTransform;
+                    if (tr is ScaleTransform)
+                    {
+                        st = (ScaleTransform)tr;
+                    }
+                    else if (tr is TransformGroup)
+                    {
+                        foreach (Transform child in ((TransformGroup)tr).Children)
+                        {
+                            if (child is ScaleTransform && st == null) st = (ScaleTransform)child;
+                            else if (child is TranslateTransform && tt == null) tt = (TranslateTransform)child;
+                        }
+                    }
+
+                    if (st != null) scaled++;
+                    if (tt != null) lifted++;
                 }
+
                 if (scaled == 0)
-                    return string.Format("没有任何 {0}x{0} 的图标带 ScaleTransform（放大未接线）", icon);
-                return string.Format("ok（{0} 块磁贴保持 {1}x{2}，{3} 个图标已接放大）", sizedTiles, tw, th, scaled);
+                    return string.Format("没有任何 {0}x{0} 的图标带缩放变换（放大未接线）", icon);
+                if (lifted == 0)
+                    return "图标有缩放但没有位移动画（悬停上浮未接线）";
+
+                return string.Format("ok（{0} 块磁贴保持 {1}x{2}，{3} 个图标已接放大，{4} 个已接上浮）",
+                    sizedTiles, tw, th, scaled, lifted);
             });
 
             // ---------- 12. 弹出动画用的位移变换已建立 ----------

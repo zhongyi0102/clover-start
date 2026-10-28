@@ -20,8 +20,36 @@ namespace Clover
         /// <summary>键盘选中项在 renderedApps 中的下标，-1 表示没有选中。</summary>
         int selectedIndex = -1;
 
-        /// <summary>悬停时图标放大的比例（纯视觉，不改布局）。</summary>
-        const double IconHoverScale = 1.12;
+        /// <summary>
+        /// 悬停时图标放大的比例（纯视觉，不改布局）。
+        ///
+        /// 1.12 → 1.25：参考 GlassBoard 的 Dock 悬停（它用 1.0→1.6）。
+        /// 磁贴是 96px 宽的网格项，不像 Dock 条那样有"把邻居挤开"的空间，
+        /// 1.6 会明显盖住相邻磁贴的图标。1.25 是"看得出放大但不越界"的平衡点。
+        /// </summary>
+        const double IconHoverScale = 1.25;
+
+        /// <summary>
+        /// 悬停时图标**上浮**的像素数。
+        ///
+        /// 这是 Dock 最标志性的移动效果（GlassBoard 用 -5px × MotionLevel）。
+        /// 配合放大一起做，才像"图标被拎起来了"；
+        /// 只放大不上浮会显得"在原地胀大"，比较闷。
+        ///
+        /// 用负值是往上（WPF 的 Y 轴向下为正）。
+        /// </summary>
+        const double IconLiftPx = 4.0;
+
+        /// <summary>
+        /// 点击时的**弹跳**高度与时长。
+        ///
+        /// GlassBoard 的做法：0 → -7px → 0，420ms，
+        /// 上去用 EaseOut（快起慢收）、回来用 EaseIn（慢起快收）。
+        /// 这里用 -6px / 350ms：幅度略小、时长略短，
+        /// 因为磁贴是"启动应用"的高频操作，反馈要快、不能拖。
+        /// </summary>
+        const double IconBouncePx = 6.0;
+        const int IconBounceMs = 350;
 
         /// <summary>磁贴图标边长。
         ///
@@ -47,6 +75,56 @@ namespace Clover
         /// </summary>
         static readonly DoubleAnimation IconZoomIn = FrozenScale(1.0, IconHoverScale, 120);
         static readonly DoubleAnimation IconZoomOut = FrozenScale(IconHoverScale, 1.0, 120);
+
+        /// <summary>悬停上浮 / 复位（起点终点都明确，可冻结共享）。</summary>
+        static readonly DoubleAnimation IconLiftUp = FrozenShift(0.0, -IconLiftPx, 160);
+        static readonly DoubleAnimation IconLiftDown = FrozenShift(-IconLiftPx, 0.0, 160);
+
+        /// <summary>
+        /// 点击弹跳（关键帧：0 → -6px → 0）。
+        ///
+        /// 为什么用 DoubleAnimationUsingKeyFrames 而不是两个动画串起来：
+        /// 关键帧能保证"上去再回来"是一个连续动作，
+        /// 中间不会被别的动画打断；而且只占一个动画槽，
+        /// 磁贴被复用（滚动重建）时不会残留半截动画。
+        /// </summary>
+        static DoubleAnimationUsingKeyFrames BuildBounce()
+        {
+            DoubleAnimationUsingKeyFrames a = new DoubleAnimationUsingKeyFrames();
+            a.Duration = TimeSpan.FromMilliseconds(IconBounceMs);
+
+            CubicEase up = new CubicEase();
+            up.EasingMode = EasingMode.EaseOut;
+            up.Freeze();
+
+            CubicEase down = new CubicEase();
+            down.EasingMode = EasingMode.EaseIn;
+            down.Freeze();
+
+            a.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
+            a.KeyFrames.Add(new EasingDoubleKeyFrame(-IconBouncePx, KeyTime.FromPercent(0.45), up));
+            a.KeyFrames.Add(new EasingDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0), down));
+            a.Freeze();
+            return a;
+        }
+
+        static readonly DoubleAnimationUsingKeyFrames IconBounce = BuildBounce();
+
+        /// <summary>
+        /// 位移动画（起点终点明确，可冻结共享）。
+        ///
+        /// 与 FrozenScale 分开是因为缓动不同：
+        /// 缩放和上浮都用 EaseOut（快起慢收，跟手），
+        /// 但位移的"回位"用 EaseOut 也合适 —— 所以共用 FrozenCubic。
+        /// </summary>
+        static DoubleAnimation FrozenShift(double from, double to, int ms)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.From = from;
+            a.EasingFunction = FrozenCubic();
+            a.Freeze();
+            return a;
+        }
 
         /// <summary>
         /// 缩放动画。**起点与终点都明确**，所以可以冻结后跨所有磁贴共享。
@@ -1518,7 +1596,17 @@ namespace Clover
             // 为什么：磁贴放大（96x90 -> 更大）会让 WrapPanel 重新排版，
             // 鼠标附近的磁贴会跳位、闪烁；图标用 RenderTransform 放大则完全不碰布局。
             // RenderTransformOrigin 设成中心，所以放大会从正中向四周扩。
+            //
+            // 用 TransformGroup 组合「缩放 + 位移」两个变换：
+            //   · 缩放 → 悬停时图标变大（1.0 → 1.25）
+            //   · 位移 → 悬停上浮（0 → -4px）+ 点击弹跳（0 → -6px → 0）
+            // 两者独立，可以同时进行；若只用一个 ScaleTransform 就没法做上浮。
             ScaleTransform iconScale = new ScaleTransform(1.0, 1.0);
+            TranslateTransform iconLift = new TranslateTransform(0, 0);
+            TransformGroup iconTrans = new TransformGroup();
+            iconTrans.Children.Add(iconScale);
+            iconTrans.Children.Add(iconLift);
+
             FrameworkElement iconVisual;
 
             ImageSource icon = AppIcons.Get(a.Path);
@@ -1551,7 +1639,7 @@ namespace Clover
             }
 
             iconVisual.RenderTransformOrigin = new Point(0.5, 0.5);
-            iconVisual.RenderTransform = iconScale;
+            iconVisual.RenderTransform = iconTrans;
 
             // 图标外面套一层 Grid，好在右上角叠"运行中"小圆点。
             // 用叠加而不是改图标本身：图标来自系统缓存、可能被多块磁贴共享，
@@ -1596,15 +1684,18 @@ namespace Clover
             b.MouseEnter += delegate
             {
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
-                // 悬停放大图标：只动 RenderTransform，不触发布局重排
+                // 悬停：放大 + 上浮（参考 GlassBoard 的 Dock 悬停）。
+                // 只动 RenderTransform，不触发布局重排。
                 iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomIn);
                 iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomIn);
+                iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftUp);
             };
             b.MouseLeave += delegate
             {
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Brushes.Transparent;
                 iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomOut);
                 iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomOut);
+                iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftDown);
             };
             b.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {
@@ -1614,6 +1705,13 @@ namespace Clover
                 // 点一个启动稍慢的应用时，用户能看到"按下去了"，
                 // 不会怀疑是没点中。
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Pressed;
+
+                // 点击弹跳：0 → -6px → 0。
+                // 与悬停上浮共用 TranslateTransform.Y，所以会覆盖悬停状态 ——
+                // 这是有意的：弹跳结束后图标停在上浮位置（鼠标还在磁贴上），
+                // 视觉上连贯。若弹跳后回到 0 再上浮，会看到"抖两下"。
+                iconLift.BeginAnimation(TranslateTransform.YProperty, IconBounce);
+
                 // 鼠标点击磁贴时，键盘选中跟随到它，方向键从当前位置继续
                 SelectTile(renderedApps.IndexOf(a), false);
                 try { b.CaptureMouse(); } catch { }
