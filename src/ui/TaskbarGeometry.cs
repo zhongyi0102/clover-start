@@ -13,6 +13,15 @@ namespace Clover
         public enum Edge { Bottom, Top, Left, Right }
 
         public static Edge CurrentEdge = Edge.Bottom;
+
+        /// <summary>
+        /// 几何值从"估算"变成"精确"时的回调。
+        ///
+        /// 面板用它重新定位：首次 PositionPanel 只能用估算的 StartCell，
+        /// 而 UIA 探测是异步的、完成时面板已经显示出来了。
+        /// 不重新定位就会差几十上百像素（实测差 99px）。
+        /// </summary>
+        public static Action GeometryRefined;
         public static double Thickness = 48;
         public static Rect StartCell = Rect.Empty;
 
@@ -178,6 +187,19 @@ namespace Clover
                         // 记为“已用 uia 精确定位”，Refresh 再报 workArea 时就不会重复刷
                         lastUiState = "ok/uia";
                         Ui.Log("开始按钮定位: ok/uia");
+
+                        // ★ 通知外面：几何值从"估算"变成"精确"了。
+                        //
+                        // 为什么必须通知：面板的 PositionPanel() 用 CloverRect()
+                        // 算位置，而首次调用时 StartCell 还是估算值 (0, sh-48)，
+                        // 于是面板被放到 x=54（估算位置）而不是真实按钮旁边 (x=411)。
+                        // 实测：按钮在 411，面板跑到 554 —— 差 99px。
+                        try
+                        {
+                            Action cb = GeometryRefined;
+                            if (cb != null) cb();
+                        }
+                        catch { }
                     }
                     catch (Exception ex)
                     {

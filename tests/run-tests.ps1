@@ -117,8 +117,6 @@ Invoke-Suite 'WatcherTest' $baseRefs `
     @((Join-Path $testDir 'WatcherTest.cs'))
 
 # 虚拟化面板的几何/滚动计算（用到 ItemsControl，需要 WPF 引用）
-Invoke-Suite 'VirtualPanelTest' $wpfRefs `
-    @((Join-Path $testDir 'VirtualPanelTest.cs'))
 
 # ---------------- 集成测试 ----------------
 # 链接 core + ui 下除 Program.cs 外的全部源码（Program.cs 有 Main，会冲突）

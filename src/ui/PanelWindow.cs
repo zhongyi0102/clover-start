@@ -261,6 +261,27 @@ namespace Clover
                 Ui.LogError(ex, "构建面板界面");
             }
 
+            // 任务栏几何从"估算"变成"精确"后，重新定位面板。
+            //
+            // 为什么需要：首次 PositionPanel() 时 UIA 探测还没回来，
+            // StartCell 是估算值 (0, sh-48)，于是面板被放到估算位置；
+            // 探测完成后真实按钮位置才可用（实测差 99px）。
+            // 这里在回调里再定位一次，误差归零。
+            //
+            // 只对"从未精确定位过"的面板生效：用户手动拖过位置的话，
+            // layout.json 里存的是他的选择，不能被自动定位覆盖。
+            TaskbarGeometry.GeometryRefined = delegate
+            {
+                try
+                {
+                    if (!IsVisible) return;          // 没显示就不用管
+                    if (!needPosition) return;       // 用户已手动定位过
+                    PositionPanel();
+                    Ui.Log("几何精确化后重新定位面板");
+                }
+                catch { }
+            };
+
             Deactivated += delegate(object s, EventArgs e)
             {
                 Ui.Log("Deactivated active=" + IsActive + " everActivated=" + everActivated
@@ -405,6 +426,34 @@ namespace Clover
             // 现在统一：面板左缘 = 四叶草按钮右缘 + 间距，纵向贴任务栏。
             try
             {
+                // ★ 优先用「四叶草按钮的真实右边缘」定位。
+                //
+                // 为什么不用 TaskbarGeometry.CloverRect()：
+                // 那套基于"开始按钮格"，算出来 x≈59；
+                // 而四叶草按钮实际贴在**任务栏图标组末尾**（实测 x=411）。
+                // 两套机制不一致，面板和按钮会错位 350px。
+                //
+                // TriggerWindow 已经用 UIA 探测出了真实位置，这里直接复用，
+                // 保证"面板从按钮右边开始"这件事真的成立。
+                double buttonRight;
+                if (TriggerWindow.TryGetButtonRight(out buttonRight))
+                {
+                    if (TaskbarGeometry.CurrentEdge == TaskbarGeometry.Edge.Bottom)
+                    {
+                        // ⚠ TryGetButtonRight 返回的是四叶草按钮的**左缘** X
+                        // （它就是 TriggerWindow 用来设置 Left 的那个值），
+                        // 所以要先加按钮宽度才是"右缘"。
+                        // 实测：按钮 Left=411、Width=44 → 右缘 455；
+                        // 不加宽度会算出 Left=401，面板压在按钮上（差 54px）。
+                        double btnW = 44;
+                        Left = buttonRight + btnW + 6 - 16;   // 16 = root 的 Margin
+                        Top = wa.Bottom - Height + 10;
+                        if (Top < 0) Top = 0;
+                        if (Left < 0) Left = 0;
+                        return;
+                    }
+                }
+
                 Rect clover = TaskbarGeometry.CloverRect();
                 if (!clover.IsEmpty && clover.Width > 0)
                 {
@@ -471,7 +520,10 @@ namespace Clover
                 // 首次显示前才定位：此时 TaskbarGeometry 已探测完毕
                 if (needPosition)
                 {
-                    needPosition = false;
+                    // 注意：这里**不清** needPosition。
+                    // 首次定位用的是估算几何值（UIA 探测是异步的，还没回来），
+                    // 要让 GeometryRefined 回调有机会再精修一次。
+                    // 用户手动拖动面板时 SaveLayout 才把 needPosition 清掉。
                     PositionPanel();
                 }
                 Opacity = 0;
@@ -734,6 +786,10 @@ namespace Clover
                 d["height"] = expanded ? normalRect.Height : Height;
                 System.Web.Script.Serialization.JavaScriptSerializer ser = new System.Web.Script.Serialization.JavaScriptSerializer();
                 JsonIO.WriteAtomic(layoutPath, ser.Serialize(d));
+
+                // 位置已落盘 → 以后不再自动定位（尊重用户的选择）。
+                // 用户拖动面板会走到这里，此后 GeometryRefined 回调不再重定位。
+                needPosition = false;
             }
             catch { }
         }

@@ -200,6 +200,32 @@ namespace Clover
         static double cachedButtonRight;
         static bool hasCachedLayout;
 
+        /// <summary>
+        /// 四叶草按钮的真实右边缘（DIP），来自任务栏图标组的 UIA 探测。
+        ///
+        /// 为什么需要对外暴露：面板的 PositionPanel() 原来用
+        /// TaskbarGeometry.CloverRect() 算位置，那套基于"开始按钮格"，
+        /// 算出来 x=59；而四叶草按钮实际贴在**任务栏图标组末尾**（x=411）。
+        /// 两套定位机制不一致，导致面板和按钮错位 350px。
+        ///
+        /// 返回 false 表示探测还没完成，调用方应先用估算值。
+        /// </summary>
+        public static bool TryGetButtonRight(out double rightDip)
+        {
+            rightDip = 0;
+            if (!hasCachedLayout) return false;
+            if (cachedButtonRight <= 0) return false;
+            double scale = 1.0;
+            try
+            {
+                uint dpi = Native.GetDpiForSystem();
+                if (dpi > 0) scale = dpi / 96.0;
+            }
+            catch { }
+            rightDip = cachedButtonRight / scale;
+            return true;
+        }
+
         /// <summary>探测间隔下限：任务栏布局不会频繁变化，没必要高频查 UIAutomation。</summary>
         const int LayoutProbeIntervalMs = 5000;
 
