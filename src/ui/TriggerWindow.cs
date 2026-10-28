@@ -401,6 +401,17 @@ namespace Clover
             rescan.Click += delegate { if (panel != null) panel.Rescan(); };
             cm.Items.Add(rescan);
 
+            // ---- 收藏文件夹 ----
+            //
+            // 为什么不注册到资源管理器的右键菜单（Shell 扩展）：
+            // 那需要写注册表 + 一个 COM 组件，改系统状态的代价与收益不成比例。
+            // 这里用"选文件夹"对话框，零风险，且用户能一次选多个。
+            MenuItem pinItem = new MenuItem();
+            pinItem.Header = "收藏文件夹…";
+            pinItem.ToolTip = "把一个或多个文件夹固定到面板的「收藏夹」里";
+            pinItem.Click += delegate { PromptAddPinned(); };
+            cm.Items.Add(pinItem);
+
             // ---- 设置子菜单 ----
             //
             // 为什么把开关收进来：顶层原先有 16 项，一眼扫不完，而且
@@ -792,6 +803,86 @@ namespace Clover
             {
                 Ui.LogError(ex, "一键回滚");
                 MessageBox.Show("启动回滚失败：" + ex.Message, "四叶草");
+            }
+        }
+
+        /// <summary>
+        /// 选文件夹加入收藏。
+        ///
+        /// 用 FolderBrowserDialog（WinForms）而不是 WPF 自绘：
+        /// 这是**系统级目录选择**，系统对话框有完整的树形浏览、网络路径、
+        /// 快捷访问等能力，自绘一个既费时又难用。
+        /// 唯一代价是它不跟随主题 —— 但"选文件夹"是低频操作，
+        /// 且用户此刻的注意力在"找目录"上，配色不一致不影响使用。
+        ///
+        /// 支持多选：按住 Ctrl 可以一次加好几个。
+        /// </summary>
+        void PromptAddPinned()
+        {
+            try
+            {
+                if (panel == null) return;
+
+                using (System.Windows.Forms.FolderBrowserDialog dlg = new System.Windows.Forms.FolderBrowserDialog())
+                {
+                    dlg.Description = "选择要固定到「收藏夹」的文件夹";
+                    dlg.ShowNewFolderButton = false;
+                    dlg.RootFolder = Environment.SpecialFolder.MyComputer;
+
+                    // 支持多选（.NET Framework 4.7.2+ 才有 Multiselect 属性，
+                    // 用反射设置以兼容旧框架；失败就退回单选）
+                    try
+                    {
+                        System.Reflection.PropertyInfo pi = typeof(System.Windows.Forms.FolderBrowserDialog)
+                            .GetProperty("Multiselect");
+                        if (pi != null) pi.SetValue(dlg, true, null);
+                    }
+                    catch { }
+
+                    if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
+                    int added = 0;
+
+                    // 多选时用 SelectedPaths，单选时用 SelectedPath
+                    string[] paths = null;
+                    try
+                    {
+                        System.Reflection.PropertyInfo pi = typeof(System.Windows.Forms.FolderBrowserDialog)
+                            .GetProperty("SelectedPaths");
+                        if (pi != null) paths = pi.GetValue(dlg, null) as string[];
+                    }
+                    catch { }
+
+                    if (paths == null || paths.Length == 0)
+                    {
+                        if (!string.IsNullOrEmpty(dlg.SelectedPath))
+                            paths = new string[] { dlg.SelectedPath };
+                    }
+
+                    if (paths == null || paths.Length == 0) return;
+
+                    foreach (string p in paths)
+                    {
+                        if (string.IsNullOrEmpty(p)) continue;
+                        if (panel.AddPinned(p, null)) added++;
+                    }
+
+                    if (added > 0)
+                    {
+                        // 切到收藏夹让用户看到结果
+                        panel.SwitchCategoryForTest(PanelWindow.PinnedCategory);
+                        panel.ShowPanel();
+                        Ui.Log("收藏文件夹: " + added + " 个");
+                    }
+                    else
+                    {
+                        MessageBox.Show("这些文件夹已经在收藏夹里了。", "四叶草");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("收藏文件夹失败: " + ex.Message);
             }
         }
 

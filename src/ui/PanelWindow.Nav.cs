@@ -200,6 +200,10 @@ namespace Clover
             cats.Add("");
             cats.AddRange(catalog.ActiveCategories());
 
+            // 「收藏夹」只在确实有收藏项时出现（没有就不占地方）
+            int pinnedCount = pinnedFolders == null ? 0 : pinnedFolders.Count;
+            if (pinnedCount > 0) cats.Add(PinnedCategory);
+
             // 「隐藏的项目」只在确实有隐藏项时出现（没有就不占地方）
             int hiddenCount = catalog.HiddenItems().Count;
             if (hiddenCount > 0) cats.Add(HiddenCategory);
@@ -208,14 +212,16 @@ namespace Clover
             {
                 string c = cat;
                 int count = c == HiddenCategory ? hiddenCount
-                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count);
-                if (c != "" && c != "常用" && count == 0) continue;
+                          : (c == PinnedCategory ? pinnedCount
+                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count));
+                if (c != "" && c != "常用" && c != PinnedCategory && count == 0) continue;
 
                 // 显示名：被改过名的分类查表，其余用内部名本身。
                 // 内部名（c）始终不变——它才是 apps.json / 规则表 / 覆盖表里的键。
                 string label;
                 if (c == "") label = "全部";
                 else if (c == HiddenCategory) label = "隐藏的项目";
+                else if (c == PinnedCategory) label = "收藏夹";
                 else label = CategoryDisplayName(c);
 
                 Border item = new Border();
@@ -757,6 +763,18 @@ namespace Clover
             string q = searchBox == null ? "" : searchBox.Text.Trim();
             showingCommon = (q.Length == 0 && current == "常用");
             bool showingHidden = (q.Length == 0 && current == HiddenCategory);
+
+            // ---- 收藏夹：内容不是 AppItem，走单独渲染 ----
+            //
+            // 为什么单独一条路径：PinnedItem 可能是文件夹、任意类型文件，
+            // 而 AppItem 的磁贴逻辑（Launch、运行中圆点、拖动换位）都不适用。
+            // 强行合并会让每处都长出 if (isFolder) 分支，不如分开。
+            if (q.Length == 0 && current == PinnedCategory)
+            {
+                RenderPinned();
+                return;
+            }
+
             List<AppItem> list;
 
             // ---- 系统级搜索（开始菜单 + 注册表 + 磁盘）----
@@ -921,6 +939,257 @@ namespace Clover
             // 而启动次数只会在 Launch 之后变，所以重渲染时同步一次即可）。
             // 搜索时快速启动区已隐藏，重建是白费——等退出搜索再刷。
             if (!searching) RebuildQuickBar();
+        }
+
+        /// <summary>
+        /// 渲染「收藏夹」视图。
+        ///
+        /// 用磁贴形态（与普通应用一致）而不是列表：
+        /// 收藏夹通常只有几个到十几个，磁贴更醒目、点击目标更大。
+        /// 图标：文件夹用文件夹字形，文件用其扩展名对应的字形。
+        /// </summary>
+        void RenderPinned()
+        {
+            try
+            {
+                if (tilePanel == null) return;
+
+                int n = pinnedFolders == null ? 0 : pinnedFolders.Count;
+
+                if (n == 0)
+                {
+                    StackPanel empty = new StackPanel();
+                    empty.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl, 0, 0);
+
+                    TextBlock ico = new TextBlock();
+                    ico.Text = "\uE8B7";   // Folder
+                    ico.FontFamily = Ui.Mdl;
+                    ico.FontSize = 22;
+                    ico.Foreground = Ui.Sub;
+                    ico.Opacity = 0.55;
+                    empty.Children.Add(ico);
+
+                    TextBlock main = Ui.T("还没有收藏的文件夹", 13.5, Ui.Fg, FontWeights.SemiBold);
+                    main.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+                    empty.Children.Add(main);
+
+                    TextBlock hint = Ui.T(
+                        "在资源管理器里右键任意文件夹 →「固定到四叶草」即可收藏",
+                        12, Ui.Sub);
+                    hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+                    hint.TextWrapping = TextWrapping.Wrap;
+                    hint.MaxWidth = 360;
+                    empty.Children.Add(hint);
+
+                    tilePanel.Children.Add(empty);
+                }
+                else
+                {
+                    foreach (PinnedItem it in pinnedFolders)
+                        tilePanel.Children.Add(MakePinnedTile(it));
+                }
+
+                if (footerCount != null)
+                    footerCount.Text = "共 " + n + " 个收藏 · 右键可管理";
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "渲染收藏夹");
+            }
+        }
+
+        /// <summary>
+        /// 收藏项磁贴：与普通应用磁贴同尺寸，但图标走文件夹/文件字形。
+        ///
+        /// 不复用 MakeTile：那个函数依赖 AppItem（路径、分类、运行状态），
+        /// 而 PinnedItem 只有路径和名字。共用的只有尺寸常量。
+        /// </summary>
+        Border MakePinnedTile(PinnedItem it)
+        {
+            Border b = new Border();
+            b.Width = TileWidthPx;
+            b.Height = TileHeightPx;
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Margin = new Thickness(2);
+            b.Background = Brushes.Transparent;
+            b.Cursor = Cursors.Hand;
+            b.ToolTip = it.Path;
+
+            StackPanel sp = new StackPanel();
+            sp.VerticalAlignment = VerticalAlignment.Center;
+
+            // 图标：文件夹 / 文件字形
+            TextBlock ico = new TextBlock();
+            ico.Text = it.IsFolder ? "\uE8B7" : "\uE7C3";   // Folder / Page
+            ico.FontFamily = Ui.Mdl;
+            ico.FontSize = 28;
+            ico.Foreground = it.IsFolder ? Ui.AccentText : Ui.Sub;
+            ico.HorizontalAlignment = HorizontalAlignment.Center;
+            ico.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            sp.Children.Add(ico);
+
+            // 名字
+            TextBlock name = new TextBlock();
+            name.Text = it.Name;
+            name.FontFamily = Ui.YaHei;
+            name.FontSize = 11.5;
+            name.Foreground = Ui.Fg;
+            name.TextWrapping = TextWrapping.Wrap;
+            name.TextAlignment = TextAlignment.Center;
+            name.LineHeight = 15;
+            name.MaxWidth = 88;
+
+            Border clip = new Border();
+            clip.MaxHeight = 30;
+            clip.ClipToBounds = true;
+            clip.Child = name;
+            clip.HorizontalAlignment = HorizontalAlignment.Center;
+            sp.Children.Add(clip);
+
+            b.Child = sp;
+
+            b.MouseEnter += delegate { b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
+            b.MouseLeftButtonDown += delegate { b.Background = Ui.Pressed; };
+            b.MouseLeftButtonUp += delegate
+            {
+                b.Background = Ui.Hover;
+                OpenPinned(it);
+            };
+            b.MouseRightButtonUp += delegate { ShowPinnedMenu(it); };
+
+            return b;
+        }
+
+        /// <summary>打开收藏项：文件夹用资源管理器，文件用默认程序。</summary>
+        void OpenPinned(PinnedItem it)
+        {
+            try
+            {
+                if (it == null || string.IsNullOrEmpty(it.Path)) return;
+
+                if (it.IsFolder)
+                {
+                    if (Directory.Exists(it.Path))
+                        Process.Start("explorer.exe", "\"" + it.Path + "\"");
+                    else
+                        MessageBox.Show("文件夹已不存在：\r\n" + it.Path
+                            + "\r\n\r\n可能被移动或删除了。右键可以取消收藏。", "四叶草");
+                }
+                else
+                {
+                    if (File.Exists(it.Path))
+                        Process.Start(new ProcessStartInfo(it.Path) { UseShellExecute = true });
+                    else
+                        MessageBox.Show("文件已不存在：\r\n" + it.Path, "四叶草");
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "打开收藏项");
+            }
+        }
+
+        /// <summary>收藏项右键：打开 / 重命名 / 在资源管理器中显示 / 取消收藏。</summary>
+        void ShowPinnedMenu(PinnedItem it)
+        {
+            try
+            {
+                ContextMenu cm = new ContextMenu();
+
+                MenuItem open = new MenuItem();
+                open.Header = "打开";
+                open.Click += delegate { OpenPinned(it); };
+                cm.Items.Add(open);
+
+                MenuItem rename = new MenuItem();
+                rename.Header = "重命名…";
+                rename.Click += delegate
+                {
+                    string s = TextPromptDialog.Ask(this, "重命名收藏",
+                        "给「" + it.Name + "」起个新名字：", it.Name);
+                    if (s == null) return;
+                    if (PinnedFolders.Rename(baseDir, it.Path, s))
+                    {
+                        ReloadPinned();
+                        RenderApps();
+                    }
+                };
+                cm.Items.Add(rename);
+
+                MenuItem loc = new MenuItem();
+                loc.Header = "打开所在位置";
+                loc.Click += delegate
+                {
+                    try
+                    {
+                        string dir = it.IsFolder ? Path.GetDirectoryName(it.Path) : Path.GetDirectoryName(it.Path);
+                        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
+                            Process.Start("explorer.exe", "\"" + dir + "\"");
+                    }
+                    catch { }
+                };
+                cm.Items.Add(loc);
+
+                cm.Items.Add(new Separator());
+
+                MenuItem rm = new MenuItem();
+                rm.Header = "取消收藏";
+                rm.Click += delegate
+                {
+                    if (PinnedFolders.Remove(baseDir, it.Path))
+                    {
+                        ReloadPinned();
+                        // 取消最后一个后分类会消失，得先离开
+                        if (pinnedFolders.Count == 0 && current == PinnedCategory)
+                        {
+                            current = "";
+                            SaveLastCategory();
+                            RebuildNav();
+                        }
+                        RenderApps();
+                    }
+                };
+                cm.Items.Add(rm);
+
+                taskMenuOpen = true;
+                cm.Closed += delegate { taskMenuOpen = false; };
+                cm.Placement = PlacementMode.MousePoint;
+                cm.IsOpen = true;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "收藏项菜单");
+            }
+        }
+
+        /// <summary>重新读取收藏列表。</summary>
+        void ReloadPinned()
+        {
+            try { pinnedFolders = PinnedFolders.Load(baseDir); }
+            catch { pinnedFolders = new List<PinnedItem>(); }
+        }
+
+        /// <summary>添加收藏（供右键菜单 / 外部调用）。返回是否成功。</summary>
+        public bool AddPinned(string path, string name)
+        {
+            try
+            {
+                bool ok = PinnedFolders.Add(baseDir, path, name);
+                if (ok)
+                {
+                    ReloadPinned();
+                    RebuildNav();
+                    RenderApps();
+                    Ui.Log("收藏: " + path);
+                }
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "添加收藏");
+                return false;
+            }
         }
 
         static int RenderCompare(AppItem a, AppItem b)

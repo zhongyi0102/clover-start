@@ -151,6 +151,17 @@ namespace Clover
         /// </summary>
         public const string HiddenCategory = "\u0001hidden";
 
+        /// <summary>
+        /// 「收藏夹」虚拟分类的标识。
+        ///
+        /// 与 HiddenCategory 一样用不可见字符开头，确保不会与真实分类名撞。
+        /// 内容不是 AppItem 而是 PinnedItem，所以渲染走单独分支。
+        /// </summary>
+        public const string PinnedCategory = "\u0001pinned";
+
+        /// <summary>收藏的文件夹/文件（config\pinned-folders.json）。</summary>
+        List<PinnedItem> pinnedFolders = new List<PinnedItem>();
+
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {
             this.baseDir = baseDir;
@@ -159,8 +170,11 @@ namespace Clover
             this.overrides = CategoryOverrides.Load(baseDir);
             this.hiddenApps = HiddenApps.Load(baseDir);
             this.categories = Categories.Load(baseDir);
-            catalog = Catalog.Load(baseDir);
-            usage = UsageStore.Load(baseDir);
+            // 收藏的文件夹/文件（与 AppItem 分开：它由用户手动指定，
+            // 重新扫描不会覆盖，也不参与分类统计）
+            try { pinnedFolders = PinnedFolders.Load(baseDir); }
+            catch { pinnedFolders = new List<PinnedItem>(); }
+            catalog = Catalog.Load(baseDir);            usage = UsageStore.Load(baseDir);
             hiddenCats = this.settings.HiddenCategories;
             catalog.ApplyUsage(usage);
             catalog.HideCategories(hiddenCats);
