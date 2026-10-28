@@ -343,7 +343,7 @@ namespace Clover
             // 毛玻璃的宿主是 contentHost（不是 root）：
             // Attach 会 Insert(0, 背景)，插到 contentHost 里才会「在内容之下」；
             // 插到 root 里会变成 root 的第二个 Child（非法，root 只能有一个）。
-            glassBackdrop = new GlassBackdrop(this, contentHost);
+            glassBackdrop = new GlassBackdrop(this, contentHost, Path.Combine(baseDir, "res"));
             glassBackdrop.OpacityPercent = 0;    // 默认关闭，由设置决定
 
             // ---------------- 双层投影 ----------------

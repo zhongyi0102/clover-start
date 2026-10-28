@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -43,28 +44,9 @@ namespace Clover
         /// </summary>
         static readonly bool SlowRender = (RenderCapability.Tier >> 16) < 2;
 
-        /// <summary>
-        /// 缩图倍率。
-        ///
-        /// 1/8 太小：1053×632 会变成 131×79，壁纸的色块边界全丢，
-        /// 拉回原尺寸后只剩一片模糊的平均色 —— 看不出"透的是壁纸"。
-        /// 1/4（263×158）保留了足够的色块层次，模糊后仍能辨认出
-        /// "这里是深色区、那里是浅色区"，这才是毛玻璃该有的样子。
-        ///
-        /// 开销：1/4 是 1/8 的 4 倍像素，但绝对值仍很小（4 万像素级），
-        /// 配合 BlurEffect 的 Quality 模式实测无感知差异。
-        /// </summary>
-        const int Downscale = 4;
-
-        /// <summary>
-        /// 截屏时向内收缩的边距（DIP）。
-        ///
-        /// 为什么要收缩：窗口边缘是圆角，截到的四个角是圆角外的桌面，
-        /// 直接铺上去会在圆角处露出不匹配的颜色。收缩后只用中间部分，
-        /// 拉伸铺满时圆角区域被拉伸的像素覆盖，看不出接缝。
-        /// </summary>
-        const double Inset = 14;
-
+        // 注：原 Downscale(缩图倍率) 和 Inset(截屏内缩) 两个常量已删除 ——
+        // 改成固定背景图后不再需要"截屏 + 缩放"这套逻辑。
+        // 图片本身是 1920x1200，按面板比例裁剪即可，无需再缩。
         readonly Window owner;
         /// <summary>承载背景图的容器（背景会被插到它的最底层）。</summary>
         readonly Panel host;
@@ -74,7 +56,7 @@ namespace Clover
         Border grainLayer;             // 噪点层：磨砂颗粒感
         Border highlightLayer;         // 高光层：内边缘 1px 亮线，模拟玻璃厚度
 
-        BitmapImage cached;
+        ImageSource cached;
         string cacheKey = "";
         BlurEffect blur;
 
@@ -89,30 +71,30 @@ namespace Clover
         /// </summary>
         public double CornerRadius = 16;
 
-        public GlassBackdrop(Window owner, Panel host)
+        public GlassBackdrop(Window owner, Panel host, string resDirectory)
         {
             this.owner = owner;
             this.host = host;
+            this.resDir = resDirectory;
         }
 
         /// <summary>当前是否可用（软件渲染时不可用）。</summary>
         public static bool Supported { get { return !SlowRender; } }
 
-        /// <summary>玻璃浓度 0-100。0 = 完全关闭（不截屏、不垫底）。</summary>
+        /// <summary>玻璃浓度 0-100。0 = 完全关闭（不读图、不垫底）。</summary>
         public double OpacityPercent = 72;
 
         /// <summary>
-        /// 模糊半径（作用在**已缩小**的图上）。
+        /// 模糊半径（作用在裁剪后的背景图上）。
         ///
-        /// ⚠ 关键换算：BlurEffect.Radius 是相对**当前图片尺寸**的像素数，
-        /// 而图片已经缩到 1/Downscale。图片被 Stretch.Fill 拉回原尺寸时，
-        /// 视觉模糊半径 = Radius × Downscale。
+        /// 改成固定背景图后，模糊的语义变简单了：图片按面板比例裁剪后
+        /// 被 Stretch.Fill 铺满，所以 Radius 就是**视觉上的模糊像素数**。
         ///
-        /// 所以想要"视觉上约 20px 的模糊"，Radius 应该设 20/8 ≈ 2.5，
-        /// 而不是 20 —— 第一版直接写 18，实际视觉模糊 = 144px，
-        /// 整个背景糊成一片纯色，完全看不出是壁纸。
+        /// 12.0 是"看得出是渐变、但看不出任何边界"的程度 ——
+        /// A1 本身就是平滑渐变，模糊只是为了让它在面板边缘不显生硬。
+        /// 若以后换成有纹理的图，这个值需要调大。
         /// </summary>
-        public double BlurRadius = 5.0;
+        public double BlurRadius = 12.0;
 
         /// <summary>
         /// 染色强度（0-1）。
@@ -244,53 +226,104 @@ namespace Clover
             catch { }
         }
 
+        /// <summary>
+        /// 背景图文件名（res 目录下）。
+        ///
+        /// **为什么不再截屏**：
+        /// 截屏方案依赖桌面壁纸，壁纸一换观感全变，而且壁纸上的文字/图案
+        /// 会透过来干扰阅读 —— 实测壁纸上的"我们买了50箱泡面"透过
+        /// 77% 不透明度的面板仍然清晰可辨。
+        ///
+        /// 固定背景图则完全可控：配色自己定，永远不干扰文字。
+        /// 这张 background-a1.png 是深青对角渐变（#0A1418 → #1E3A42，
+        /// 45° 方向），与面板主色 #172A30 同族。
+        /// </summary>
+        const string BackgroundFile = "background-a1.png";
+
+        /// <summary>背景图所在目录（res）。构造时传入。</summary>
+        string resDir;
+
+        /// <summary>已加载的背景图（只读一次，之后复用）。</summary>
+        BitmapImage backgroundImage;
+
         /// <summary>截取窗口所在区域并缩小、模糊。</summary>
-        BitmapImage Capture(Native.RECT rect, int dpi)
+        ImageSource Capture(Native.RECT rect, int dpi)
         {
             try
             {
-                double scale = dpi / 96.0;
-                int inset = (int)Math.Round(Inset * scale);
-
-                int srcX = rect.Left + inset;
-                int srcY = rect.Top + inset;
-                int srcW = Math.Max(1, (rect.Right - rect.Left) - inset * 2);
-                int srcH = Math.Max(1, (rect.Bottom - rect.Top) - inset * 2);
-
-                // 屏幕边界保护：窗口可能有一部分在屏幕外（拖到边缘时）
-                if (srcX < 0) { srcW += srcX; srcX = 0; }
-                if (srcY < 0) { srcH += srcY; srcY = 0; }
-                if (srcW < 1 || srcH < 1) return null;
-
-                using (System.Drawing.Bitmap full = new System.Drawing.Bitmap(srcW, srcH))
-                {
-                    using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(full))
-                    {
-                        g.CopyFromScreen(srcX, srcY, 0, 0, new System.Drawing.Size(srcW, srcH));
-                    }
-
-                    // 缩到 1/8：模糊时细节不可见，但 GPU 开销降 64 倍
-                    int sw = Math.Max(1, srcW / Downscale);
-                    int sh = Math.Max(1, srcH / Downscale);
-                    using (System.Drawing.Bitmap small = new System.Drawing.Bitmap(full, sw, sh))
-                    using (MemoryStream ms = new MemoryStream())
-                    {
-                        small.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                        ms.Position = 0;
-
-                        BitmapImage img = new BitmapImage();
-                        img.BeginInit();
-                        img.CacheOption = BitmapCacheOption.OnLoad;
-                        img.StreamSource = ms;
-                        img.EndInit();
-                        img.Freeze();   // 冻结后可跨线程/跨次复用
-                        return img;
-                    }
-                }
+                return CaptureFromFile(rect, dpi);
             }
             catch (Exception ex)
             {
-                Ui.LogError(ex, "截取毛玻璃背景");
+                Ui.LogError(ex, "读取毛玻璃背景");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 从 res 读固定背景图，并按面板比例裁剪。
+        ///
+        /// 为什么不直接整图铺：背景图是 1920×1200（屏幕尺寸），
+        /// 面板只是其中一块。整图 Stretch.Fill 会把画面压扁变形。
+        /// 这里按面板的宽高比从对应位置裁一块。
+        ///
+        /// 为什么裁剪位置跟着面板走：让背景随面板移动而"平移"，
+        /// 视觉上像一张固定的壁纸在面板后面（而不是每块面板都显示
+        /// 同一块画面，那样移动时会觉得背景"粘"在窗口上）。
+        /// </summary>
+        ImageSource CaptureFromFile(Native.RECT rect, int dpi)
+        {
+            try
+            {
+                if (backgroundImage == null)
+                {
+                    if (string.IsNullOrEmpty(resDir)) return null;
+                    string path = Path.Combine(resDir, BackgroundFile);
+                    if (!File.Exists(path)) return null;
+
+                    BitmapImage bi = new BitmapImage();
+                    bi.BeginInit();
+                    bi.CacheOption = BitmapCacheOption.OnLoad;
+                    bi.UriSource = new Uri(path, UriKind.Absolute);
+                    bi.EndInit();
+                    bi.Freeze();
+                    backgroundImage = bi;
+                }
+
+                BitmapImage cached = backgroundImage;
+
+                // 按面板在屏幕上的相对位置，从背景图里裁对应区域
+                double scrW = Math.Max(1, SystemParameters.PrimaryScreenWidth);
+                double scrH = Math.Max(1, SystemParameters.PrimaryScreenHeight);
+                double relX = (rect.Left + (rect.Right - rect.Left) / 2.0) / scrW;
+                double relY = (rect.Top + (rect.Bottom - rect.Top) / 2.0) / scrH;
+
+                double panelW = Math.Max(1, rect.Right - rect.Left);
+                double panelH = Math.Max(1, rect.Bottom - rect.Top);
+
+                // 裁剪窗口：以面板中心为锚点，尺寸按面板比例
+                double cropW = cached.PixelWidth * Math.Min(1.0, panelW / scrW + 0.35);
+                double cropH = cropW * (panelH / panelW);
+                if (cropH > cached.PixelHeight)
+                {
+                    cropH = cached.PixelHeight;
+                    cropW = cropH * (panelW / panelH);
+                }
+
+                int cx = (int)Math.Round(relX * cached.PixelWidth);
+                int cy = (int)Math.Round(relY * cached.PixelHeight);
+                int x0 = (int)Math.Max(0, Math.Min(cached.PixelWidth - cropW, cx - cropW / 2));
+                int y0 = (int)Math.Max(0, Math.Min(cached.PixelHeight - cropH, cy - cropH / 2));
+                int cw = (int)Math.Max(1, Math.Min(cropW, cached.PixelWidth - x0));
+                int ch = (int)Math.Max(1, Math.Min(cropH, cached.PixelHeight - y0));
+
+                CroppedBitmap crop = new CroppedBitmap(cached, new Int32Rect(x0, y0, cw, ch));
+                crop.Freeze();
+                return crop;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "读取背景图");
                 return null;
             }
         }
@@ -338,7 +371,7 @@ namespace Clover
         }
 
         /// <summary>把背景图挂到最底层（幂等：已有就更新，没有就建）。</summary>
-        void Attach(BitmapImage img)
+        void Attach(ImageSource img)
         {
             try
             {
