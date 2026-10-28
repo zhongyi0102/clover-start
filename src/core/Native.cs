@@ -94,15 +94,6 @@ namespace Clover
             public IntPtr lParam;
         }
 
-        // 0x0A=ABM_SETSTATE, 1=ABS_AUTOHIDE, 2=ABS_ALWAYSONTOP
-        public static void SetTaskbarAutoHide(bool autoHide)
-        {
-            APPBARDATA d = new APPBARDATA();
-            d.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
-            d.lParam = new IntPtr(autoHide ? 1 : 2);
-            SHAppBarMessage(0x0A, ref d);
-        }
-
         public static int GetTaskbarState()
         {
             APPBARDATA d = new APPBARDATA();

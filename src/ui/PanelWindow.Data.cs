@@ -115,8 +115,8 @@ namespace Clover
             try
             {
                 if (miniBar == null) return;
-                miniBar.Enabled = settings.MiniTaskbar;
-                if (!settings.MiniTaskbar) miniBar.Clear();
+                miniBar.Enabled = settings.EffectiveMiniTaskbar;   // 安全模式下自动为 false
+                if (!miniBar.Enabled) miniBar.Clear();
                 OverlayGate.Refresh();
             }
             catch (Exception ex)

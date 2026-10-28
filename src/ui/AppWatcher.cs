@@ -40,12 +40,13 @@ namespace Clover
         /// <summary>是否自动把桌面快捷方式移到 desktop-backup。对应设置 desktopAutoClean。</summary>
         public bool AutoCleanEnabled
         {
-            // 原来这里是 `settings == null || settings.DesktopAutoClean`。
-            // 这是个危险的死代码：settings 已被构造函数保证非 null，语句永不生效；
-            // 而万一真为 null，它会返回 true —— 也就是"自动移走桌面文件"**默认打开**，
-            // 与该设置的默认值（false）相反。对一个会动用户桌面文件的功能，
-            // 错误方向的回退不能留。现在靠 readonly 从编译期保证非 null。
-            get { return settings.DesktopAutoClean; }
+            // 读 Effective* 而不是 DesktopAutoClean：安全模式下自动为 false。
+            // 原来这里是 `settings == null || settings.DesktopAutoClean`，那是个危险的死代码：
+            // settings 已被构造函数保证非 null，语句永不生效；而万一真为 null，
+            // 它会返回 true —— 也就是"自动移走桌面文件"默认打开，与该设置的默认值相反。
+            // 对一个会动用户桌面文件的功能，错误方向的回退不能留。
+            // 现在靠 readonly 从编译期保证非 null，并改用 Effective 值。
+            get { return settings.EffectiveDesktopAutoClean; }
             set
             {
                 settings.DesktopAutoClean = value;
@@ -71,7 +72,13 @@ namespace Clover
 
             periodic = new DispatcherTimer();
             periodic.Interval = TimeSpan.FromMinutes(15);
-            periodic.Tick += delegate { RefreshCatalog(); };
+            periodic.Tick += delegate
+            {
+                // 关停期间不再触发扫描：它会往界面线程排一个刷新委托，
+                // 而那时面板可能已在销毁中
+                if (ErrorLog.ShuttingDown) return;
+                RefreshCatalog();
+            };
             periodic.Start();
 
             // ---------- 首次运行检测 ----------

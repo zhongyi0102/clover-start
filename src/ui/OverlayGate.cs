@@ -51,13 +51,31 @@ namespace Clover
             if (timer != null) return;
             timer = new DispatcherTimer(DispatcherPriority.Normal);
             timer.Interval = TimeSpan.FromMilliseconds(700);
-            timer.Tick += delegate { Tick(); };
+            timer.Tick += delegate { Refresh(); };   // 走 Refresh 以复用关停检查
             timer.Start();
+        }
+
+        /// <summary>
+        /// 停止轮询并清空登记表（退出时调用）。
+        ///
+        /// 必须停：定时器在程序关停时还会跳，而那时窗口已经关闭，
+        /// 对已关闭的 Window 调 Show() 会抛 InvalidOperationException
+        /// —— 表现成一条 ERROR，还会被记成崩溃计数。
+        /// </summary>
+        public static void Stop()
+        {
+            try
+            {
+                if (timer != null) { timer.Stop(); timer = null; }
+                entries.Clear();
+            }
+            catch { }
         }
 
         /// <summary>立即重新计算一次（切换任务栏模式、窗口增删后调用）。</summary>
         public static void Refresh()
         {
+            if (ErrorLog.ShuttingDown) return;
             Tick();
         }
 
@@ -147,12 +165,26 @@ namespace Clover
         static void Apply(Window w, bool show)
         {
             if (w == null) return;
-            if (!show)
+
+            // 窗口被关掉后不能再动 Visibility/Show —— 会抛 InvalidOperationException。
+            // 用 try/catch 兜住而不是只判断 IsVisible：IsVisible 在"已 Close 但尚未
+            // 从 Dispatcher 摘除"的窗口上仍可能为 false，随后调 Show() 照样抛。
+            try
             {
-                if (w.IsVisible) w.Hide();
+                if (!show)
+                {
+                    if (w.IsVisible) w.Hide();
+                    return;
+                }
+                if (!w.IsVisible) w.Show();
+            }
+            catch (InvalidOperationException)
+            {
+                // 窗口已关闭：静默跳过，下一轮 Tick 会发现它不再需要管理
                 return;
             }
-            if (!w.IsVisible) w.Show();
+            catch { return; }
+
             try
             {
                 IntPtr h = new WindowInteropHelper(w).Handle;

@@ -133,6 +133,103 @@ namespace Clover
             return result;
         }
 
+        /// <summary>
+        /// 是/否确认框（主题化，跟随深浅色）。
+        ///
+        /// 为什么不用 MessageBox：WinForms 的 MessageBox **不跟随主题**，
+        /// 深色模式下会弹出一个刺眼的浅色框。自己画一个更一致，也更短。
+        /// </summary>
+        public static bool Confirm(Window owner, string title, string message, string okText = "确定")
+        {
+            bool result = false;
+            Window dlg = new Window();
+
+            try
+            {
+                dlg.WindowStyle = WindowStyle.None;
+                dlg.AllowsTransparency = true;
+                dlg.Background = Brushes.Transparent;
+                dlg.ResizeMode = ResizeMode.NoResize;
+                dlg.ShowInTaskbar = false;
+                dlg.SizeToContent = SizeToContent.WidthAndHeight;
+                dlg.Title = title;
+                if (owner != null && owner.IsVisible)
+                {
+                    dlg.Owner = owner;
+                    dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                }
+                else
+                {
+                    dlg.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                }
+
+                Border root = new Border();
+                root.CornerRadius = new CornerRadius(12);
+                root.Background = Ui.Bg;
+                root.BorderBrush = Ui.Line;
+                root.BorderThickness = new Thickness(1);
+                root.Margin = new Thickness(12);
+                root.Effect = Ui.Shadow(20, 0.25, 4);
+
+                StackPanel sp = new StackPanel();
+                sp.Margin = new Thickness(20, 16, 20, 14);
+
+                TextBlock head = Ui.T(title, 13.5, Ui.Fg, FontWeights.SemiBold);
+                head.Margin = new Thickness(0, 0, 0, 10);
+                sp.Children.Add(head);
+
+                TextBlock body = Ui.T(message, 12.5, Ui.Fg);
+                body.TextWrapping = TextWrapping.Wrap;
+                body.MaxWidth = 380;
+                sp.Children.Add(body);
+
+                StackPanel buttons = new StackPanel();
+                buttons.Orientation = Orientation.Horizontal;
+                buttons.HorizontalAlignment = HorizontalAlignment.Right;
+                buttons.Margin = new Thickness(0, 16, 0, 0);
+
+                Border cancel = MakeButton("取消", delegate { result = false; dlg.DialogResult = false; });
+                Border ok = MakeButton(okText, delegate { result = true; dlg.DialogResult = true; });
+                buttons.Children.Add(cancel);
+                buttons.Children.Add(ok);
+                sp.Children.Add(buttons);
+
+                root.Child = sp;
+                dlg.Content = root;
+
+                dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
+                {
+                    if (e.Key == Key.Escape) { result = false; dlg.DialogResult = false; e.Handled = true; }
+                };
+
+                root.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
+                {
+                    try
+                    {
+                        DependencyObject d = e.OriginalSource as DependencyObject;
+                        if (IsDescendantOf(d, ok) || IsDescendantOf(d, cancel)) return;
+                        dlg.DragMove();
+                    }
+                    catch { }
+                };
+
+                dlg.Loaded += delegate { try { ok.Focus(); } catch { } };
+
+                dlg.ShowDialog();
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("确认框失败: " + ex.Message);
+                return false;
+            }
+            finally
+            {
+                try { dlg.Close(); } catch { }
+            }
+
+            return result;
+        }
+
         static Border MakeButton(string text, Action onClick)
         {
             Border b = new Border();

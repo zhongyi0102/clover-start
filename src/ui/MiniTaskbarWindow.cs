@@ -16,6 +16,9 @@ namespace Clover
         StackPanel stack;
         List<IntPtr> items = new List<IntPtr>();
 
+        /// <summary>刷新定时器（存成字段，退出时要停）。</summary>
+        DispatcherTimer refreshTimer;
+
         /// <summary>功能开关。为 false 时整条迷你任务栏不显示、也不接收新窗口。</summary>
         public bool Enabled = true;
 
@@ -44,8 +47,22 @@ namespace Clover
 
             DispatcherTimer t = new DispatcherTimer();
             t.Interval = TimeSpan.FromMilliseconds(1500);
-            t.Tick += delegate { Refresh(); };
+            t.Tick += delegate { if (!ErrorLog.ShuttingDown) Refresh(); };
             t.Start();
+            refreshTimer = t;   // 存成字段，退出时要停（否则关停期间还会跳）
+        }
+
+        /// <summary>
+        /// 停止刷新（退出时调用）。
+        ///
+        /// 原先是构造函数里的局部变量，**没有引用可以停它** ——
+        /// 程序关停后它每 1.5 秒还会跳一次并碰已关闭的窗口，
+        /// 抛出的异常会被记成崩溃计数。
+        /// </summary>
+        public void StopRefresh()
+        {
+            try { if (refreshTimer != null) { refreshTimer.Stop(); refreshTimer = null; } }
+            catch { }
         }
 
         public void Add(IntPtr hwnd)

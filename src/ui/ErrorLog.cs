@@ -23,6 +23,19 @@ namespace Clover
         static string lastMessage;
         static int repeatCount;      // 上一条消息已连续出现的总次数（含第一次）
 
+        /// <summary>
+        /// 正在关停。
+        ///
+        /// 关停期间各定时器可能还在跳（它们的 Stop 是异步的），
+        /// 对已关闭的窗口调 Show/Hide 会抛 InvalidOperationException。
+        /// 那属于**关停噪音**，不是真崩溃：
+        ///   · 不该写 ERROR 刷屏
+        ///   · 更不该走 CrashGuard.RecordCrash() —— 否则每次干净退出都记一次，
+        ///     连退 3 次就误判成"连续崩溃"而进入安全模式。
+        /// 之前 2026-10-20 和 10-28 各出现过一次这个 ERROR，就是这条路径。
+        /// </summary>
+        public static volatile bool ShuttingDown = false;
+
         /// <summary>同一条消息连续出现这么多次时，即使内容没变化也补一条计数汇总。</summary>
         const int RepeatTrace = 100;
 
@@ -56,6 +69,17 @@ namespace Clover
         {
             app.DispatcherUnhandledException += delegate(object sender, DispatcherUnhandledExceptionEventArgs e)
             {
+                // 关停期间的异常：只记一行 INFO 说明，不弹窗、不记崩溃。
+                // 见 ShuttingDown 的说明 —— 那类异常来自还在跳的定时器，
+                // 把它算成崩溃会让"干净退出"累积计数，最终误入安全模式。
+                if (ShuttingDown)
+                {
+                    Write("INFO", "关停期间忽略异常（计时器收尾）: "
+                        + (e.Exception == null ? "?" : e.Exception.GetType().Name + ": " + e.Exception.Message));
+                    e.Handled = true;
+                    return;
+                }
+
                 Hook(e.Exception, "DispatcherUnhandledException");
                 try { CrashGuard.RecordCrash(); } catch { }
                 // 界面线程异常：先把系统状态放回来，再决定是否继续

@@ -19,6 +19,17 @@ namespace Clover
     ///   - 必须放在 ScrollViewer 里，且 ScrollViewer 的 CanContentScroll = true
     ///   - 必须设置 ItemWidth / ItemHeight（磁贴是固定尺寸，符合条件）
     ///   - ItemsControl 要开启 VirtualizingPanel.IsVirtualizing="True"
+    ///
+    /// ⚠ 当前**未接线**（实测：除本文件外，src 内引用 0 次）。
+    /// 面板仍用普通 WrapPanel —— 119 个应用的规模下虚拟化没有收益，
+    /// 反而要改 ScrollViewer 的滚动语义（CanContentScroll、偏移量换算），
+    /// 引入滚动位置记忆和键盘导航的回归风险。
+    ///
+    /// 接线时机（满足其一再动）：
+    ///   - 应用数超过约 300 个
+    ///   - 实测单次渲染超过 300 ms
+    /// 保留本文件是因为它已验证过结构可行，届时不必重写；
+    /// 接线时注意 PanelWindow.Nav.cs 的滚动恢复与选中态逻辑要一起改。
     /// </summary>
     class VirtualizingWrapPanel : VirtualizingPanel, IScrollInfo
     {

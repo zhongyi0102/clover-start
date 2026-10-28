@@ -44,6 +44,9 @@ namespace Clover
             taskTimer.Interval = TimeSpan.FromMilliseconds(1500);
             taskTimer.Tick += delegate
             {
+                // 关停期间不再刷新：枚举窗口会为每个窗口取图标，
+                // 而那时窗口正在被销毁，既白费力气也可能碰到半销毁状态
+                if (ErrorLog.ShuttingDown) return;
                 try { if (IsVisible) RefreshTaskList(); }
                 catch (Exception ex) { Ui.LogError(ex, "刷新任务栏列表"); }
             };
@@ -191,6 +194,28 @@ namespace Clover
         void ShowTaskMenu(TaskWindow w)
         {
             ContextMenu cm = new ContextMenu();
+
+            // ---- 窗口基本操作 ----
+            // 原先这里只有「显示在任务栏」，而迷你任务栏的菜单有「关闭窗口」——
+            // 同一个窗口在两处右键，能做的事却不一样，这是能力不对等。
+            // TaskList 早已备好 Minimize / CloseWindow，接上即可。
+            MenuItem act = new MenuItem();
+            act.Header = "切换到该窗口";
+            act.Click += delegate { TaskList.Activate(w.Hwnd); HidePanel(); };
+            cm.Items.Add(act);
+
+            MenuItem min = new MenuItem();
+            min.Header = "最小化";
+            min.Click += delegate { TaskList.Minimize(w.Hwnd); };
+            cm.Items.Add(min);
+
+            MenuItem close = new MenuItem();
+            close.Header = "关闭窗口";
+            close.ToolTip = "向窗口发送关闭请求（等同于点它的 × 按钮）";
+            close.Click += delegate { TaskList.CloseWindow(w.Hwnd); };
+            cm.Items.Add(close);
+
+            cm.Items.Add(new Separator());
 
             MenuItem pin = new MenuItem();
             pin.Header = "显示在任务栏";

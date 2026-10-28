@@ -177,16 +177,20 @@ namespace Clover
                 bool safeMode = forceSafeMode || settings.SafeMode || CrashGuard.ShouldEnterSafeMode(baseDir, forceSafeMode);
                 if (safeMode)
                 {
-                    // 安全模式下强制关掉所有会动系统状态的功能
-                    settings.MiniTaskbar = false;
-                    settings.TaskbarHiding = false;
-                    settings.HideTaskbar = false;
-                    settings.DesktopAutoClean = false;
-                    settings.FullscreenDetect = false;
-                    settings.HoverReveal = false;
+                    // 安全模式下强制关闭所有会动系统状态的功能。
+                    //
+                    // **不再改写 settings 的字段**（原来是 settings.MiniTaskbar = false 等）。
+                    // 原因：Save() 会写全部字段，而安全模式期间用户只要动任意一个设置，
+                    // 那几项降级就会被永久固化进 settings.json —— 其中
+                    // fullscreenDetect / hoverReveal 没有界面开关，一旦固化就永久失效。
+                    // 现在改为只置运行时门控，用户的偏好原封不动留在文件里，
+                    // 消费方读 Effective* 系列即可（见 Settings.cs 的说明）。
+                    Settings.SafeModeActive = true;
+
                     TaskbarVisibility.RestoreSystemState("进入安全模式");
                     ErrorLog.Warn("进入安全模式：不隐藏任务栏、不启用迷你任务栏、不移动桌面快捷方式、不做全屏检测。"
-                        + "（2 分钟内连续异常退出 " + 3 + " 次触发，或用 --safe-mode 强制）");
+                        + "（2 分钟内连续异常退出 " + 3 + " 次触发，或用 --safe-mode 强制）"
+                        + "。你的设置没被改动，退出安全模式后即恢复。");
                 }
 
                 // ---------- 4) 拉起看门狗（安全模式下也拉，它只负责还原） ----------
@@ -221,13 +225,13 @@ namespace Clover
                 AppWatcher watcher = new AppWatcher(baseDir, panel, settings);
                 panel.AttachWatcher(watcher);
                 MiniTaskbarWindow miniBar = new MiniTaskbarWindow();
-                miniBar.Enabled = settings.MiniTaskbar;
+                miniBar.Enabled = settings.EffectiveMiniTaskbar;   // 安全模式下自动为 false
                 panel.AttachMiniBar(miniBar);
 
                 // 全屏视频/游戏时隐藏悬浮按钮，鼠标移到按钮位置再临时显示
                 OverlayGate.HoldVisible = delegate { return panel.IsVisible; };
-                OverlayGate.Enabled = settings.FullscreenDetect;
-                OverlayGate.HoverReveal = settings.HoverReveal;
+                OverlayGate.Enabled = settings.EffectiveFullscreenDetect;
+                OverlayGate.HoverReveal = settings.EffectiveHoverReveal;
                 OverlayGate.Register(trigger,
                     delegate { return new Rect(trigger.Left, trigger.Top, trigger.Width, trigger.Height); },
                     delegate { return true; }, null);
@@ -318,6 +322,12 @@ namespace Clover
         {
             try
             {
+                // 第一件事：标记正在关停。
+                // 之后各定时器的回调会自查这个标记并直接返回 ——
+                // 否则它们会继续碰已关闭的窗口，抛出的异常会被记成崩溃计数，
+                // 连退 3 次就误判成"连续崩溃"进入安全模式（干净退出不该这样）。
+                ErrorLog.ShuttingDown = true;
+
                 ResourceWatch.Stop();
                 Heartbeat.Stop();
                 Heartbeat.Cleanup(baseDir);

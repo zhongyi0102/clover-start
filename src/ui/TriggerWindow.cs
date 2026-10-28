@@ -45,8 +45,9 @@ namespace Clover
             this.exePath = Path.Combine(baseDir, "app", "CloverStart.exe");
             this.startupLnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "四叶草启动器.lnk");
             this.settingsPath = Path.Combine(baseDir, "config", "settings.json");
-            // 功能被关掉时强制视为“不隐藏”，避免配置文件里留着旧的 true 却无法取消
-            this.hideTaskbar = this.settings.TaskbarHiding && this.settings.HideTaskbar;
+            // 功能被关掉时强制视为“不隐藏”，避免配置文件里留着旧的 true 却无法取消。
+            // 用 EffectiveHideTaskbar：安全模式下自动为 false。
+            this.hideTaskbar = this.settings.EffectiveHideTaskbar;
             this.startWin = new StartButtonWindow();
             this.startWin.Show();
             if (!hideTaskbar) this.startWin.Hide();
@@ -90,9 +91,20 @@ namespace Clover
             // 任务栏图标变化时（新开/关闭窗口）跟随到图标组末尾
             DispatcherTimer follow = new DispatcherTimer();
             follow.Interval = TimeSpan.FromSeconds(2);
-            follow.Tick += delegate { Reposition(); };
+            follow.Tick += delegate { if (!ErrorLog.ShuttingDown) Reposition(); };
             follow.Start();
+            followTimer = follow;   // 存成字段，退出时要停
+
+            // 窗口关闭时把两个常驻定时器停掉，避免关停期间继续跳
+            Closed += delegate
+            {
+                try { if (followTimer != null) { followTimer.Stop(); followTimer = null; } } catch { }
+                try { if (topTimer != null) { topTimer.Stop(); topTimer = null; } } catch { }
+            };
         }
+
+        DispatcherTimer followTimer;
+        DispatcherTimer topTimer;
 
         public void AttachPanel(PanelWindow p)
         {
@@ -303,6 +315,7 @@ namespace Clover
             top.Interval = TimeSpan.FromMilliseconds(1200);
             top.Tick += delegate
             {
+                if (ErrorLog.ShuttingDown) return;   // 关停期间不再碰窗口
                 // 卡死恢复：看门狗曾因主进程卡死还原过任务栏（留下 guard-restored 标记）。
                 // 如果用户仍勾选"隐藏系统任务栏"，自动重新隐藏一次——配额由标记文件保证整轮仅 1 次。
                 if (hideTaskbar && WatchdogResume.TryConsumeRehidePermission())
@@ -327,6 +340,7 @@ namespace Clover
                     Native.SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
             };
             top.Start();
+            topTimer = top;
             ApplyTaskbarVisibility(hideTaskbar);
         }
 
@@ -346,6 +360,10 @@ namespace Clover
                 Ui.Log("收到 TaskbarCreated（资源管理器重启），重新应用任务栏状态");
                 try
                 {
+                    // 任务栏是全新的窗口，上次那条"定位正常"的日志状态已经过时。
+                    // 清掉它，好让下一次 Refresh 重新报一条真实结果，
+                    // 否则 explorer 重启后若定位降级，日志会一直沉默。
+                    TaskbarGeometry.ResetUiStateLog();
                     ApplyTaskbarVisibility(hideTaskbar);
                     lastLeft = double.NaN;
                     lastTop = double.NaN;
@@ -489,9 +507,19 @@ namespace Clover
             taskbarItem.Header = "隐藏系统任务栏";
             taskbarItem.IsCheckable = true;
             taskbarItem.IsChecked = hideTaskbar;
-            taskbarItem.IsEnabled = settings.TaskbarHiding;
+            // 安全模式下禁用：隐藏任务栏是"程序挂了用户就没任务栏"的最高风险操作，
+            // 正是安全模式要挡住的事。菜单项置灰 + 提示原因，比点了没反应清楚。
+            taskbarItem.IsEnabled = settings.EffectiveTaskbarHiding;
+            if (Settings.SafeModeActive)
+            {
+                taskbarItem.ToolTip = "安全模式下已禁用（避免程序异常时系统任务栏回不来）。"
+                    + "退出安全模式后即可使用。";
+            }
             taskbarItem.Click += delegate
             {
+                // 双保险：IsEnabled 已挡住，但菜单可能在打开后被 SafeMode 变化影响
+                if (!settings.EffectiveTaskbarHiding) return;
+
                 hideTaskbar = !hideTaskbar;
                 settings.HideTaskbar = hideTaskbar;
                 settings.Save();
@@ -504,6 +532,46 @@ namespace Clover
                 OverlayGate.Refresh();
             };
             cm.Items.Add(taskbarItem);
+
+            // ---- 悬浮按钮显示策略 ----
+            // fullscreenDetect / hoverReveal 原先只能手改 settings.json，
+            // 界面上没有开关 —— 这两个设置恰好也是被安全模式降级的项，
+            // 一旦被固化就永久失效、还查不出原因（现在安全模式已不再改它们）。
+            cm.Items.Add(new Separator());
+
+            MenuItem fullscreenItem = new MenuItem();
+            fullscreenItem.Header = "全屏时隐藏悬浮按钮";
+            fullscreenItem.IsCheckable = true;
+            // 显示的是**用户的偏好**（原字段），不是 Effective 值 ——
+            // 安全模式下功能被临时停用，但菜单该如实反映"你设的是什么"，
+            // 否则用户会以为自己的设置丢了。
+            fullscreenItem.IsChecked = settings.FullscreenDetect;
+            fullscreenItem.ToolTip = "看视频、玩游戏（全屏）时自动隐藏四叶草按钮，不挡画面";
+            fullscreenItem.Click += delegate
+            {
+                settings.FullscreenDetect = !settings.FullscreenDetect;
+                settings.Save();
+                OverlayGate.Enabled = settings.EffectiveFullscreenDetect;
+                OverlayGate.Refresh();
+                Ui.Log("全屏检测 -> " + settings.FullscreenDetect);
+            };
+            cm.Items.Add(fullscreenItem);
+
+            MenuItem hoverItem = new MenuItem();
+            hoverItem.Header = "全屏时鼠标移过去临时显示";
+            hoverItem.IsCheckable = true;
+            hoverItem.IsChecked = settings.HoverReveal;
+            hoverItem.ToolTip = "全屏时把鼠标移到按钮位置，按钮临时浮现，移开再隐藏。"
+                + "关掉后全屏时按钮直接隐藏、不随鼠标出现";
+            hoverItem.Click += delegate
+            {
+                settings.HoverReveal = !settings.HoverReveal;
+                settings.Save();
+                OverlayGate.HoverReveal = settings.EffectiveHoverReveal;
+                OverlayGate.Refresh();
+                Ui.Log("悬停唤出 -> " + settings.HoverReveal);
+            };
+            cm.Items.Add(hoverItem);
 
             cm.Items.Add(new Separator());
 
@@ -613,9 +681,79 @@ namespace Clover
             };
             cm.Items.Add(exit);
 
+            // ---- 一键回滚（放最后，且要二次确认）----
+            // ResetAll 设计成**独立进程**跑：它会杀掉看门狗，且要求自己不是被回滚的对象。
+            // 所以这里不直接调 ResetAll.Run —— 那是自杀式操作（第 5 步会遍历同名进程）。
+            // 改为拉起一个带 --reset-all 的子进程；该分支在互斥锁之前，
+            // 所以主实例还在跑也不冲突。
+            cm.Items.Add(new Separator());
+
+            MenuItem rollback = new MenuItem();
+            rollback.Header = "一键回滚…";
+            rollback.ToolTip = "撤销本程序对系统做过的所有改动：任务栏可见性、开机自启、"
+                + "看门狗、崩溃保护状态。你的设置和应用清单会保留";
+            rollback.Click += delegate { PromptRollback(); };
+            cm.Items.Add(rollback);
+
             cm.Placement = PlacementMode.Bottom;
             cm.PlacementTarget = root;
             cm.IsOpen = true;
+        }
+
+        /// <summary>
+        /// 一键回滚的确认与执行。
+        ///
+        /// 为什么放在菜单最底部并要二次确认：这是个"撤销所有系统改动"的重操作，
+        /// 误点代价高（任务栏会被放回来、开机自启被删掉）。原先只有命令行能触发，
+        /// 界面上没有任何入口，反而容易让人以为没这个功能。
+        /// </summary>
+        void PromptRollback()
+        {
+            try
+            {
+                bool yes = TextPromptDialog.Confirm(this,
+                    "一键回滚",
+                    "将撤销本程序对系统做过的所有改动：\r\n"
+                    + "  · 恢复系统任务栏（可见性与透明样式）\r\n"
+                    + "  · 移除开机自启快捷方式\r\n"
+                    + "  · 停止看门狗进程\r\n"
+                    + "  · 清除崩溃保护状态（退出安全模式）\r\n\r\n"
+                    + "你的设置、应用清单、使用记录、快捷键备份都会**保留**。\r\n\r\n"
+                    + "回滚完成后本程序会退出。继续吗？",
+                    "确认回滚");
+
+                if (!yes) return;
+
+                string exe = Path.Combine(baseDir, "app", "CloverStart.exe");
+                if (!File.Exists(exe))
+                {
+                    MessageBox.Show("找不到 " + exe + "\r\n无法执行回滚。", "四叶草");
+                    return;
+                }
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = "--reset-all --keep-config",
+                    UseShellExecute = false
+                });
+
+                Ui.Log("用户从菜单触发一键回滚（--reset-all --keep-config）");
+
+                MessageBox.Show(
+                    "回滚已启动，本程序即将退出。\r\n\r\n"
+                    + "回滚结果可在 config\\error.log 里查看（搜索「一键回滚」）。",
+                    "四叶草");
+
+                // 让子进程先跑起来，再退出自己（否则它可能被本进程的退出清理干扰）
+                TaskbarVisibility.RestoreSystemState("一键回滚（用户触发）");
+                Application.Current.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "一键回滚");
+                MessageBox.Show("启动回滚失败：" + ex.Message, "四叶草");
+            }
         }
 
         /// <summary>
@@ -683,12 +821,19 @@ namespace Clover
             }
         }
 
-        /// <summary>显示运行状态（崩溃计数、安全模式、内存句柄）。</summary>
+        /// <summary>
+        /// 显示运行状态（崩溃计数、安全模式、内存句柄），并提供退出安全模式。
+        ///
+        /// 「退出安全模式」原先只有 `--reset-all` 命令行能触发：
+        /// CrashGuard.ClearSafeMode() 的注释写着"用户在安全模式面板里点恢复正常模式"，
+        /// 但那个界面入口一直没做。进了安全模式就只能手改 JSON 或走命令行。
+        /// </summary>
         void ShowHealthStatus()
         {
             try
             {
                 string msg = "";
+                bool safeInFile = false;
 
                 // 崩溃计数 / 安全模式
                 try
@@ -708,11 +853,10 @@ namespace Clover
                                 foreach (object o in JsonIO.AsArray(v))
                                     crashes++;
                             }
-                            bool safe = d.TryGetValue("safeMode", out v) && v != null && Convert.ToBoolean(v);
+                            safeInFile = d.TryGetValue("safeMode", out v) && v != null && Convert.ToBoolean(v);
 
                             msg += "异常退出记录（2 分钟内累计到 3 次会进安全模式）：\r\n"
-                                + "  最近窗口内 " + crashes + " 次\r\n"
-                                + "  安全模式：" + (safe ? "已进入（任务栏不隐藏、不做全屏检测）" : "否") + "\r\n\r\n";
+                                + "  文件记录 " + crashes + " 次\r\n\r\n";
                         }
                     }
                     else
@@ -724,6 +868,20 @@ namespace Clover
                 {
                     msg += "读崩溃记录失败：" + ex.Message + "\r\n\r\n";
                 }
+
+                // 运行时真实状态（比只看文件准：--safe-mode 强制时文件里可能没标记）
+                bool safeNow = Settings.SafeModeActive;
+                msg += "安全模式：" + (safeNow ? "**本次运行处于安全模式**" : "否") + "\r\n";
+                if (safeNow)
+                {
+                    msg += "  已临时停用：隐藏任务栏、迷你任务栏、自动移走桌面快捷方式、全屏检测\r\n"
+                        + "  你的设置**没有被改动**，退出安全模式后即刻恢复\r\n";
+                }
+                else if (safeInFile)
+                {
+                    msg += "  （文件里有标记，但本次运行未进入；下次启动会重新判定）\r\n";
+                }
+                msg += "\r\n";
 
                 // 内存 / 句柄
                 try
@@ -764,6 +922,30 @@ namespace Clover
                     }
                 }
                 catch { }
+
+                // ---- 退出安全模式 ----
+                // 只是清 crash-guard.json 里的标记；本次运行已经生效的功能降级要重启才恢复，
+                // 所以提示里说清楚。用户设置本身从未被改动（见 Settings.SafeModeActive 的说明）。
+                if (Settings.SafeModeActive || safeInFile)
+                {
+                    msg += "\r\n\r\n是否现在退出安全模式？\r\n"
+                        + "（会清掉崩溃计数与安全模式标记。由于相关功能在本次启动时已停用，\r\n"
+                        + "　需要重启程序才会完全恢复。）";
+
+                    bool yes = TextPromptDialog.Confirm(this, "退出安全模式", msg, "退出安全模式");
+                    if (yes)
+                    {
+                        CrashGuard.ClearSafeMode();
+                        Settings.SafeModeActive = false;
+                        Ui.Log("用户手动退出安全模式");
+                        MessageBox.Show(
+                            "已退出安全模式。\r\n\r\n"
+                            + "重启程序后，隐藏任务栏 / 迷你任务栏 / 全屏检测等功能会按你的设置恢复。\r\n"
+                            + "（你的设置文件从未被安全模式改动过）",
+                            "四叶草");
+                    }
+                    return;
+                }
 
                 MessageBox.Show(msg.TrimEnd(), "运行状态 · 四叶草");
             }

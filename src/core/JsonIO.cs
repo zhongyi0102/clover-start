@@ -141,13 +141,6 @@ namespace Clover
             return list.ToArray();
         }
 
-        /// <summary>值能不能当作数组处理（字符串不算）。</summary>
-        public static bool IsArray(object v)
-        {
-            if (v == null || v is string) return false;
-            return v is System.Collections.IEnumerable;
-        }
-
         /// <summary>
         /// 把 JSON 值读成字符串数组。非数组（含字符串、数字、null）一律返回空数组。
         /// 这是读数组型字段的**安全写法**，替代直接 foreach IEnumerable。

@@ -61,6 +61,58 @@ namespace Clover
         /// </summary>
         public string Theme = "system";
 
+        /// <summary>
+        /// 本次运行是否处于安全模式。
+        ///
+        /// **只在运行时生效，不写回 settings.json。**
+        ///
+        /// 为什么不直接改各个开关的值：`Save()` 会写**全部字段**，
+        /// 而安全模式原本是在内存里把 6 个开关改成 false。于是安全模式期间
+        /// 用户只要动任意一个设置（换主题、开关别的功能），
+        /// 那 6 项降级就会被**永久固化进 settings.json**。
+        /// 其中 `fullscreenDetect` / `hoverReveal` 没有界面开关，
+        /// 一旦被固化就永久失效，只能手改 JSON。
+        ///
+        /// 现在改成：用户的偏好原封不动留在文件里，安全模式只让
+        /// `Effective*` 系列返回 false，用户一退出安全模式立刻恢复原样。
+        /// </summary>
+        public static bool SafeModeActive = false;
+
+        // ---- 安全模式感知的有效值 ----
+        // 所有**消费方**（窗口、悬浮条、监听器）都应读这些，而不是直接读字段，
+        // 否则安全模式挡不住。菜单显示则读原字段（见 TriggerWindow 的说明）。
+
+        public bool EffectiveMiniTaskbar
+        {
+            get { return MiniTaskbar && !SafeModeActive; }
+        }
+
+        public bool EffectiveTaskbarHiding
+        {
+            get { return TaskbarHiding && !SafeModeActive; }
+        }
+
+        /// <summary>实际是否该隐藏任务栏（总开关 + 当前状态 + 安全模式）。</summary>
+        public bool EffectiveHideTaskbar
+        {
+            get { return TaskbarHiding && HideTaskbar && !SafeModeActive; }
+        }
+
+        public bool EffectiveDesktopAutoClean
+        {
+            get { return DesktopAutoClean && !SafeModeActive; }
+        }
+
+        public bool EffectiveFullscreenDetect
+        {
+            get { return FullscreenDetect && !SafeModeActive; }
+        }
+
+        public bool EffectiveHoverReveal
+        {
+            get { return HoverReveal && !SafeModeActive; }
+        }
+
         string path;
 
         /// <summary>

@@ -38,6 +38,65 @@ namespace Clover
             Check(s1.HiddenCategories.Count == 0, "默认没有隐藏分类");
             Check(s1.NavCollapsed == false, "默认侧栏展开（不收起）");
             Check(s1.Theme == "system", "默认主题跟随系统");
+            Check(Settings.SafeModeActive == false, "默认不在安全模式");
+
+            // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
+            // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
+            // 而 Save() 会写全部字段 —— 于是安全模式期间用户只要动任意一个设置，
+            // 那几项降级就被永久固化进 settings.json。
+            // 其中 fullscreenDetect / hoverReveal 没有界面开关，一旦固化就永久失效。
+            {
+                string rSafe = NewRoot();
+                Settings s = Settings.Load(rSafe);
+
+                // 用户偏好：除了桌面清理，其余都开着
+                s.MiniTaskbar = true;
+                s.TaskbarHiding = true;
+                s.HideTaskbar = true;
+                s.FullscreenDetect = true;
+                s.HoverReveal = true;
+                s.DesktopAutoClean = true;
+                s.Save();
+
+                // 进入安全模式
+                Settings.SafeModeActive = true;
+
+                // 有效值应全部被压制
+                Check(!s.EffectiveMiniTaskbar, "安全模式：迷你任务栏无效");
+                Check(!s.EffectiveTaskbarHiding, "安全模式：允许隐藏任务栏无效");
+                Check(!s.EffectiveHideTaskbar, "安全模式：隐藏任务栏无效");
+                Check(!s.EffectiveDesktopAutoClean, "安全模式：桌面自动清理无效");
+                Check(!s.EffectiveFullscreenDetect, "安全模式：全屏检测无效");
+                Check(!s.EffectiveHoverReveal, "安全模式：悬停唤出无效");
+
+                // ★但原字段必须原封不动（菜单要如实显示用户的偏好）
+                Check(s.MiniTaskbar, "安全模式不改 MiniTaskbar 原字段");
+                Check(s.TaskbarHiding, "安全模式不改 TaskbarHiding 原字段");
+                Check(s.HideTaskbar, "安全模式不改 HideTaskbar 原字段");
+                Check(s.FullscreenDetect, "安全模式不改 FullscreenDetect 原字段");
+                Check(s.HoverReveal, "安全模式不改 HoverReveal 原字段");
+                Check(s.DesktopAutoClean, "安全模式不改 DesktopAutoClean 原字段");
+
+                // ★关键：安全模式期间保存设置，落盘的必须仍是用户偏好
+                s.Save();
+                Settings re = Settings.Load(rSafe);
+                Check(re.MiniTaskbar && re.TaskbarHiding && re.HideTaskbar,
+                    "★安全模式期间保存，落盘的仍是用户偏好（不是被压制的 false）",
+                    string.Format("mini={0} hiding={1} hide={2}", re.MiniTaskbar, re.TaskbarHiding, re.HideTaskbar));
+                Check(re.FullscreenDetect && re.HoverReveal,
+                    "★安全模式期间保存，fullscreenDetect/hoverReveal 未被固化",
+                    string.Format("fs={0} hover={1}", re.FullscreenDetect, re.HoverReveal));
+
+                // 退出安全模式：立刻恢复
+                Settings.SafeModeActive = false;
+                Check(s.EffectiveMiniTaskbar && s.EffectiveHideTaskbar && s.EffectiveFullscreenDetect,
+                    "退出安全模式后有效值即刻恢复");
+
+                try { Directory.Delete(rSafe, true); } catch { }
+            }
+
+            // 复位，别影响后续用例
+            Settings.SafeModeActive = false;
 
             // ---------- 1b. 老配置里显式的 desktopAutoClean=true 必须保持不变 ----------
             string rOld = NewRoot();
