@@ -29,6 +29,16 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern uint GetDpiForSystem();
 
+        /// <summary>
+        /// 窗口所在显示器的 DPI（Win10 1607+）。
+        ///
+        /// 比 GetDpiForSystem 准：多显示器混合 DPI 时，每个窗口在**自己那块屏**
+        /// 上的 DPI 可能不同，用系统 DPI 算截屏区域会错位。
+        /// 旧系统上此函数不存在（DllNotFoundException），调用方要兜住。
+        /// </summary>
+        [DllImport("user32.dll")]
+        public static extern int GetDpiForWindow(IntPtr hWnd);
+
         [DllImport("user32.dll")]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 

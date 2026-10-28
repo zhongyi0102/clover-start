@@ -104,6 +104,12 @@ namespace Clover
         const int QuickBarCount = 7;
 
         /// <summary>
+        /// 毛玻璃背景（截桌面 → 缩 1/8 → 模糊 → 垫底）。
+        /// 由 BuildUi 创建；软件渲染时内部自动禁用。
+        /// </summary>
+        GlassBackdrop glassBackdrop;
+
+        /// <summary>
         /// 每块磁贴的图标容器（应用 → 容器），供就地刷新"运行中"小圆点用。
         ///
         /// 为什么不靠重渲染：一块磁贴约 6 个可视化元素，119 个就是 700+ 控件，
@@ -378,6 +384,94 @@ namespace Clover
             }
 
             if (searchBox != null) searchBox.Focus();
+
+            // 毛玻璃背景：在**动画结束后**再截屏。
+            //
+            // 为什么不能立即做：此刻面板正从透明淡入 + 从下方上移，
+            // 窗口位置还没稳定，截到的背景会错位。
+            // 160 ms 是 showShiftAnim 的时长，加一点余量。
+            RefreshGlassSoon(220);
+        }
+
+        /// <summary>
+        /// 按毛玻璃开关调整面板背景的不透明度。
+        ///
+        /// 核心问题：面板背景（root.Background = Ui.Bg）是**不透明**的，
+        /// 它会盖在毛玻璃图上面，让图完全看不见。
+        /// 所以开毛玻璃时必须把背景改成半透明 —— 但要保留足够的不透明度，
+        /// 否则文字会直接压在模糊的壁纸上、对比度不够。
+        ///
+        /// 取值依据：
+        ///   · 毛玻璃 80% → 背景留 72% 不透明 → 壁纸色透出约 28%
+        ///     这个比例下背景色仍主导，文字对比度基本不受影响
+        ///   · 毛玻璃越浓，背景越透
+        ///   · 关闭毛玻璃（0）→ 背景恢复完全不透明
+        /// </summary>
+        void ApplyGlassTint()
+        {
+            try
+            {
+                Border root = rootBorder;
+                if (root == null) return;
+
+                int g = settings == null ? 0 : settings.GlassOpacity;
+                if (g <= 0)
+                {
+                    // 关闭：恢复不透明纯色
+                    root.Background = Ui.Bg;
+                    return;
+                }
+
+                // 80% 毛玻璃 → 0.72；100% → 0.60（下限，再低文字会飘）
+                double alpha = 1.0 - (g / 100.0) * 0.40;
+                if (alpha < 0.60) alpha = 0.60;
+
+                // 用 Ui.Bg 的颜色 + 自定义 alpha 建一个新刷子。
+                // 不能直接改 Ui.Bg 的 Color —— 那是全局共享刷子，
+                // 改了会影响所有窗口。
+                Color c = Ui.Bg.Color;
+                SolidColorBrush b = new SolidColorBrush(
+                    Color.FromArgb((byte)Math.Round(alpha * 255), c.R, c.G, c.B));
+                b.Freeze();
+                root.Background = b;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "应用毛玻璃底色");
+            }
+        }
+
+        /// <summary>
+        /// 延迟刷新毛玻璃背景。
+        ///
+        /// 用 DispatcherTimer 而不是 Thread.Sleep：界面线程不能阻塞。
+        /// 延迟是为了等弹出动画（160 ms）跑完、窗口位置稳定后再截屏。
+        /// </summary>
+        void RefreshGlassSoon(int delayMs)
+        {
+            try
+            {
+                if (glassBackdrop == null) return;
+                if (settings == null || settings.GlassOpacity <= 0) return;
+
+                glassBackdrop.OpacityPercent = settings.GlassOpacity;
+                glassBackdrop.CornerRadius = Ui.R.Lg;
+                ApplyGlassTint();
+
+                DispatcherTimer t = new DispatcherTimer();
+                t.Interval = TimeSpan.FromMilliseconds(delayMs);
+                t.Tick += delegate
+                {
+                    t.Stop();
+                    if (!IsVisible) return;
+                    glassBackdrop.Refresh();
+                };
+                t.Start();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "调度毛玻璃刷新");
+            }
         }
 
         /// <summary>弹出时面板从下方升起的距离（像素）。</summary>

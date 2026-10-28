@@ -587,6 +587,30 @@ namespace Clover
             };
             settingsMenu.Items.Add(hoverItem);
 
+            settingsMenu.Items.Add(new Separator());
+
+            // ---- 毛玻璃背景 ----
+            // 放在设置里而不是顶层：它是"想要就开"的外观增强，不是日常操作。
+            MenuItem glassItem = new MenuItem();
+            glassItem.Header = "毛玻璃背景";
+            glassItem.IsCheckable = true;
+            glassItem.IsChecked = settings.GlassOpacity > 0;
+            glassItem.ToolTip = "截取桌面背景并模糊，垫在面板下面（透出壁纸的颜色）。"
+                + "关闭时是纯色背景。软件渲染的机器上会自动禁用";
+            glassItem.IsEnabled = GlassBackdrop.Supported;
+            if (!GlassBackdrop.Supported)
+            {
+                glassItem.ToolTip = "当前为软件渲染（无硬件加速），毛玻璃会自动拖慢界面，已禁用。";
+            }
+            glassItem.Click += delegate
+            {
+                settings.GlassOpacity = settings.GlassOpacity > 0 ? 0 : 80;
+                settings.Save();
+                if (panel != null) panel.ApplyGlassSetting();
+                Ui.Log("毛玻璃背景 -> " + settings.GlassOpacity + "%");
+            };
+            settingsMenu.Items.Add(glassItem);
+
             // 设置子菜单到此组装完毕，挂到顶层
             cm.Items.Add(settingsMenu);
 

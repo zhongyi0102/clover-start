@@ -62,6 +62,15 @@ namespace Clover
         public string Theme = "system";
 
         /// <summary>
+        /// 毛玻璃背景浓度（0-100）。0 = 关闭。
+        ///
+        /// 默认 0（关闭）：这个效果要截桌面背景，代价比纯色背景高
+        /// （每次位置/主题变化要截一次屏，约 5-15 ms），
+        /// 而且会让文字对比度依赖壁纸颜色。默认关、想要的人自己开。
+        /// </summary>
+        public int GlassOpacity = 0;
+
+        /// <summary>
         /// 本次运行是否处于安全模式。
         ///
         /// **只在运行时生效，不写回 settings.json。**
@@ -144,6 +153,7 @@ namespace Clover
                 if (d.TryGetValue("safeMode", out v) && v != null) s.SafeMode = Convert.ToBoolean(v);
                 if (d.TryGetValue("navCollapsed", out v) && v != null) s.NavCollapsed = Convert.ToBoolean(v);
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
+                if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
                     // 循环变量名不能叫 s —— 它是外层的 Settings 对象
@@ -186,6 +196,7 @@ namespace Clover
                 d["safeMode"] = SafeMode;
                 d["navCollapsed"] = NavCollapsed;
                 d["theme"] = Theme;
+                d["glassOpacity"] = GlassOpacity;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();

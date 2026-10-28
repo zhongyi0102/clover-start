@@ -16,6 +16,9 @@ namespace Clover
         {
             Border root = new Border();
             root.CornerRadius = new CornerRadius(Ui.R.Lg);
+            // 注意：毛玻璃开启时这个不透明度会被改成半透明（见 ApplyGlassTint）。
+            // 纯色背景盖在毛玻璃图上会把图完全遮死 —— 第一版就踩了这个坑，
+            // 开了毛玻璃只看到 13% 的边缘漏光。
             root.Background = Ui.Bg;
             // 外框用 Edge（更淡）而不是 Line：玻璃质感要求"外框最淡、内部稍实"。
             // 同一个颜色用在两处会让边界显得过重。
@@ -258,7 +261,22 @@ namespace Clover
             Grid.SetRow(footer, 3);
             grid.Children.Add(footer);
 
-            root.Child = grid;
+            // ---------------- 毛玻璃底 ----------------
+            //
+            // 结构：root 里套一个 Grid 容器，毛玻璃图插在这个容器的**最底层**，
+            // 内容 grid 在它上面。
+            //
+            // 为什么不在 root 里直接插：root 只能有一个 Child。所以用一个
+            // 内层 Grid 同时装「背景层」和「内容层」。
+            Grid contentHost = new Grid();
+            contentHost.Children.Add(grid);      // 先加内容（索引 0）
+            root.Child = contentHost;
+
+            // 毛玻璃的宿主是 contentHost（不是 root）：
+            // Attach 会 Insert(0, 背景)，插到 contentHost 里才会「在内容之下」；
+            // 插到 root 里会变成 root 的第二个 Child（非法，root 只能有一个）。
+            glassBackdrop = new GlassBackdrop(this, contentHost);
+            glassBackdrop.OpacityPercent = 0;    // 默认关闭，由设置决定
 
             // ---------------- 双层投影 ----------------
             //

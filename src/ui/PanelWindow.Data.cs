@@ -151,6 +151,39 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 切换「毛玻璃背景」后调用。
+        ///
+        /// 关闭时要**主动移除**已挂上的背景层并把底色改回不透明 ——
+        /// 只改设置不管界面的话，用户会看到"勾掉了但还在"。
+        /// </summary>
+        public void ApplyGlassSetting()
+        {
+            try
+            {
+                if (glassBackdrop == null) return;
+
+                if (settings.GlassOpacity <= 0)
+                {
+                    glassBackdrop.Clear();
+                    glassBackdrop.OpacityPercent = 0;
+                    ApplyGlassTint();     // 底色恢复不透明
+                    return;
+                }
+
+                glassBackdrop.OpacityPercent = settings.GlassOpacity;
+                glassBackdrop.CornerRadius = Ui.R.Lg;
+                ApplyGlassTint();         // 底色改半透明
+
+                // 面板没显示时先记下设置，等 ShowPanel 再截屏
+                if (IsVisible) RefreshGlassSoon(50);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "应用毛玻璃设置");
+            }
+        }
+
         /// <summary>切换“自动移走桌面快捷方式”后调用：通知 watcher 立即停/启自动清理。</summary>
         public void ApplyDesktopCleanSetting()
         {

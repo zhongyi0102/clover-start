@@ -76,14 +76,17 @@ namespace Clover
 
         // 浅色
         //
-        // Line 从实色 #E2DFDA 改为 #2A7687A2（蓝灰，alpha 16%）：
+        // Line 从实色 #E2DFDA 改为半透明蓝灰：
         // 实色边框在任何底色上都是"硬线"，而发丝线会随底层明暗自然融合。
-        // Edge 更淡（alpha 12%），只负责勾边。
+        // alpha 的实测校准：0x2A(16%) 叠在 #FBFAF8 上差值只有 53，
+        // 肉眼几乎不可分（用户反馈"看不出来"）—— 提到 0x55(33%) 才有
+        // "能看见但仍然柔和"的边界。
+        // Edge 稍淡（alpha 26%），只负责勾边。
         static readonly Palette Light = new Palette
         {
             Bg = 0xFBFAF8,
-            Line = 0x2A7687A2,
-            Edge = 0x1F8A93A8,
+            Line = 0x557687A2,
+            Edge = 0x428A93A8,
             Fg = 0x202020,
             Sub = 0x787672,
             Hover = 0xF3F1ED,
@@ -98,12 +101,12 @@ namespace Clover
         //
         // 注意 Accent 系在深色下必须**变亮**：同一个 #388C48 放在深底上会显脏、
         // 对比度不足；AccentText 反向变亮（它是在 AccentSoft 底上的文字）。
-        // Line 用冷白 alpha 14%，在深底上是"微光"而不是"灰线"。
+        // Line 用冷白，alpha 0x3C(24%) —— 深底上的"微光"，再低就看不见。
         static readonly Palette Dark = new Palette
         {
             Bg = 0x1E1F22,
-            Line = 0x24D5E3FF,
-            Edge = 0x1AD5E3FF,
+            Line = 0x3CD5E3FF,
+            Edge = 0x30D5E3FF,
             Fg = 0xE9E9EA,
             Sub = 0x9A9AA0,
             Hover = 0x2A2C31,
@@ -245,34 +248,32 @@ namespace Clover
         /// <summary>
         /// 面板投影——**近距**那层。
         ///
-        /// 双层投影（ambient + direct）是"材质感"的核心做法之一：
-        /// 单层投影无论怎么调，要么像"贴在纸上"（太硬），要么像"糊了一团"（太软）。
-        /// 真实的光是两层：近距离锐利的接触阴影 + 远距离弥散的環境阴影。
+        /// 双层投影（ambient + direct）：近距负责"接触"，远距负责"悬浮"。
         ///
-        /// 这层负责"接触"：小偏移、小模糊、较高不透明度 —— 让面板看起来
-        /// 真的贴在桌面上，而不是浮着。
-        ///
-        /// 注：WPF 一个元素只能挂一个 Effect，所以另一层（远距）挂在
-        /// 外层容器上，见 PanelWindow.Ui.cs 的 BuildUi。
+        /// 不透明度经验值（实测校准过）：
+        ///   · < 0.10 摊开后每像素不到 2%，肉眼不可见 —— 第一版用了 0.16，
+        ///     结果"看不出来"（用户反馈）。0.28 起，浅色下才能看到投影贴着面板边。
+        ///   · 深色可以更浓，因为暗底上投影本来就更难察觉。
         /// </summary>
         public static DropShadowEffect PanelShadowNear()
         {
             return AppliedTheme == ThemeMode.Dark
-                ? Shadow(8, 0.42, 2)     // 深色：短而实
-                : Shadow(10, 0.16, 2);   // 浅色：柔和一点
+                ? Shadow(10, 0.55, 3)    // 深色：短而实
+                : Shadow(12, 0.28, 3);   // 浅色
         }
 
         /// <summary>
         /// 面板投影——**远距**那层（环境光）。
         ///
-        /// 大模糊、大偏移、低不透明度：它不负责勾边，只负责让面板
-        /// "离开桌面"一段距离。没有它，面板会像直接印在壁纸上。
+        /// 大模糊会把不透明度摊到很大范围，每像素实际只占很小比例，
+        /// 所以这层的标称值必须比看起来想要的效果**大得多**：
+        /// 0.14 的远距投影实测几乎不存在，0.32 才有"浮起来"的感觉。
         /// </summary>
         public static DropShadowEffect PanelShadowFar()
         {
             return AppliedTheme == ThemeMode.Dark
-                ? Shadow(42, 0.50, 10)   // 深色：要靠浓度表现（暗底上距离感弱）
-                : Shadow(36, 0.14, 10);  // 浅色：大而淡
+                ? Shadow(44, 0.55, 12)   // 深色：靠浓度表现
+                : Shadow(40, 0.32, 12);  // 浅色
         }
 
         /// <summary>
