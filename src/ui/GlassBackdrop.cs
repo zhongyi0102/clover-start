@@ -103,17 +103,17 @@ namespace Clover
         public double OpacityPercent = 72;
 
         /// <summary>
-        /// 模糊半径（作用在**已缩小 Downscale 倍**的图上）。
+        /// 模糊半径（作用在裁剪后的背景图上）。
         ///
-        /// ⚠ 关键换算：BlurEffect.Radius 是相对**当前图片尺寸**的像素数，
-        /// 而图片已经缩到 1/Downscale。图片被 Stretch.Fill 拉回原尺寸时，
-        /// 视觉模糊半径 = Radius × Downscale。
+        /// 固定背景图模式下，图片按面板比例裁剪后被 Stretch.Fill 铺满，
+        /// 所以 Radius 就是**视觉上的模糊像素数**。
         ///
-        /// 所以想要"视觉上约 20px 的模糊"，Radius 应该设 20/4 = 5，
-        /// 而不是 20 —— 曾直接写 18，实际视觉模糊 = 72px，
-        /// 整个背景糊成一片纯色，完全看不出是壁纸。
+        /// 10.0 是"看得出是渐变、但看不出任何边界"的程度 ——
+        /// 青灰背景本身就是柔和的光斑叠加，模糊只是让边缘不显生硬。
+        /// 若切回截屏模式（CaptureFromScreen），需要改成 5.0：
+        /// 那时图片先缩了 4 倍，视觉模糊 = Radius × 4。
         /// </summary>
-        public double BlurRadius = 5.0;
+        public double BlurRadius = 10.0;
 
         /// <summary>
         /// 染色强度（0-1）。
@@ -254,10 +254,19 @@ namespace Clover
         /// 77% 不透明度的面板仍然清晰可辨。
         ///
         /// 固定背景图则完全可控：配色自己定，永远不干扰文字。
-        /// 这张 background-a1.png 是深青对角渐变（#0A1418 → #1E3A42，
-        /// 45° 方向），与面板主色 #172A30 同族。
+        ///
+        /// 这张 background-cyangray.png 是**青灰玻璃**：
+        ///   · 打底 #172A30（深青），对角渐变到 #3E484F（青灰）
+        ///   · 左上青蓝光斑 #4FC3D9（alpha 52）—— 模拟玻璃受光
+        ///   · 右下冷灰光斑 #455058（alpha 45）
+        ///   · 中部极淡水平亮带（alpha 28）—— 玻璃厚度感
+        ///   · 细噪点 ±2 灰度 —— 磨砂质感
+        ///   实测采样：左上 #234048、中心 #39535C、右下 #3D4950，
+        ///   平均 RGB(50,73,81)，亮度差 33（有层次不死板）。
+        ///
+        /// 与面板主色 #172A30 同族，所以整体协调。
         /// </summary>
-        const string BackgroundFile = "background-a1.png";
+        const string BackgroundFile = "background-cyangray.png";
 
         /// <summary>背景图所在目录（res）。构造时传入。</summary>
         string resDir;
@@ -267,14 +276,33 @@ namespace Clover
 
         /// <summary>截取窗口所在区域并缩小、模糊。</summary>
         /// <summary>
-        /// 截取窗口所在区域并模糊。
+        /// 取得背景图（读 res\background-cyangray.png 并裁剪）。
         ///
-        /// **当前用截屏模式**（用户明确要求改回）：
-        /// 背景 = 面板位置背后的真实桌面壁纸，随壁纸变化。
-        /// 固定背景图那套（res\background-a1.png）保留在 CaptureFromFile 里，
-        /// 但不再调用 —— 想切回去时改这一行即可。
+        /// **当前用固定背景图**：用户明确要"青灰玻璃"这种固定观感，
+        /// 不跟随桌面壁纸。截屏方案（CopyFromScreen）的代码保留在
+        /// CaptureFromScreen() 里，想切回去改这一行即可。
         /// </summary>
         ImageSource Capture(Native.RECT rect, int dpi)
+        {
+            try
+            {
+                return CaptureFromFile(rect, dpi);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "读取毛玻璃背景");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 截取桌面壁纸（备用方案，当前未调用）。
+        ///
+        /// 保留它是因为：截屏模式的"透出真实桌面"是另一种合理审美，
+        /// 而且它已经调好了（Downscale 4 / Inset 14 / BlurRadius 5）。
+        /// 想切回去只需把 Capture() 里的调用换成 CaptureFromScreen。
+        /// </summary>
+        ImageSource CaptureFromScreen(Native.RECT rect, int dpi)
         {
             try
             {
@@ -298,7 +326,6 @@ namespace Clover
                         g.CopyFromScreen(srcX, srcY, 0, 0, new System.Drawing.Size(srcW, srcH));
                     }
 
-                    // 缩到 1/Downscale：模糊时细节不可见，但 GPU 开销降很多
                     int sw = Math.Max(1, srcW / Downscale);
                     int sh = Math.Max(1, srcH / Downscale);
                     using (System.Drawing.Bitmap small = new System.Drawing.Bitmap(full, sw, sh))
@@ -312,7 +339,7 @@ namespace Clover
                         img.CacheOption = BitmapCacheOption.OnLoad;
                         img.StreamSource = ms;
                         img.EndInit();
-                        img.Freeze();   // 冻结后可跨线程/跨次复用
+                        img.Freeze();
                         return img;
                     }
                 }
