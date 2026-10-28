@@ -227,7 +227,23 @@ namespace Clover
             contentScroll.Padding = new Thickness(10, 4, 8, 6);
             tilePanel = new WrapPanel();
             tilePanel.Orientation = Orientation.Horizontal;
-            contentScroll.Content = tilePanel;
+
+            // 搜索结果列表（与磁贴区互斥显示）。
+            //
+            // 为什么用独立容器而不是把结果塞进 tilePanel：
+            // 搜索结果可能是文件/文件夹，不是 AppItem ——
+            // 磁贴的启动、拖动换位、右键菜单那套逻辑完全不适用。
+            // 混在一起会让"拖动换位"试图去拖动一个文件。
+            searchResultPanel = new StackPanel();
+            searchResultPanel.Orientation = Orientation.Vertical;
+            searchResultPanel.Visibility = Visibility.Collapsed;
+            searchResults = new SearchResultList(searchResultPanel);
+
+            // 两者放进同一个 Grid，靠 Visibility 切换
+            Grid contentStack = new Grid();
+            contentStack.Children.Add(tilePanel);
+            contentStack.Children.Add(searchResultPanel);
+            contentScroll.Content = contentStack;
             Grid.SetColumn(contentScroll, 2);
             body.Children.Add(contentScroll);
 

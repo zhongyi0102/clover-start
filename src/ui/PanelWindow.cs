@@ -109,6 +109,11 @@ namespace Clover
         /// </summary>
         GlassBackdrop glassBackdrop;
 
+        /// <summary>搜索结果列表容器（与 tilePanel 互斥显示）。</summary>
+        StackPanel searchResultPanel;
+        /// <summary>搜索结果的逻辑控制（Instant + Deep 两级）。</summary>
+        SearchResultList searchResults;
+
         /// <summary>
         /// 每块磁贴的图标容器（应用 → 容器），供就地刷新"运行中"小圆点用。
         ///

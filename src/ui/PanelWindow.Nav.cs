@@ -759,6 +759,24 @@ namespace Clover
             bool showingHidden = (q.Length == 0 && current == HiddenCategory);
             List<AppItem> list;
 
+            // ---- 系统级搜索（开始菜单 + 注册表 + 磁盘）----
+            //
+            // 与下面的"应用清单过滤"是两件事，同时进行：
+            //   · 应用清单过滤：已扫描的 119 个应用，按拼音/中英文匹配
+            //   · 系统级搜索：全系统的程序与文件，Instant + Deep 两级
+            // 用户看到的是两部分结果，应用磁贴在先（更快、更常用），
+            // 系统搜索结果在下面（更全、但可能是文件）。
+            if (q.Length > 0)
+            {
+                if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Visible;
+                if (searchResults != null) searchResults.Search(q);
+            }
+            else
+            {
+                if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Collapsed;
+                if (searchResults != null) searchResults.Clear();
+            }
+
             if (q.Length > 0)
             {
                 // 搜索时**包含隐藏项**：用户主动搜名字，说明就是想找它
@@ -800,13 +818,18 @@ namespace Clover
             foreach (AppItem a in list)
                 tilePanel.Children.Add(MakeTile(a));
 
-            if (list.Count == 0)
+            // 空状态：只在**没有系统搜索结果**时才显示。
+            //
+            // 为什么要这个判断：搜索时"应用清单里没有"不等于"全系统没有"。
+            // 实测搜「报告」时，119 个已扫描应用里确实一个都不匹配，
+            // 但磁盘上找到了 4 个 .docx —— 此时若显示"没有找到「报告」"
+            // 就与下方真实结果自相矛盾。
+            bool hasSystemResults = searchResultPanel != null
+                && searchResultPanel.Visibility == Visibility.Visible
+                && searchResultPanel.Children.Count > 0;
+
+            if (list.Count == 0 && !(q.Length > 0 && hasSystemResults))
             {
-                // 空状态：图标 + 主句 + 引导。
-                //
-                // 原先只有一行灰字（"没有找到匹配的应用"），既没有视觉锚点，
-                // 也没告诉用户"接下来能做什么"。空状态是用户唯一会盯着看几秒的
-                // 屏幕，值得给一点设计 —— 但它仍然是空状态，不能喧宾夺主。
                 string tip, sub, glyph;
                 if (q.Length > 0)
                 {
