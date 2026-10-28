@@ -44,9 +44,27 @@ namespace Clover
         /// </summary>
         static readonly bool SlowRender = (RenderCapability.Tier >> 16) < 2;
 
-        // 注：原 Downscale(缩图倍率) 和 Inset(截屏内缩) 两个常量已删除 ——
-        // 改成固定背景图后不再需要"截屏 + 缩放"这套逻辑。
-        // 图片本身是 1920x1200，按面板比例裁剪即可，无需再缩。
+        // 注：这两个常量用于**截屏模式**（当前模式）。
+        // 若切回固定背景图（CaptureFromFile），它们就不需要了。
+
+        /// <summary>
+        /// 缩图倍率（截屏后先缩小再模糊，大幅降低 GPU 开销）。
+        ///
+        /// 1/4 是实测的平衡点：
+        ///   · 1/8 太小 —— 1053×632 会变成 131×79，壁纸的色块边界全丢，
+        ///     拉回原尺寸后只剩一片平均色，看不出"透的是壁纸"
+        ///   · 1/2 太大 —— 模糊开销翻 4 倍，但没有可见收益
+        /// </summary>
+        const int Downscale = 4;
+
+        /// <summary>
+        /// 截屏时向内收缩的边距（DIP）。
+        ///
+        /// 为什么要收缩：窗口边缘是圆角，截到的四个角是圆角外的桌面，
+        /// 直接铺上去会在圆角处露出不匹配的颜色。收缩后只用中间部分，
+        /// 拉伸铺满时圆角区域被拉伸的像素覆盖，看不出接缝。
+        /// </summary>
+        const double Inset = 14;
         readonly Window owner;
         /// <summary>承载背景图的容器（背景会被插到它的最底层）。</summary>
         readonly Panel host;
@@ -85,16 +103,17 @@ namespace Clover
         public double OpacityPercent = 72;
 
         /// <summary>
-        /// 模糊半径（作用在裁剪后的背景图上）。
+        /// 模糊半径（作用在**已缩小 Downscale 倍**的图上）。
         ///
-        /// 改成固定背景图后，模糊的语义变简单了：图片按面板比例裁剪后
-        /// 被 Stretch.Fill 铺满，所以 Radius 就是**视觉上的模糊像素数**。
+        /// ⚠ 关键换算：BlurEffect.Radius 是相对**当前图片尺寸**的像素数，
+        /// 而图片已经缩到 1/Downscale。图片被 Stretch.Fill 拉回原尺寸时，
+        /// 视觉模糊半径 = Radius × Downscale。
         ///
-        /// 12.0 是"看得出是渐变、但看不出任何边界"的程度 ——
-        /// A1 本身就是平滑渐变，模糊只是为了让它在面板边缘不显生硬。
-        /// 若以后换成有纹理的图，这个值需要调大。
+        /// 所以想要"视觉上约 20px 的模糊"，Radius 应该设 20/4 = 5，
+        /// 而不是 20 —— 曾直接写 18，实际视觉模糊 = 72px，
+        /// 整个背景糊成一片纯色，完全看不出是壁纸。
         /// </summary>
-        public double BlurRadius = 12.0;
+        public double BlurRadius = 5.0;
 
         /// <summary>
         /// 染色强度（0-1）。
@@ -247,15 +266,60 @@ namespace Clover
         BitmapImage backgroundImage;
 
         /// <summary>截取窗口所在区域并缩小、模糊。</summary>
+        /// <summary>
+        /// 截取窗口所在区域并模糊。
+        ///
+        /// **当前用截屏模式**（用户明确要求改回）：
+        /// 背景 = 面板位置背后的真实桌面壁纸，随壁纸变化。
+        /// 固定背景图那套（res\background-a1.png）保留在 CaptureFromFile 里，
+        /// 但不再调用 —— 想切回去时改这一行即可。
+        /// </summary>
         ImageSource Capture(Native.RECT rect, int dpi)
         {
             try
             {
-                return CaptureFromFile(rect, dpi);
+                double scale = dpi / 96.0;
+                int inset = (int)Math.Round(Inset * scale);
+
+                int srcX = rect.Left + inset;
+                int srcY = rect.Top + inset;
+                int srcW = Math.Max(1, (rect.Right - rect.Left) - inset * 2);
+                int srcH = Math.Max(1, (rect.Bottom - rect.Top) - inset * 2);
+
+                // 屏幕边界保护：窗口可能有一部分在屏幕外（拖到边缘时）
+                if (srcX < 0) { srcW += srcX; srcX = 0; }
+                if (srcY < 0) { srcH += srcY; srcY = 0; }
+                if (srcW < 1 || srcH < 1) return null;
+
+                using (System.Drawing.Bitmap full = new System.Drawing.Bitmap(srcW, srcH))
+                {
+                    using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(full))
+                    {
+                        g.CopyFromScreen(srcX, srcY, 0, 0, new System.Drawing.Size(srcW, srcH));
+                    }
+
+                    // 缩到 1/Downscale：模糊时细节不可见，但 GPU 开销降很多
+                    int sw = Math.Max(1, srcW / Downscale);
+                    int sh = Math.Max(1, srcH / Downscale);
+                    using (System.Drawing.Bitmap small = new System.Drawing.Bitmap(full, sw, sh))
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        small.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                        ms.Position = 0;
+
+                        BitmapImage img = new BitmapImage();
+                        img.BeginInit();
+                        img.CacheOption = BitmapCacheOption.OnLoad;
+                        img.StreamSource = ms;
+                        img.EndInit();
+                        img.Freeze();   // 冻结后可跨线程/跨次复用
+                        return img;
+                    }
+                }
             }
             catch (Exception ex)
             {
-                Ui.LogError(ex, "读取毛玻璃背景");
+                Ui.LogError(ex, "截取毛玻璃背景");
                 return null;
             }
         }

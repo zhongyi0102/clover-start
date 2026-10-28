@@ -68,6 +68,59 @@ namespace Clover
         }
 
         /// <summary>
+        /// 应用清单（由 PanelWindow 注入）。
+        ///
+        /// 为什么要注入而不是直接读 Catalog：
+        /// Catalog 每次 Load 都要解析 JSON，搜索是高频操作（每敲一个字），
+        /// 不能每次都读盘。PanelWindow 已经持有内存中的 catalog，传进来即可。
+        /// </summary>
+        public Func<List<AppItem>> CatalogProvider;
+
+        /// <summary>
+        /// 在已扫描的应用清单里匹配（支持中文/英文/全拼/首字母）。
+        ///
+        /// 与 SystemSearch 的分工：
+        ///   · 这里搜的是"已经扫描进面板的 119 个应用" —— 带拼音支持
+        ///   · SystemSearch 搜的是"系统里存在但可能没被扫进面板的程序"
+        /// 两者互补，缺一不可。
+        /// </summary>
+        List<SearchResult> MatchCatalog(string query)
+        {
+            List<SearchResult> list = new List<SearchResult>();
+            try
+            {
+                if (CatalogProvider == null) return list;
+                List<AppItem> apps = CatalogProvider();
+                if (apps == null) return list;
+
+                foreach (AppItem a in apps)
+                {
+                    if (a == null || string.IsNullOrEmpty(a.Path)) continue;
+                    if (!Pinyin.Matches(a.Name, query)) continue;
+
+                    SearchResult r = new SearchResult();
+                    r.Name = a.Name;
+                    r.Path = a.Path;
+                    r.IsFolder = false;
+                    r.Source = "已安装";
+                    r.Ext = Path.GetExtension(a.Path).ToLowerInvariant();
+                    list.Add(r);
+                }
+
+                // 名字短的排前面（搜 "chr" 时 Chrome 应该比 ChromeDriver-helper 靠前）
+                list.Sort(delegate(SearchResult x, SearchResult y)
+                {
+                    int lx = x.Name == null ? 0 : x.Name.Length;
+                    int ly = y.Name == null ? 0 : y.Name.Length;
+                    if (lx != ly) return lx.CompareTo(ly);
+                    return string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+                });
+            }
+            catch { }
+            return list;
+        }
+
+        /// <summary>
         /// 执行一次完整搜索（Instant 立即显示 + Deep 后台追加）。
         /// 必须在界面线程调用。
         /// </summary>
@@ -79,13 +132,26 @@ namespace Clover
                 if (host == null) return;
                 if (string.IsNullOrWhiteSpace(query)) return;
 
+                // ---- 第零级：已扫描的应用清单 ----
+                //
+                // ★ 这一步是必须的，不是优化：
+                // 搜索时面板会把 tilePanel 设成 Collapsed（让位给搜索结果），
+                // 而 SystemSearch.Instant 只搜"开始菜单 + 注册表 + 磁盘"，
+                // **不包含 catalog.Apps 里那 119 个已扫描应用**。
+                // 结果是：拼音搜索（weixin / wx）在界面上永远搜不到微信 ——
+                // 应用清单匹配到了，但磁贴被隐藏，搜索结果里又没有它。
+                //
+                // 探针实测 Pinyin.Matches("微信", "weixin") == true，
+                // 所以匹配逻辑本身没问题，是数据源漏了这一档。
+                AppendBatch(MatchCatalog(query), true);
+
                 // ---- 第一级：Instant（同步，很快）----
                 List<SearchResult> instant = SystemSearch.Instant(query);
                 AppendBatch(instant, true);
 
-                if (instant.Count == 0)
+                if (shown.Count == 0)
                 {
-                    // 没有任何即时结果时给个提示，避免用户以为"没反应"
+                    // 三档都没结果时给个提示，避免用户以为"没反应"
                     AddStatusLine("正在搜索更多位置…");
                 }
 
@@ -171,6 +237,7 @@ namespace Clover
                 string label;
                 switch (source)
                 {
+                    case "已安装": label = "应用（已安装）"; break;
                     case "开始菜单": label = "应用（开始菜单）"; break;
                     case "注册表": label = "应用（注册表）"; break;
                     case "磁盘": label = "磁盘文件"; break;

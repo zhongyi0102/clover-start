@@ -262,6 +262,10 @@ namespace Clover
             searchResultPanel.Orientation = Orientation.Vertical;
             searchResultPanel.Visibility = Visibility.Collapsed;
             searchResults = new SearchResultList(searchResultPanel);
+            // 注入应用清单：搜索时要先在这 119 个已扫描应用里匹配（支持拼音），
+            // 否则拼音搜索（weixin/wx）在界面上永远搜不到 —— 磁贴被隐藏了，
+            // 而 SystemSearch 不包含已扫描清单。
+            searchResults.CatalogProvider = delegate { return catalog == null ? null : catalog.Apps; };
 
             // 两者放进同一个 Grid，靠 Visibility 切换
             Grid contentStack = new Grid();

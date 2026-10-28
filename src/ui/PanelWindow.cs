@@ -188,6 +188,15 @@ namespace Clover
         /// <summary>当前拖动会插入到哪个下标（-1 = 无）。</summary>
         int insertIndex = -1;
 
+        /// <summary>
+        /// 是否需要在下次显示时定位。
+        ///
+        /// 构造函数里 TaskbarGeometry 还没探测完（StartCell = Rect.Empty），
+        /// 那时算位置会走兜底分支、跑到工作区左下角。
+        /// 所以把首次定位延后到 ShowPanel，用这个标记保证只做一次。
+        /// </summary>
+        bool needPosition;
+
         public PanelWindow(string baseDir, TriggerWindow trigger, Settings settings)
         {
             this.baseDir = baseDir;
@@ -231,7 +240,18 @@ namespace Clover
             Width = 912;
             Height = 632;
             WindowStartupLocation = WindowStartupLocation.Manual;
-            if (!LoadLayout()) PositionPanel();
+
+            // 首次定位延后到 ShowPanel，不在这里做。
+            //
+            // 为什么：PositionPanel() 依赖 TaskbarGeometry.CloverRect()，
+            // 而那个值来自 UIAutomation 异步探测 —— 构造函数执行时
+            // StartCell 还是 Rect.Empty，于是走兜底分支，
+            // 面板跑到工作区左下角（实测 @(88,530)），而不是按钮旁边。
+            //
+            // 延后到 ShowPanel 时几何已就绪，定位才准确。
+            // 用 needPosition 标记"这次是首次显示"，避免每次打开都重定位
+            // （用户拖过面板后位置存在 layout.json 里，不能被覆盖）。
+            needPosition = !LoadLayout();
             try
             {
                 BuildUi();
@@ -448,6 +468,12 @@ namespace Clover
 
             if (!IsVisible)
             {
+                // 首次显示前才定位：此时 TaskbarGeometry 已探测完毕
+                if (needPosition)
+                {
+                    needPosition = false;
+                    PositionPanel();
+                }
                 Opacity = 0;
                 Show();
             }
