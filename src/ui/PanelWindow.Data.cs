@@ -163,6 +163,11 @@ namespace Clover
             {
                 if (glassBackdrop == null) return;
 
+                // 先同步背景模式（fixed / screen）—— 它决定 OpacityPercent 之外
+                // 的另一半行为：读固定图还是截屏。
+                glassBackdrop.FollowWallpaper = settings != null
+                    && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
+
                 if (settings.GlassOpacity <= 0)
                 {
                     glassBackdrop.Clear();
@@ -175,7 +180,7 @@ namespace Clover
                 glassBackdrop.CornerRadius = Ui.R.Lg;
                 ApplyGlassTint();         // 底色改半透明
 
-                // 面板没显示时先记下设置，等 ShowPanel 再截屏
+                // 面板没显示时先记下设置，等 ShowPanel 再取背景
                 if (IsVisible) RefreshGlassSoon(50);
             }
             catch (Exception ex)

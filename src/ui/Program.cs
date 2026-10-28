@@ -222,6 +222,11 @@ namespace Clover
                 PanelWindow panel = new PanelWindow(baseDir, trigger, settings);
                 trigger.AttachPanel(panel);
 
+                // 壁纸页的「换文件夹…」按钮需要弹目录选择框，
+                // 而那个对话框在 TriggerWindow 里。用回调注入，
+                // 避免 PanelWindow 反向依赖 TriggerWindow 的具体实现。
+                panel.promptFolderCallback = delegate { trigger.PromptWallpaperFolderPublic(); };
+
                 AppWatcher watcher = new AppWatcher(baseDir, panel, settings);
                 panel.AttachWatcher(watcher);
                 MiniTaskbarWindow miniBar = new MiniTaskbarWindow();

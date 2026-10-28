@@ -438,6 +438,13 @@ namespace Clover
             pinItem.Click += delegate { PromptAddPinned(); };
             cm.Items.Add(pinItem);
 
+            // ---- 壁纸文件夹 ----
+            MenuItem wpItem = new MenuItem();
+            wpItem.Header = "壁纸文件夹…";
+            wpItem.ToolTip = "选一个放壁纸的目录，面板「壁纸」页会列出缩略图，点一下即换桌面";
+            wpItem.Click += delegate { PromptWallpaperFolder(); };
+            cm.Items.Add(wpItem);
+
             // ---- 设置子菜单 ----
             //
             // 为什么把开关收进来：顶层原先有 16 项，一眼扫不完，而且
@@ -909,6 +916,53 @@ namespace Clover
             catch (Exception ex)
             {
                 ErrorLog.Warn("收藏文件夹失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// 选壁纸文件夹。
+        ///
+        /// 与「收藏文件夹…」用同一个 FolderBrowserDialog，
+        /// 但结果写进 settings.WallpaperFolder 而不是收藏夹。
+        ///
+        /// 选完后自动切到「壁纸」分类 —— 让用户立刻看到缩略图，
+        /// 否则他还要自己去分类栏找那个新出现的「壁纸」项。
+        /// </summary>
+        /// <summary>供 PanelWindow 通过回调调用（壁纸页的「换文件夹…」按钮）。</summary>
+        public void PromptWallpaperFolderPublic() { PromptWallpaperFolder(); }
+
+        void PromptWallpaperFolder()
+        {
+            try
+            {
+                if (panel == null) return;
+
+                using (System.Windows.Forms.FolderBrowserDialog dlg = new System.Windows.Forms.FolderBrowserDialog())
+                {
+                    dlg.Description = "选择放壁纸的文件夹（.jpg / .png / .bmp）";
+                    dlg.ShowNewFolderButton = false;
+                    dlg.RootFolder = Environment.SpecialFolder.MyPictures;
+
+                    if (!string.IsNullOrWhiteSpace(settings.WallpaperFolder)
+                        && System.IO.Directory.Exists(settings.WallpaperFolder))
+                    {
+                        dlg.SelectedPath = settings.WallpaperFolder;
+                    }
+
+                    if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+                    if (string.IsNullOrWhiteSpace(dlg.SelectedPath)) return;
+
+                    settings.WallpaperFolder = dlg.SelectedPath;
+                    settings.Save();
+                    Ui.Log("壁纸文件夹: " + dlg.SelectedPath);
+
+                    panel.SwitchCategoryForTest(PanelWindow.WallpaperCategory);
+                    panel.ShowPanel();
+                }
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("设置壁纸文件夹失败: " + ex.Message);
             }
         }
 

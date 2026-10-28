@@ -161,6 +161,36 @@ namespace Clover
         }
 
         /// <summary>
+        /// 运行时覆盖强调色（壁纸主色 / 用户自定义色）。
+        ///
+        /// 为什么可以这样改：Accent 系列刷子是**未冻结**的，
+        /// 全项目 100+ 处持有的是同一个对象引用 ——
+        /// 改 brush.Color 整棵界面立刻变色，不用重建控件树。
+        /// （这也是 Fill() 里注释说的那个设计）
+        ///
+        /// 注意：这个覆盖是"一次性的" —— 下次 ApplyTheme 会重新填主题默认色。
+        /// 所以换主题后需要重新调一次 SetAccent（PanelWindow.ApplyTheme 里已接）。
+        /// </summary>
+        public static void SetAccent(Color accent, Color accentSoft, Color accentText)
+        {
+            try
+            {
+                Accent.Color = accent;
+                AccentSoft.Color = accentSoft;
+                AccentText.Color = accentText;
+
+                try { ThemeChanged(); } catch { }
+            }
+            catch { }
+        }
+
+        /// <summary>当前强调色（供壁纸页判断是否已被覆盖）。</summary>
+        public static Color CurrentAccent
+        {
+            get { return Accent.Color; }
+        }
+
+        /// <summary>
         /// 应用主题。System 会读注册表决定用浅色还是深色。
         /// 幂等：同一主题重复调用只是再写一遍颜色。
         /// </summary>

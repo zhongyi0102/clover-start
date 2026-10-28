@@ -71,6 +71,36 @@ namespace Clover
         public int GlassOpacity = 0;
 
         /// <summary>
+        /// 毛玻璃背景模式。
+        ///
+        ///   "fixed"  = 固定图 res\background-cyangray.png（默认，观感稳定）
+        ///   "screen" = 跟随桌面壁纸（截屏 + 模糊）
+        ///
+        /// 为什么默认 fixed：截屏模式下壁纸上的文字/图案会透过来干扰阅读
+        /// （实测壁纸上的"我们买了50箱泡面"透过 77% 不透明度的面板仍可辨）。
+        /// fixed 则完全可控。想要"透出真实桌面"的观感可以切成 screen。
+        /// </summary>
+        public string GlassMode = "fixed";
+
+        /// <summary>壁纸文件夹（面板里「壁纸」入口扫描它）。空 = 未设置。</summary>
+        public string WallpaperFolder = "";
+
+        /// <summary>
+        /// 强调色是否跟随壁纸主色。
+        ///
+        /// true 时每次换壁纸会重新提取主色并覆盖 Accent 系列；
+        /// false 时用主题里写死的强调色（深色青蓝 / 浅色绿）。
+        /// </summary>
+        public bool AccentFromWallpaper = true;
+
+        /// <summary>
+        /// 自定义强调色（#RRGGBB）。空 = 用主题默认或壁纸主色。
+        ///
+        /// 优先级：AccentOverride > 壁纸主色（AccentFromWallpaper 为 true 时）> 主题默认
+        /// </summary>
+        public string AccentOverride = "";
+
+        /// <summary>
         /// 本次运行是否处于安全模式。
         ///
         /// **只在运行时生效，不写回 settings.json。**
@@ -154,6 +184,10 @@ namespace Clover
                 if (d.TryGetValue("navCollapsed", out v) && v != null) s.NavCollapsed = Convert.ToBoolean(v);
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
+                if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
+                if (d.TryGetValue("wallpaperFolder", out v) && v != null) s.WallpaperFolder = Convert.ToString(v);
+                if (d.TryGetValue("accentFromWallpaper", out v) && v != null) s.AccentFromWallpaper = Convert.ToBoolean(v);
+                if (d.TryGetValue("accentOverride", out v) && v != null) s.AccentOverride = Convert.ToString(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
                     // 循环变量名不能叫 s —— 它是外层的 Settings 对象
@@ -197,6 +231,10 @@ namespace Clover
                 d["navCollapsed"] = NavCollapsed;
                 d["theme"] = Theme;
                 d["glassOpacity"] = GlassOpacity;
+                d["glassMode"] = GlassMode;
+                d["wallpaperFolder"] = WallpaperFolder;
+                d["accentFromWallpaper"] = AccentFromWallpaper;
+                d["accentOverride"] = AccentOverride;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();

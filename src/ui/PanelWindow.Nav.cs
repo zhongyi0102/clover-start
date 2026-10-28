@@ -297,6 +297,9 @@ namespace Clover
             // 桌面空了也该能进去看（用户会疑惑"我的桌面去哪了"）
             cats.Add(DesktopCategory);
 
+            // 「壁纸」常驻：换了文件夹之前也要能进去（那里有引导和背景模式开关）
+            cats.Add(WallpaperCategory);
+
             // 「隐藏的项目」只在确实有隐藏项时出现（没有就不占地方）
             int hiddenCount = catalog.HiddenItems().Count;
             if (hiddenCount > 0) cats.Add(HiddenCategory);
@@ -307,8 +310,9 @@ namespace Clover
                 int count = c == HiddenCategory ? hiddenCount
                           : (c == PinnedCategory ? pinnedCount
                           : (c == DesktopCategory ? 0
-                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count)));
-                if (c != "" && c != "常用" && c != PinnedCategory && c != DesktopCategory && count == 0) continue;
+                          : (c == WallpaperCategory ? 0
+                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count))));
+                if (c != "" && c != "常用" && c != PinnedCategory && c != DesktopCategory && c != WallpaperCategory && count == 0) continue;
 
                 // 显示名：被改过名的分类查表，其余用内部名本身。
                 // 内部名（c）始终不变——它才是 apps.json / 规则表 / 覆盖表里的键。
@@ -317,6 +321,7 @@ namespace Clover
                 else if (c == HiddenCategory) label = "隐藏的项目";
                 else if (c == PinnedCategory) label = "收藏夹";
                 else if (c == DesktopCategory) label = "桌面";
+                else if (c == WallpaperCategory) label = "壁纸";
                 else label = CategoryDisplayName(c);
 
                 // 分类项：从"竖排列表行"改成"横向胶囊按钮"
@@ -893,6 +898,13 @@ namespace Clover
                 return;
             }
 
+            // ---- 壁纸：缩略图网格，点一下换桌面壁纸 ----
+            if (q.Length == 0 && current == WallpaperCategory)
+            {
+                RenderWallpaper();
+                return;
+            }
+
             List<AppItem> list;
 
             // ---- 系统级搜索（开始菜单 + 注册表 + 磁盘）----
@@ -1344,6 +1356,358 @@ namespace Clover
                 Ui.LogError(ex, "桌面项目菜单");
             }
         }
+
+        /// <summary>
+        /// 渲染「壁纸」视图：缩略图网格 + 换背景模式开关。
+        ///
+        /// 交互：
+        ///   · 点缩略图 → 换桌面壁纸（SPI_SETDESKWALLPAPER）
+        ///   · 换完后自动提取主色 → 覆盖强调色（如果 AccentFromWallpaper 开着）
+        ///   · 顶部两个开关：「跟随壁纸」/「固定图」控制面板背景模式
+        ///   · 未设置文件夹时显示引导（右键四叶草 → 壁纸文件夹…）
+        /// </summary>
+        void RenderWallpaper()
+        {
+            try
+            {
+                if (tilePanel == null) return;
+
+                // ---- 顶部：背景模式切换 + 选文件夹 ----
+                tilePanel.Children.Add(MakeWallpaperHeader());
+
+                string folder = settings == null ? "" : settings.WallpaperFolder;
+                if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                {
+                    StackPanel empty = new StackPanel();
+                    empty.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl, 0, 0);
+
+                    TextBlock ico = new TextBlock();
+                    ico.Text = "\uE91B";   // Photo
+                    ico.FontFamily = Ui.Mdl;
+                    ico.FontSize = 22;
+                    ico.Foreground = Ui.Sub;
+                    ico.Opacity = 0.55;
+                    empty.Children.Add(ico);
+
+                    TextBlock main = Ui.T("还没有选择壁纸文件夹", 13.5, Ui.Fg, FontWeights.SemiBold);
+                    main.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+                    empty.Children.Add(main);
+
+                    TextBlock hint = Ui.T("右键四叶草 →「壁纸文件夹…」选一个放图片的目录", 12, Ui.Sub);
+                    hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+                    hint.TextWrapping = TextWrapping.Wrap;
+                    hint.MaxWidth = 420;
+                    empty.Children.Add(hint);
+
+                    tilePanel.Children.Add(empty);
+                    if (footerCount != null) footerCount.Text = "壁纸";
+                    return;
+                }
+
+                // ---- 缩略图网格 ----
+                List<WallpaperItem> items = WallpaperLibrary.Scan(folder);
+                if (items.Count == 0)
+                {
+                    TextBlock none = Ui.T("这个文件夹里没有 .jpg / .png / .bmp 图片", 12, Ui.Sub);
+                    none.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl, 0, 0);
+                    tilePanel.Children.Add(none);
+                    if (footerCount != null) footerCount.Text = "壁纸 · 0 张";
+                    return;
+                }
+
+                string currentWallpaper = GetCurrentWallpaperPath();
+                foreach (WallpaperItem it in items)
+                {
+                    tilePanel.Children.Add(MakeWallpaperTile(it, currentWallpaper));
+                }
+
+                if (footerCount != null)
+                    footerCount.Text = "共 " + items.Count + " 张壁纸 · 点缩略图即换";
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "渲染壁纸");
+            }
+        }
+
+        /// <summary>
+        /// 壁纸视图顶部：背景模式二选一 + 重新扫描。
+        ///
+        /// 为什么放在视图里而不是右键菜单：
+        /// 「背景是固定图还是跟随壁纸」是**看着效果调**的偏好 ——
+        /// 用户在壁纸页看着缩略图，自然会想"这个能不能透到面板上"。
+        /// 藏进右键菜单就得来回切。
+        /// </summary>
+        FrameworkElement MakeWallpaperHeader()
+        {
+            StackPanel bar = new StackPanel();
+            bar.Orientation = Orientation.Horizontal;
+            bar.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+
+            bool follow = settings != null && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
+
+            Border bFollow = MakeWallpaperChip("跟随壁纸", follow, delegate
+            {
+                if (settings == null) return;
+                settings.GlassMode = "screen";
+                settings.Save();
+                ApplyGlassMode();
+                RenderApps();
+            });
+
+            Border bFixed = MakeWallpaperChip("固定图", !follow, delegate
+            {
+                if (settings == null) return;
+                settings.GlassMode = "fixed";
+                settings.Save();
+                ApplyGlassMode();
+                RenderApps();
+            });
+
+            bar.Children.Add(bFollow);
+            bar.Children.Add(bFixed);
+
+            // 重新扫描（换了文件夹里的图片后手动刷新）
+            Border bRescan = MakeWallpaperChip("重新扫描", false, delegate { RenderApps(); });
+            bRescan.Margin = new Thickness(Ui.S.Sm, 2, 4, 2);
+            bar.Children.Add(bRescan);
+
+            // 换文件夹
+            Border bFolder = MakeWallpaperChip("换文件夹…", false, delegate
+            {
+                if (promptFolderCallback != null) promptFolderCallback();
+            });
+            bar.Children.Add(bFolder);
+
+            return bar;
+        }
+
+        /// <summary>壁纸视图里的小胶囊按钮。</summary>
+        Border MakeWallpaperChip(string label, bool active, Action onClick)
+        {
+            Border b = new Border();
+            b.Height = 28;
+            b.CornerRadius = new CornerRadius(b.Height / 2);
+            b.Margin = new Thickness(0, 2, 4, 2);
+            b.Padding = new Thickness(12, 0, 12, 0);
+            b.Cursor = Cursors.Hand;
+            b.Background = active ? Ui.Accent : Brushes.Transparent;
+            b.BorderBrush = Ui.Line;
+            b.BorderThickness = new Thickness(active ? 0 : 1);
+
+            TextBlock t = Ui.T(label, 11.5, active ? Brushes.White : Ui.Fg,
+                active ? FontWeights.SemiBold : FontWeights.Normal);
+            t.VerticalAlignment = VerticalAlignment.Center;
+            b.Child = t;
+
+            b.MouseEnter += delegate { if (!active) b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { if (!active) b.Background = Brushes.Transparent; };
+            b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
+            return b;
+        }
+
+        /// <summary>
+        /// 一张壁纸的缩略图磁贴。
+        ///
+        /// 缩略图用 DecodePixelWidth 解码：直接读原图（可能 4000×3000）
+        /// 再缩到 160px，内存和 CPU 都是浪费。指定解码宽度后
+        /// WPF 在解码阶段就缩小，每张约 3-8 ms。
+        ///
+        /// 当前壁纸加一圈强调色边框，一眼看出"现在用的是这张"。
+        /// </summary>
+        Border MakeWallpaperTile(WallpaperItem it, string currentPath)
+        {
+            bool isCurrent = !string.IsNullOrEmpty(currentPath)
+                && string.Equals(currentPath, it.Path, StringComparison.OrdinalIgnoreCase);
+
+            Border b = new Border();
+            b.Width = 152;
+            b.Height = 118;
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Margin = new Thickness(2);
+            b.Background = Brushes.Transparent;
+            b.Cursor = Cursors.Hand;
+            b.ToolTip = it.Name + "\n" + WallpaperLibrary.FormatSize(it.Size)
+                + "\n" + it.Modified.ToString("yyyy-MM-dd HH:mm")
+                + (isCurrent ? "\n（当前壁纸）" : "");
+
+            Grid g = new Grid();
+            g.RowDefinitions.Add(new RowDefinition());
+            g.RowDefinitions.Add(new RowDefinition());
+            g.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star);
+            g.RowDefinitions[1].Height = GridLength.Auto;
+
+            // 缩略图
+            Border thumb = new Border();
+            thumb.CornerRadius = new CornerRadius(Ui.R.Sm);
+            thumb.ClipToBounds = true;
+            thumb.Margin = new Thickness(4, 4, 4, 0);
+            thumb.Background = Ui.SearchBg;
+
+            try
+            {
+                BitmapImage bi = new BitmapImage();
+                bi.BeginInit();
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.UriSource = new Uri(it.Path, UriKind.Absolute);
+                // 解码阶段就缩到 144px 宽（磁贴内宽），省内存
+                bi.DecodePixelWidth = 144;
+                bi.EndInit();
+                bi.Freeze();
+
+                Image img = new Image();
+                img.Source = bi;
+                img.Stretch = Stretch.UniformToFill;
+                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                thumb.Child = img;
+            }
+            catch
+            {
+                TextBlock fail = Ui.T("无法预览", 10, Ui.Sub);
+                fail.HorizontalAlignment = HorizontalAlignment.Center;
+                fail.VerticalAlignment = VerticalAlignment.Center;
+                thumb.Child = fail;
+            }
+
+            Grid.SetRow(thumb, 0);
+            g.Children.Add(thumb);
+
+            // 名字
+            TextBlock name = Ui.T(it.Name, 10.5, isCurrent ? Ui.AccentText : Ui.Sub);
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            name.HorizontalAlignment = HorizontalAlignment.Center;
+            name.Margin = new Thickness(6, 3, 6, 4);
+            Grid.SetRow(name, 1);
+            g.Children.Add(name);
+
+            b.Child = g;
+
+            if (isCurrent)
+            {
+                b.BorderBrush = Ui.Accent;
+                b.BorderThickness = new Thickness(2);
+            }
+
+            b.MouseEnter += delegate { b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
+            b.MouseLeftButtonUp += delegate { ApplyWallpaper(it); };
+            return b;
+        }
+
+        /// <summary>
+        /// 应用壁纸：换桌面 + 提主色改强调色 + 如果面板跟随壁纸则重截。
+        /// </summary>
+        void ApplyWallpaper(WallpaperItem it)
+        {
+            try
+            {
+                if (it == null || string.IsNullOrEmpty(it.Path)) return;
+
+                bool ok = Native.SetWallpaper(it.Path);
+                if (!ok)
+                {
+                    MessageBox.Show("换壁纸失败。\r\n\r\n可能是格式不被系统支持（只认 .jpg / .png / .bmp），"
+                        + "或文件被占用。", "四叶草");
+                    return;
+                }
+
+                Ui.Log("换壁纸: " + Path.GetFileName(it.Path));
+
+                // 强调色跟随壁纸主色
+                if (settings != null && settings.AccentFromWallpaper
+                    && string.IsNullOrEmpty(settings.AccentOverride))
+                {
+                    ApplyAccentFromImage(it.Path);
+                }
+
+                // 面板跟随壁纸模式：壁纸变了要重截
+                if (settings != null && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (glassBackdrop != null && IsVisible) RefreshGlassSoon(400);
+                }
+
+                // 刷新视图（更新"当前壁纸"高亮）
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "应用壁纸");
+            }
+        }
+
+        /// <summary>从图片提取主色并应用到强调色系。</summary>
+        public void ApplyAccentFromImage(string imagePath)
+        {
+            try
+            {
+                bool dark = Ui.AppliedTheme == Ui.ThemeMode.Dark;
+                System.Drawing.Color? c = DominantColor.FromImage(imagePath, dark);
+                if (c == null) return;
+
+                System.Drawing.Color soft, text;
+                DominantColor.DeriveAccents(c.Value, dark, out soft, out text);
+
+                Ui.SetAccent(
+                    System.Windows.Media.Color.FromRgb(c.Value.R, c.Value.G, c.Value.B),
+                    System.Windows.Media.Color.FromArgb(soft.A, soft.R, soft.G, soft.B),
+                    System.Windows.Media.Color.FromArgb(text.A, text.R, text.G, text.B));
+
+                Ui.Log("强调色跟随壁纸: " + DominantColor.ToHex(c.Value));
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "提取壁纸主色");
+            }
+        }
+
+        /// <summary>
+        /// 读当前桌面壁纸路径（用于在网格里高亮）。
+        ///
+        /// 从注册表读：HKCU\Control Panel\Desktop\Wallpaper。
+        /// SPI_SETDESKWALLPAPER 会把路径写在这里，所以换完立刻能读到。
+        /// </summary>
+        static string GetCurrentWallpaperPath()
+        {
+            try
+            {
+                using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.CurrentUser
+                    .OpenSubKey(@"Control Panel\Desktop"))
+                {
+                    if (k == null) return "";
+                    object v = k.GetValue("Wallpaper");
+                    return v == null ? "" : Convert.ToString(v);
+                }
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        /// 应用背景模式设置（fixed / screen）。
+        /// 由壁纸页的开关和右键菜单共同调用。
+        /// </summary>
+        public void ApplyGlassMode()
+        {
+            try
+            {
+                if (glassBackdrop == null || settings == null) return;
+
+                bool follow = string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
+                glassBackdrop.FollowWallpaper = follow;
+
+                // 模式变了要重新取背景（fixed 读图 / screen 截屏）
+                glassBackdrop.Clear();
+                if (settings.GlassOpacity > 0 && IsVisible) RefreshGlassSoon(80);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "应用背景模式");
+            }
+        }
+
+        /// <summary>
+        /// 选壁纸文件夹的入口（由 TriggerWindow 注入，避免 ui 层互相依赖）。
+        /// </summary>
+        public Action promptFolderCallback;
 
         /// <summary>
         /// 渲染「收藏夹」视图。

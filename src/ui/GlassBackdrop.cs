@@ -276,24 +276,36 @@ namespace Clover
 
         /// <summary>截取窗口所在区域并缩小、模糊。</summary>
         /// <summary>
-        /// 取得背景图（读 res\background-cyangray.png 并裁剪）。
+        /// 取得背景图。
         ///
-        /// **当前用固定背景图**：用户明确要"青灰玻璃"这种固定观感，
-        /// 不跟随桌面壁纸。截屏方案（CopyFromScreen）的代码保留在
-        /// CaptureFromScreen() 里，想切回去改这一行即可。
+        /// 两种模式（由 settings 的 glassMode 决定）：
+        ///   · "fixed"  → 读 res\background-cyangray.png（观感稳定，默认）
+        ///   · "screen" → 截取桌面壁纸并模糊（透出真实桌面）
+        ///
+        /// 为什么要两种：固定图的配色完全可控，但"透出桌面"是另一种合理审美
+        /// （换壁纸整个面板氛围跟着变）。用户自己选。
         /// </summary>
         ImageSource Capture(Native.RECT rect, int dpi)
         {
             try
             {
+                if (FollowWallpaper) return CaptureFromScreen(rect, dpi);
                 return CaptureFromFile(rect, dpi);
             }
             catch (Exception ex)
             {
-                Ui.LogError(ex, "读取毛玻璃背景");
+                Ui.LogError(ex, "取得毛玻璃背景");
                 return null;
             }
         }
+
+        /// <summary>
+        /// 背景是否跟随桌面壁纸。由设置决定，切换后需要 Refresh。
+        ///
+        /// true  → 截屏 + 模糊（CaptureFromScreen）
+        /// false → 读固定图（CaptureFromFile）
+        /// </summary>
+        public bool FollowWallpaper = false;
 
         /// <summary>
         /// 截取桌面壁纸（备用方案，当前未调用）。

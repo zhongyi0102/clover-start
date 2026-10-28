@@ -169,6 +169,14 @@ namespace Clover
         /// </summary>
         public const string DesktopCategory = "\u0001desktop";
 
+        /// <summary>
+        /// 「壁纸」虚拟分类的标识。
+        ///
+        /// 内容是 WallpaperItem（图片缩略图网格），走单独渲染路径。
+        /// 点缩略图 = 换桌面壁纸（SPI_SETDESKWALLPAPER）+ 提主色改强调色。
+        /// </summary>
+        public const string WallpaperCategory = "\u0001wallpaper";
+
         /// <summary>收藏的文件夹/文件（config\pinned-folders.json）。</summary>
         List<PinnedItem> pinnedFolders = new List<PinnedItem>();
 

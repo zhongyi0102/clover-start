@@ -39,6 +39,45 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern int GetDpiForWindow(IntPtr hWnd);
 
+        /// <summary>
+        /// 设置/查询系统参数（用它换桌面壁纸）。
+        ///
+        /// SPI_SETDESKWALLPAPER = 0x0014
+        /// SPIF_UPDATEINIFILE = 0x01（写入用户配置，重启后仍生效）
+        /// SPIF_SENDCHANGE    = 0x02（广播 WM_SETTINGCHANGE，让其他程序立刻刷新）
+        /// </summary>
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern bool SystemParametersInfo(
+            uint uiAction, uint uiParam, string pvParam, uint fWinIni);
+
+        public const uint SPI_SETDESKWALLPAPER = 0x0014;
+        public const uint SPIF_UPDATEINIFILE = 0x01;
+        public const uint SPIF_SENDCHANGE = 0x02;
+
+        /// <summary>
+        /// 换桌面壁纸。
+        ///
+        /// 参数说明：
+        ///   · pvParam 传**完整路径**（不是 Bitmap 对象）—— 系统自己加载并缩放
+        ///   · SPIF_UPDATEINIFILE | SPIF_SENDCHANGE 一起传：
+        ///     前者保证重启后仍是这张，后者让资源管理器立刻刷新
+        ///     （只传前者的话，壁纸要等下一次登录才变）
+        ///
+        /// 支持 .jpg / .png / .bmp；.webp 等格式系统不认，会返回 false。
+        /// </summary>
+        public static bool SetWallpaper(string imagePath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(imagePath)) return false;
+                if (!System.IO.File.Exists(imagePath)) return false;
+                return SystemParametersInfo(
+                    SPI_SETDESKWALLPAPER, 0, imagePath,
+                    SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+            }
+            catch { return false; }
+        }
+
         [DllImport("user32.dll")]
         public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
