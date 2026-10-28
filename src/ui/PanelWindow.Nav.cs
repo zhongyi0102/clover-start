@@ -766,14 +766,27 @@ namespace Clover
             //   · 系统级搜索：全系统的程序与文件，Instant + Deep 两级
             // 用户看到的是两部分结果，应用磁贴在先（更快、更常用），
             // 系统搜索结果在下面（更全、但可能是文件）。
-            if (q.Length > 0)
+            // 两者在同一个 Grid 里，必须**互斥显示**。
+            //
+            // 第一版只把 searchResultPanel 设 Visible、忘了把 tilePanel 设 Collapsed，
+            // 结果两者叠在一起渲染 —— 搜索结果的文字直接压在磁贴上，
+            // 用户看到的就是"文字互相重叠、糊成一片"。
+            //
+            // 搜索时同时隐藏快速启动区：它是"常用应用"的快捷入口，
+            // 用户已经在搜索了，那排按钮只是占地方。
+            bool searching = q.Length > 0;
+            if (searching)
             {
                 if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Visible;
+                if (tilePanel != null) tilePanel.Visibility = Visibility.Collapsed;
+                if (quickBar != null) quickBar.Visibility = Visibility.Collapsed;
                 if (searchResults != null) searchResults.Search(q);
             }
             else
             {
                 if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Collapsed;
+                if (tilePanel != null) tilePanel.Visibility = Visibility.Visible;
+                if (quickBar != null) quickBar.Visibility = Visibility.Visible;
                 if (searchResults != null) searchResults.Clear();
             }
 
@@ -884,16 +897,30 @@ namespace Clover
 
             // 底部计数：隐藏项不该算进"应用总数"，否则数字对不上眼前的磁贴
             int visible = catalog.Apps.Count - catalog.HiddenItems().Count;
-            footerCount.Text = showingHidden
-                ? "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏"
-                : "共 " + visible + " 个应用";
+            // 搜索时计数改成"已找到多少条系统结果" ——
+            // 原先显示"共 61 个应用"，但页面显示的是搜索结果，数字与内容无关。
+            // SearchResultList 暴露 ShownCount；系统搜索还没出结果时显示"搜索中"。
+            if (searching)
+            {
+                int n = searchResults != null ? searchResults.ShownCount : 0;
+                footerCount.Text = n > 0
+                    ? "找到 " + n + " 条结果"
+                    : "搜索中…";
+            }
+            else
+            {
+                footerCount.Text = showingHidden
+                    ? "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏"
+                    : "共 " + visible + " 个应用";
+            }
 
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
             RestoreScrollOffset();
 
             // 快速启动区跟着一起刷新（它取的是"最常用的几个"，
-            // 而启动次数只会在 Launch 之后变，所以重渲染时同步一次即可）
-            RebuildQuickBar();
+            // 而启动次数只会在 Launch 之后变，所以重渲染时同步一次即可）。
+            // 搜索时快速启动区已隐藏，重建是白费——等退出搜索再刷。
+            if (!searching) RebuildQuickBar();
         }
 
         static int RenderCompare(AppItem a, AppItem b)

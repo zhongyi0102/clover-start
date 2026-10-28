@@ -36,6 +36,17 @@ namespace Clover
         /// <summary>已显示的结果（用于去重与计数）。</summary>
         readonly HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>
+        /// 当前已显示的结果条数（底部计数栏用）。
+        ///
+        /// Deep 是流式追加的，计数会随时间增长 —— 这正是期望行为：
+        /// 用户看到"找到 N 条结果"在慢慢变大，知道搜索还在进行。
+        /// </summary>
+        public int ShownCount
+        {
+            get { return shown.Count; }
+        }
+
         /// <summary>结果条数上限（界面上超过这个数也没人翻）。</summary>
         const int MaxDisplay = 60;
 
@@ -116,7 +127,14 @@ namespace Clover
             }
         }
 
-        /// <summary>追加一批结果（去重、限量）。</summary>
+        /// <summary>
+        /// 追加一批结果（去重、限量），并在来源变化时插入分组标题。
+        ///
+        /// 为什么分组：实测搜 "chrome" 时三种来源混在一起 ——
+        /// 磁贴级的"Google Chrome"和磁盘上的"chrome_100_percent.pak"
+        /// 看起来权重相同，用户分不清哪条是"程序"哪条是"文件"。
+        /// 按来源加小标题（应用 / 系统 / 磁盘）后一眼可辨。
+        /// </summary>
         void AppendBatch(List<SearchResult> batch, bool isInstant)
         {
             try
@@ -128,11 +146,43 @@ namespace Clover
                     if (r == null) continue;
                     if (shown.Count >= MaxDisplay) return;
                     if (!shown.Add(r.Path)) continue;
+
+                    // 来源变化时插入分组标题（去重后第一次遇到该来源）
+                    string groupKey = "G:" + r.Source;
+                    if (shown.Add(groupKey))
+                    {
+                        AddGroupHeader(r.Source);
+                    }
+
                     host.Children.Add(MakeRow(r));
                 }
 
                 // Instant 阶段没有结果时，先不显示"无结果"——Deep 可能还有
                 if (isInstant && shown.Count == 0) return;
+            }
+            catch { }
+        }
+
+        /// <summary>分组小标题（如「应用」「磁盘文件」）。</summary>
+        void AddGroupHeader(string source)
+        {
+            try
+            {
+                string label;
+                switch (source)
+                {
+                    case "开始菜单": label = "应用（开始菜单）"; break;
+                    case "注册表": label = "应用（注册表）"; break;
+                    case "磁盘": label = "磁盘文件"; break;
+                    default: label = source; break;
+                }
+
+                Border b = new Border();
+                b.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Xs);
+                TextBlock t = Ui.T(label, 10.5, Ui.Sub);
+                t.Margin = new Thickness(Ui.S.Xs, 0, 0, 0);
+                b.Child = t;
+                host.Children.Add(b);
             }
             catch { }
         }
@@ -149,18 +199,18 @@ namespace Clover
         }
 
         /// <summary>
-        /// 一行搜索结果：图标 + 名字 + 来源/路径。
+        /// 一行搜索结果：图标 + 名字 + 路径。
         ///
-        /// 图标：文件用系统图标，文件夹用文件夹图标。
-        /// 用 SHGetFileInfo 太重（每次几十 ms），这里用简化策略：
-        /// exe/lnk 用 AppIcons（已有缓存），其他用文字标签。
+        /// 图标列**固定 30px 宽、内容居中**：
+        /// 第一版让图标自适应尺寸，结果 exe 图标（18px）和文件字形（15px）
+        /// 大小不一，左列参差不齐 —— 看起来乱。固定列宽后所有行对齐。
         /// </summary>
         Border MakeRow(SearchResult r)
         {
             Border b = new Border();
             b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.Margin = new Thickness(0, 1, 0, 1);
-            b.Padding = new Thickness(Ui.S.Sm, 6, Ui.S.Sm, 6);
+            b.Padding = new Thickness(Ui.S.Xs, 5, Ui.S.Sm, 5);
             b.Background = Brushes.Transparent;
             b.Cursor = Cursors.Hand;
             b.Tag = r;
@@ -168,12 +218,12 @@ namespace Clover
             Grid g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition());
             g.ColumnDefinitions.Add(new ColumnDefinition());
-            g.ColumnDefinitions[0].Width = new GridLength(28);
+            g.ColumnDefinitions[0].Width = new GridLength(34);   // 固定：图标列对齐
             g.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
 
             // 图标位
             FrameworkElement ico = MakeIcon(r);
-            ico.HorizontalAlignment = HorizontalAlignment.Left;
+            ico.HorizontalAlignment = HorizontalAlignment.Center;
             ico.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(ico, 0);
             g.Children.Add(ico);
