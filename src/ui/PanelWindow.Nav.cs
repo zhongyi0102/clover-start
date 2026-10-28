@@ -23,6 +23,21 @@ namespace Clover
         /// <summary>悬停时图标放大的比例（纯视觉，不改布局）。</summary>
         const double IconHoverScale = 1.12;
 
+        /// <summary>磁贴图标边长。
+        ///
+        /// 32 → 36：原先图标只占磁贴宽度 33%，偏小、显得空旷；
+        /// Windows 开始菜单的图标占比约 40%，36/96 = 38% 更接近那个观感。
+        /// 磁贴本身尺寸不变（96x90），所以排版、拖动换位、滚动记忆都不受影响。
+        ///
+        /// public：验收测试直接引用它来认图标，而不是再硬编码一个 32 ——
+        /// 否则每次调尺寸都要同步改测试，很容易漏。
+        /// </summary>
+        public const double IconSizePx = 36;
+
+        /// <summary>磁贴尺寸（供验收测试引用，避免硬编码漂移）。</summary>
+        public const double TileWidthPx = 96;
+        public const double TileHeightPx = 90;
+
         /// <summary>
         /// 图标悬停动画，**冻结后跨所有磁贴复用**。
         ///
@@ -30,14 +45,37 @@ namespace Clover
         /// 会让托管堆持续增长（这个项目踩过同样的坑，见 ShowPanel 里复用
         /// showAnim/hideAnim 的注释）。冻结的动画是不可变的，可以安全共享。
         /// </summary>
-        static readonly DoubleAnimation IconZoomIn = FrozenScale(IconHoverScale, 120);
-        static readonly DoubleAnimation IconZoomOut = FrozenScale(1.0, 120);
+        static readonly DoubleAnimation IconZoomIn = FrozenScale(1.0, IconHoverScale, 120);
+        static readonly DoubleAnimation IconZoomOut = FrozenScale(IconHoverScale, 1.0, 120);
 
-        static DoubleAnimation FrozenScale(double to, int ms)
+        /// <summary>
+        /// 缩放动画。**起点与终点都明确**，所以可以冻结后跨所有磁贴共享。
+        ///
+        /// 加 EaseOut 缓动：线性缩放在鼠标划过密集磁贴时显得"一顿一顿"，
+        /// 快起慢收则跟手感更顺。（不用 BackEase/ElasticEase —— 回弹会显得轻浮，
+        /// 且高频划过时容易晕。）
+        /// </summary>
+        static DoubleAnimation FrozenScale(double from, double to, int ms)
         {
             DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.From = from;
+            a.EasingFunction = FrozenCubic();
             a.Freeze();
             return a;
+        }
+
+        /// <summary>共享一个冻结的缓动对象（缓动本身不可变，可安全复用）。</summary>
+        static CubicEase frozenEase;
+        static CubicEase FrozenCubic()
+        {
+            if (frozenEase == null)
+            {
+                CubicEase e = new CubicEase();
+                e.EasingMode = EasingMode.EaseOut;
+                e.Freeze();
+                frozenEase = e;
+            }
+            return frozenEase;
         }
 
         /// <summary>
@@ -182,7 +220,7 @@ namespace Clover
 
                 Border item = new Border();
                 item.Height = 34;
-                item.CornerRadius = new CornerRadius(8);
+                item.CornerRadius = new CornerRadius(Ui.R.Sm);
                 item.Margin = new Thickness(0, 2, 0, 2);
                 item.Background = Brushes.Transparent;
                 item.Cursor = Cursors.Hand;
@@ -216,7 +254,7 @@ namespace Clover
                 name.FontSize = 12.5;
                 name.Foreground = Ui.Fg;
                 name.VerticalAlignment = VerticalAlignment.Center;
-                name.Margin = new Thickness(10, 0, 0, 0);
+                name.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
                 name.TextTrimming = TextTrimming.CharacterEllipsis;
                 Grid.SetColumn(name, 1);
                 g.Children.Add(name);
@@ -227,7 +265,7 @@ namespace Clover
                 cnt.FontSize = 11;
                 cnt.Foreground = Ui.Sub;
                 cnt.VerticalAlignment = VerticalAlignment.Center;
-                cnt.Margin = new Thickness(4, 0, 10, 0);
+                cnt.Margin = new Thickness(Ui.S.Xs, 0, Ui.S.Sm, 0);
                 Grid.SetColumn(cnt, 2);
                 g.Children.Add(cnt);
 
@@ -428,6 +466,177 @@ namespace Clover
             return list;
         }
 
+        /// <summary>
+        /// 重建顶部快速启动区。
+        ///
+        /// 取"用过的里面最常用的几个"（沿用 CommonApps 的排序口径），
+        /// 而不是用户手动指定 —— 手选要再加一套配置和一个设置界面，
+        /// 而使用频率本来就已经反映了"常用的"。
+        ///
+        /// 一件都没用过时整个区域不显示（Height=Auto 会收成 0），
+        /// 新装用户不会看到一排空位。
+        /// </summary>
+        void RebuildQuickBar()
+        {
+            try
+            {
+                if (quickBar == null) return;
+                quickBar.Children.Clear();
+
+                // 注意：不要在这里写 `if (QuickBarCount <= 0) return;` ——
+                // QuickBarCount 是 const，编译器能判定该分支恒不成立，
+                // 会报 CS0162「检测到无法访问的代码」。要关掉这个功能就把常量改成 0，
+                // 并同步删掉这里的取用逻辑。
+                List<AppItem> top = CommonApps();
+                if (top.Count == 0) return;
+
+                if (top.Count > QuickBarCount) top = top.GetRange(0, QuickBarCount);
+
+                // 左侧小标签，说明这一排是什么（否则用户会以为它们是"置顶的普通磁贴"）
+                TextBlock label = Ui.T("常用", 10.5, Ui.Sub);
+                label.VerticalAlignment = VerticalAlignment.Center;
+                label.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+                quickBar.Children.Add(label);
+
+                foreach (AppItem a in top)
+                    quickBar.Children.Add(MakeQuickButton(a));
+
+                Ui.Log("快速启动区: " + top.Count + " 个");
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "重建快速启动区");
+            }
+        }
+
+        /// <summary>
+        /// 按当前状态同步一块磁贴的"运行中"小圆点（增或删）。
+        ///
+        /// 就地操作，不重建磁贴：面板开着期间应用可能刚启动/刚退出，
+        /// 为几颗 8px 的点重建 700+ 控件不值得。
+        /// 圆点放在 iconBox 的最后一个子元素，所以"有没有"就是看末位类型。
+        /// </summary>
+        void SyncRunningDot(AppItem a, Grid iconBox)
+        {
+            try
+            {
+                if (a == null || iconBox == null) return;
+
+                bool shouldShow = RunningApps.IsRunningCached(a.Path);
+
+                // 末尾是不是已经有圆点了
+                Border existing = null;
+                int n = iconBox.Children.Count;
+                if (n > 0) existing = iconBox.Children[n - 1] as Border;
+                bool hasDot = existing != null && Math.Abs(existing.Width - 8) < 0.1;
+
+                if (shouldShow == hasDot) return;   // 状态没变，不碰
+
+                if (shouldShow)
+                {
+                    Border dot = new Border();
+                    dot.Width = 8;
+                    dot.Height = 8;
+                    dot.CornerRadius = new CornerRadius(4);   // 正圆
+                    dot.Background = Ui.Accent;
+                    dot.HorizontalAlignment = HorizontalAlignment.Right;
+                    dot.VerticalAlignment = VerticalAlignment.Top;
+                    // 略微外扩到图标边框上，像"贴在角上"而不是"压在图标里"
+                    dot.Margin = new Thickness(0, -1, -1, 0);
+                    dot.ToolTip = a.Name + " 正在运行";
+                    iconBox.Children.Add(dot);
+                }
+                else
+                {
+                    iconBox.Children.Remove(existing);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 就地刷新所有已画磁贴的小圆点。
+        ///
+        /// 由任务栏刷新定时器（1.5 秒）调用。两件事会需要它：
+        ///   1. 后台预热完成后，缓存从"没热"变成"热"，原先没画上的点要补上
+        ///   2. 面板开着期间应用启动了/退出了
+        /// 只查表 + 增删一个小 Border，不触发布局、不重建磁贴。
+        /// </summary>
+        void RefreshRunningDots()
+        {
+            try
+            {
+                if (tileIconBoxes.Count == 0) return;
+                if (renderedApps == null) return;
+                if (!IsVisible) return;   // 面板没显示，没人看，省掉
+
+                RunningApps.Refresh();   // 内部 1.5 秒节流
+
+                foreach (AppItem a in renderedApps)
+                {
+                    if (a == null) continue;
+                    Grid box;
+                    if (!tileIconBoxes.TryGetValue(a.Path, out box)) continue;
+                    SyncRunningDot(a, box);
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 快速启动按钮：图标 + 名字（横排，比磁贴小）。
+        ///
+        /// 单独做而不复用 MakeTile：磁贴是 96x90 的竖排大块，
+        /// 一排 7 个会占掉 700px 宽，把内容区挤扁。
+        /// </summary>
+        Border MakeQuickButton(AppItem a)
+        {
+            Border b = new Border();
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Height = 30;
+            b.Padding = new Thickness(Ui.S.Sm, 0, Ui.S.Sm + 2, 0);
+            b.Margin = new Thickness(0, 0, Ui.S.Xs, 0);
+            b.Cursor = Cursors.Hand;
+            b.Background = Ui.SearchBg;
+            b.ToolTip = a.Name;
+            b.VerticalAlignment = VerticalAlignment.Center;
+
+            StackPanel sp = new StackPanel();
+            sp.Orientation = Orientation.Horizontal;
+            sp.VerticalAlignment = VerticalAlignment.Center;
+
+            ImageSource icon = AppIcons.Get(a.Path);
+            if (icon != null)
+            {
+                Image img = new Image();
+                img.Source = icon;
+                img.Width = 18;
+                img.Height = 18;
+                img.Margin = new Thickness(0, 0, Ui.S.Xs + 2, 0);
+                img.VerticalAlignment = VerticalAlignment.Center;
+                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                sp.Children.Add(img);
+            }
+
+            TextBlock name = Ui.T(a.Name, 12, Ui.Fg);
+            name.VerticalAlignment = VerticalAlignment.Center;
+            name.MaxWidth = 96;
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
+            sp.Children.Add(name);
+
+            b.Child = sp;
+
+            b.MouseEnter += delegate { b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
+            b.MouseLeftButtonDown += delegate { b.Background = Ui.Pressed; };
+            b.MouseLeftButtonUp += delegate
+            {
+                b.Background = Ui.Hover;
+                Launch(a);
+            };
+            return b;
+        }
+
         /// <summary>当前已渲染内容的签名，用于判断是否真的需要重建磁贴。</summary>
         string renderedSig = "";
 
@@ -541,6 +750,9 @@ namespace Clover
         void RenderAppsCore()
         {
             tilePanel.Children.Clear();
+            // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
+            // 否则 RefreshRunningDots 会去改已经不存在的控件
+            tileIconBoxes.Clear();
 
             string q = searchBox == null ? "" : searchBox.Text.Trim();
             showingCommon = (q.Length == 0 && current == "常用");
@@ -574,6 +786,14 @@ namespace Clover
 
             ApplyCustomOrder(list);
             renderedApps = new List<AppItem>(list);
+
+            // 刷新"哪些应用在运行"，供磁贴右上角的小圆点用。
+            //
+            // RunningApps.Refresh 内部有 1.5 秒节流（枚举 300+ 进程约 50-75 ms），
+            // 而建磁贴只用 IsRunningCached（只读缓存，不解析 lnk）——
+            // 首次解析 112 个快捷方式要 239 ms，那代价放在后台预热里做。
+            RunningApps.Refresh();
+
             // 重渲染会丢弃旧的 Border 对象，选中状态必须一起清掉（否则 selectedTile 指向已移除的控件）
             selectedTile = null;
             selectedIndex = -1;
@@ -582,14 +802,61 @@ namespace Clover
 
             if (list.Count == 0)
             {
-                string tip;
-                if (q.Length > 0) tip = "没有找到匹配的应用";
-                else if (current == "常用") tip = "还没有常用应用：从面板启动几次就会出现";
-                else if (current == HiddenCategory) tip = "没有隐藏的应用";
-                else tip = "这个分类里没有应用";
-                TextBlock none = Ui.T(tip, 13, Ui.Sub);
-                none.Margin = new Thickness(18, 18, 0, 0);
-                tilePanel.Children.Add(none);
+                // 空状态：图标 + 主句 + 引导。
+                //
+                // 原先只有一行灰字（"没有找到匹配的应用"），既没有视觉锚点，
+                // 也没告诉用户"接下来能做什么"。空状态是用户唯一会盯着看几秒的
+                // 屏幕，值得给一点设计 —— 但它仍然是空状态，不能喧宾夺主。
+                string tip, sub, glyph;
+                if (q.Length > 0)
+                {
+                    glyph = "\uE721";                                   // 放大镜
+                    tip = "没有找到「" + q + "」";
+                    sub = "换个说法试试，或者用拼音首字母（如 wx → 微信）";
+                }
+                else if (current == "常用")
+                {
+                    glyph = "\uE735";                                   // 星标
+                    tip = "还没有常用应用";
+                    sub = "从面板启动几次，常用的会自动出现在这里";
+                }
+                else if (current == HiddenCategory)
+                {
+                    glyph = "\uE7B3";                                   // 眼睛
+                    tip = "没有隐藏的应用";
+                    sub = "右键应用磁贴 →「从面板隐藏」可以把用不到的藏起来";
+                }
+                else
+                {
+                    glyph = "\uE7C3";                                   // 页面
+                    tip = "这个分类里没有应用";
+                    sub = "右键四叶草 →「重新扫描应用」可以重新识别";
+                }
+
+                StackPanel empty = new StackPanel();
+                empty.HorizontalAlignment = HorizontalAlignment.Left;
+                empty.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl + Ui.S.Sm, 0, 0);
+
+                TextBlock ico = new TextBlock();
+                ico.Text = glyph;
+                ico.FontFamily = Ui.Mdl;
+                ico.FontSize = 22;
+                ico.Foreground = Ui.Sub;
+                ico.Opacity = 0.55;      // 压低存在感：是装饰，不是内容
+                ico.HorizontalAlignment = HorizontalAlignment.Left;
+                empty.Children.Add(ico);
+
+                TextBlock main = Ui.T(tip, 13.5, Ui.Fg, FontWeights.SemiBold);
+                main.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+                empty.Children.Add(main);
+
+                TextBlock hint = Ui.T(sub, 12, Ui.Sub);
+                hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+                hint.TextWrapping = TextWrapping.Wrap;
+                hint.MaxWidth = 320;
+                empty.Children.Add(hint);
+
+                tilePanel.Children.Add(empty);
             }
 
             // 底部计数：隐藏项不该算进"应用总数"，否则数字对不上眼前的磁贴
@@ -600,6 +867,10 @@ namespace Clover
 
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
             RestoreScrollOffset();
+
+            // 快速启动区跟着一起刷新（它取的是"最常用的几个"，
+            // 而启动次数只会在 Launch 之后变，所以重渲染时同步一次即可）
+            RebuildQuickBar();
         }
 
         static int RenderCompare(AppItem a, AppItem b)
@@ -614,9 +885,9 @@ namespace Clover
         Border MakeTile(AppItem a)
         {
             Border b = new Border();
-            b.Width = 96;
-            b.Height = 90;
-            b.CornerRadius = new CornerRadius(10);
+            b.Width = TileWidthPx;
+            b.Height = TileHeightPx;
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.Margin = new Thickness(2);
             b.Background = Brushes.Transparent;
             b.Cursor = Cursors.Hand;
@@ -637,24 +908,24 @@ namespace Clover
             {
                 Image img = new Image();
                 img.Source = icon;
-                img.Width = 32;
-                img.Height = 32;
+                img.Width = IconSizePx;
+                img.Height = IconSizePx;
                 img.HorizontalAlignment = HorizontalAlignment.Center;
-                img.Margin = new Thickness(0, 0, 0, 6);
+                img.VerticalAlignment = VerticalAlignment.Center;
                 RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
                 iconVisual = img;
             }
             else
             {
                 Border ph = new Border();
-                ph.Width = 32;
-                ph.Height = 32;
-                ph.CornerRadius = new CornerRadius(7);
+                ph.Width = IconSizePx;
+                ph.Height = IconSizePx;
+                ph.CornerRadius = new CornerRadius(Ui.R.Sm);
                 ph.Background = Ui.AccentSoft;
                 ph.HorizontalAlignment = HorizontalAlignment.Center;
-                ph.Margin = new Thickness(0, 0, 0, 6);
+                ph.VerticalAlignment = VerticalAlignment.Center;
                 string initial = string.IsNullOrEmpty(a.Name) ? "?" : a.Name.Substring(0, 1);
-                TextBlock init = Ui.T(initial, 13, Ui.AccentText, FontWeights.SemiBold);
+                TextBlock init = Ui.T(initial, 14.5, Ui.AccentText, FontWeights.SemiBold);
                 init.HorizontalAlignment = HorizontalAlignment.Center;
                 init.VerticalAlignment = VerticalAlignment.Center;
                 ph.Child = init;
@@ -663,7 +934,26 @@ namespace Clover
 
             iconVisual.RenderTransformOrigin = new Point(0.5, 0.5);
             iconVisual.RenderTransform = iconScale;
-            sp.Children.Add(iconVisual);
+
+            // 图标外面套一层 Grid，好在右上角叠"运行中"小圆点。
+            // 用叠加而不是改图标本身：图标来自系统缓存、可能被多块磁贴共享，
+            // 不能往上画东西。
+            Grid iconBox = new Grid();
+            iconBox.Width = IconSizePx;
+            iconBox.Height = IconSizePx;
+            iconBox.HorizontalAlignment = HorizontalAlignment.Center;
+            iconBox.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            iconBox.Children.Add(iconVisual);
+
+            // 记下容器，供 RefreshRunningDots 就地增删小圆点
+            tileIconBoxes[a.Path] = iconBox;
+
+            // 建磁贴时只读缓存（IsRunningCached 不解析 lnk）：
+            // 首次解析 112 个快捷方式要 239 ms，那代价必须留在后台预热里。
+            // 缓存还没热的话这里先不画点，等 RefreshRunningDots 补上。
+            SyncRunningDot(a, iconBox);
+
+            sp.Children.Add(iconBox);
 
             TextBlock name = new TextBlock();
             name.Text = a.Name;
@@ -702,6 +992,10 @@ namespace Clover
             {
                 downPt = e.GetPosition(tilePanel);
                 tileDrag = false;
+                // 按下态：补全"静止/悬停/按下"三态。
+                // 点一个启动稍慢的应用时，用户能看到"按下去了"，
+                // 不会怀疑是没点中。
+                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Pressed;
                 // 鼠标点击磁贴时，键盘选中跟随到它，方向键从当前位置继续
                 SelectTile(renderedApps.IndexOf(a), false);
                 try { b.CaptureMouse(); } catch { }
@@ -720,6 +1014,9 @@ namespace Clover
             {
                 try { b.ReleaseMouseCapture(); } catch { }
                 b.Opacity = 1.0;
+                // 松开：回到悬停态（鼠标还在磁贴上），而不是透明 ——
+                // 否则刚点完会闪一下，像"点完就灭了"
+                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
                 Ui.Log("tile up drag=" + tileDrag + " " + a.Name);
                 if (tileDrag)
                 {

@@ -12,6 +12,8 @@
 
 - 点击任务栏里的四叶草按钮，或按 `Ctrl + Alt + 空格`，打开 / 收起面板
 - 按钮是任务栏里的一个独立按钮（44×48，原生样式、悬停高亮），位于应用按钮组末尾并自动跟随；不会遮挡任何图标
+- **顶部快速启动区**：固定显示最常用的 7 个应用（带图标 + 名字），一眼就能点，不用先切分类。一个都没用过时整行自动收起
+- **"运行中"小圆点**：正在运行的应用，图标右上角会有一个小圆点
 - 面板窗口可以像普通软件一样**拖动**（按住顶部标题区拖动）和**调整大小**（拖四边或四角），位置和尺寸保存在 `config\layout.json`
 - **重启后回到原样**：面板位置由 `layout.json` 记住，**上次浏览的分类**由 `config\last-category.json` 记住。配合 `dev-run.ps1` 反复重启调界面时，不用每次重新找位置和分类
 - 右上角三个窗口按钮：**─ 最小化**（收起面板）/ **□ 最大化·还原**（铺满整个屏幕，再点一次还原）/ **✕ 关闭**（收起面板）
@@ -705,7 +707,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十七个套件，共 529 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**十八个套件，共 553 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -730,6 +732,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
 | `HiddenAppsTest` | 47 | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
 | `ScanChainTest` | 13 | 扫描链：便携条目不会被每轮扫描抹掉（真实 bug 回归，已用注入验证） |
+| `RunningAppsTest` | 21 | 运行状态判定：**必须精确路径匹配** —— 弱匹配曾把 7 个 Python 系应用误标为运行中（已用注入验证）、缓存不解析 lnk、预热不阻塞 |
 | `CategoriesTest` | 63 | 重命名只改显示名（内部名不变）、顺序只重排已存在的分类、上移下移边界、坏文件回退 |
 | （主题断言） | 3 | 见 `AcceptanceTest`：刷子真的变色、非法值回退、深色投影加深 |
 | `ActiveRowTest` | 14 | 任务栏行高亮判定：只有一行亮、前台句柄为 0 时不高亮任何行、切换后刚好翻转、重复判定幂等 |
@@ -738,7 +741,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `AcceptanceTest` | 25 | **真实创建 `PanelWindow`** 并 Show → 检查控件树可遍历（约 100 个可视元素）、左侧分类栏有条目、应用磁贴已渲染、搜索框可输入、覆盖表在真实界面链路上生效、显示/隐藏不抛异常 |
+| `AcceptanceTest` | 28 | **真实创建 `PanelWindow`** 并 Show → 检查控件树可遍历（约 100 个可视元素）、左侧分类栏有条目、应用磁贴已渲染、搜索框可输入、覆盖表在真实界面链路上生效、显示/隐藏不抛异常 |
 
 `AcceptanceTest` 借鉴了两个做法（**只借鉴形态，不复制代码** —— 参考项目用的是与 MIT 不兼容的非商业许可）：
 
@@ -753,7 +756,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：17 个套件、529 个断言全部通过（2026-10-28，v1.0.3）**
+**最近一次运行结果：18 个套件、553 个断言全部通过（2026-10-28，v1.0.4）**
 
 > 断言数变化：151 → 373。其中 `CatalogTest` 43→76（分类规则扩充）、新增 `CategoryRulesTest` 61、
 > 新增 `CategoryOverrideTest` 30、新增 `AcceptanceTest` 12、新增 `ActiveRowTest` 14、

@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 
@@ -28,6 +29,14 @@ namespace Clover
         public static readonly SolidColorBrush Fg = new SolidColorBrush();
         public static readonly SolidColorBrush Sub = new SolidColorBrush();
         public static readonly SolidColorBrush Hover = new SolidColorBrush();
+        /// <summary>
+        /// 按下态（比 Hover 再深一档）。
+        ///
+        /// 补全"静止 / 悬停 / 按下"三态：此前磁贴只有悬停和选中，
+        /// 鼠标按下去到松开之间**没有任何视觉反馈** —— 点一个启动稍慢的应用时，
+        /// 用户不知道是"没点中"还是"正在启动"。
+        /// </summary>
+        public static readonly SolidColorBrush Pressed = new SolidColorBrush();
         public static readonly SolidColorBrush SearchBg = new SolidColorBrush();
         public static readonly SolidColorBrush Accent = new SolidColorBrush();
         public static readonly SolidColorBrush AccentSoft = new SolidColorBrush();
@@ -45,7 +54,7 @@ namespace Clover
         /// <summary>一套配色。</summary>
         class Palette
         {
-            public uint Bg, Line, Fg, Sub, Hover, SearchBg, Accent, AccentSoft, AccentText;
+            public uint Bg, Line, Fg, Sub, Hover, Pressed, SearchBg, Accent, AccentSoft, AccentText;
         }
 
         // 浅色（原来的样子，保持不变）
@@ -56,6 +65,7 @@ namespace Clover
             Fg = 0x202020,
             Sub = 0x787672,
             Hover = 0xF3F1ED,
+            Pressed = 0xE8E5DF,
             SearchBg = 0xF2F0EC,
             Accent = 0x388C48,
             AccentSoft = 0xE8F3E9,
@@ -73,6 +83,7 @@ namespace Clover
             Fg = 0xE9E9EA,
             Sub = 0x9A9AA0,
             Hover = 0x2A2C31,
+            Pressed = 0x33363C,
             SearchBg = 0x26282C,
             Accent = 0x54B863,
             AccentSoft = 0x24352A,
@@ -91,6 +102,7 @@ namespace Clover
             Fg.Color = FromRgb24(p.Fg);
             Sub.Color = FromRgb24(p.Sub);
             Hover.Color = FromRgb24(p.Hover);
+            Pressed.Color = FromRgb24(p.Pressed);
             SearchBg.Color = FromRgb24(p.SearchBg);
             Accent.Color = FromRgb24(p.Accent);
             AccentSoft.Color = FromRgb24(p.AccentSoft);
@@ -204,6 +216,140 @@ namespace Clover
             return AppliedTheme == ThemeMode.Dark
                 ? Shadow(34, 0.55, 4)    // 深色：更浓、更贴近（投影在暗背景上靠浓度而非距离表现）
                 : Shadow(30, 0.20, 6);   // 浅色：保持原来的观感
+        }
+
+        // ════════════════════════════════════════════════════════════
+        //  设计令牌（design tokens）
+        //
+        //  原先数值散落在各文件里：圆角有 0/1/2/6/7/8/10/12/16/17 共 **10 种**，
+        //  间距混了 1/2/6/10/18 这些不成倍数的值。看起来"每处都合理"，
+        //  合起来就没有体系 —— 这是最典型的"AI 拼出来"的痕迹。
+        //  这里收敛成有限几档，改的时候只改这里。
+        // ════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// 圆角三档。
+        ///
+        /// 按元素**层级**选，不按大小选：控件 → 卡片 → 容器，越大越圆。
+        /// 统一圆角会显得像盖章盖出来的（每个元素都一个样）。
+        /// </summary>
+        public static class R
+        {
+            /// <summary>小：按钮、磁贴、列表项、输入框。</summary>
+            public const double Sm = 8;
+            /// <summary>中：对话框、卡片。</summary>
+            public const double Md = 12;
+            /// <summary>大：面板主体、大容器。</summary>
+            public const double Lg = 16;
+            /// <summary>胶囊：搜索框这种完全圆头（高的一半）。</summary>
+            public const double Pill = 999;
+        }
+
+        /// <summary>
+        /// 间距阶梯，**全是 4 的倍数**。
+        ///
+        /// 4px 基准是屏幕像素与视觉节奏的公约数：既能表达细腻层次，
+        /// 又保证任意两档之和不出现奇数（奇数间距在高 DPI 下会半像素糊边）。
+        /// 原来的 1/6/10/18 会让相邻元素的边界落在半像素上。
+        /// </summary>
+        public static class S
+        {
+            /// <summary>4 — 紧贴（图标与文字之间）。</summary>
+            public const double Xs = 4;
+            /// <summary>8 — 相关元素之间（磁贴间距）。</summary>
+            public const double Sm = 8;
+            /// <summary>12 — 同组元素之间。</summary>
+            public const double Md = 12;
+            /// <summary>16 — 组与组之间（面板内边距）。</summary>
+            public const double Lg = 16;
+            /// <summary>20 — 区域与区域之间。</summary>
+            public const double Xl = 20;
+        }
+
+        // ──────────── 缓动 ────────────
+        //
+        // 此前全项目 **0 处缓动**，所有动画都是 WPF 默认的线性插值。
+        // 线性动画的问题是两端速度不变：入场结尾"急停"像被掐断，
+        // 出场开头"猛冲"像被踢了一脚。
+        //
+        // 只用 CubicEase 这一个家族：
+        //   · EaseOut → 入场（快起慢收，落得稳）
+        //   · EaseIn  → 出场（慢起快收，走得干脆）
+        //   · EaseInOut → 需要"对称感"的位移
+        //
+        // ⚠ 明确不用 BackEase / ElasticEase / BounceEase：
+        //   那是"回弹/弹性"效果，在桌面工具类界面里会显得轻浮、花哨，
+        //   而且会让高频操作（反复开关面板）产生晕眩感。
+
+        static readonly IEasingFunction EaseOut = FreezeEase(EasingMode.EaseOut);
+        static readonly IEasingFunction EaseIn = FreezeEase(EasingMode.EaseIn);
+        static readonly IEasingFunction EaseInOut = FreezeEase(EasingMode.EaseInOut);
+
+        static IEasingFunction FreezeEase(EasingMode mode)
+        {
+            CubicEase e = new CubicEase();
+            e.EasingMode = mode;
+            e.Freeze();   // 冻结后可跨控件/跨次复用，避免反复 new
+            return e;
+        }
+
+        /// <summary>
+        /// 入场缓动（快起慢收）。动画对象会被冻结，可安全跨控件共享。
+        ///
+        /// 注意：**冻结的动画不能再改属性**（`From`、`To`）。
+        /// 所以这里只在"起点固定"的场合用（如悬停放大固定从 1.0 起）。
+        /// 起点每次不同的动画（如面板透明度从当前值起）用 <see cref="EnterAnim"/>。
+        /// </summary>
+        public static DoubleAnimation Enter(double to, double ms, double? from = null)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.EasingFunction = EaseOut;
+            if (from.HasValue) a.From = from.Value;
+            a.Freeze();
+            return a;
+        }
+
+        /// <summary>出场缓动（慢起快收），冻结版。同上：起点固定时用。</summary>
+        public static DoubleAnimation Exit(double to, double ms, double? from = null)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.EasingFunction = EaseIn;
+            if (from.HasValue) a.From = from.Value;
+            a.Freeze();
+            return a;
+        }
+
+        /// <summary>对称缓动（两端都柔），冻结版。用于位移类。</summary>
+        public static DoubleAnimation Shift(double to, double ms, double? from = null)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.EasingFunction = EaseInOut;
+            if (from.HasValue) a.From = from.Value;
+            a.Freeze();
+            return a;
+        }
+
+        // ── 可复用的未冻结动画（起点每回合都要改）──
+        //
+        // 面板的透明度/位移动画起点每次都不同（当前值 → 目标值），
+        // 所以必须是**未冻结**的对象，由调用方在复用前重设 From。
+        // 仍然复用同一个对象实例（而不是每次 new），避免反复开关面板
+        // 造成托管堆增长 —— 这个坑项目里踩过一次。
+
+        /// <summary>建一个可复用的入场动画（起点留空，调用方每次设 From）。</summary>
+        public static DoubleAnimation ReusableEnter(double to, double ms)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.EasingFunction = EaseOut;
+            return a;
+        }
+
+        /// <summary>建一个可复用的出场动画（起点留空）。</summary>
+        public static DoubleAnimation ReusableExit(double to, double ms)
+        {
+            DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(ms));
+            a.EasingFunction = EaseIn;
+            return a;
         }
 
         public static void Log(string msg)

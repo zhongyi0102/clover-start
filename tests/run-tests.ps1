@@ -99,6 +99,14 @@ Invoke-Suite 'ScanChainTest' ($baseRefs + $webRef) `
         (Join-Path $testDir 'ScanChainTest.cs')
     ))
 
+# 运行状态判定：必须是精确路径匹配（弱匹配曾把 7 个 Python 应用误标为运行中）
+Invoke-Suite 'RunningAppsTest' ($baseRefs + $webRef) `
+    (@(
+        (Join-Path $coreDir 'RunningApps.cs'),
+        (Join-Path $coreDir 'JsonIO.cs'),
+        (Join-Path $testDir 'RunningAppsTest.cs')
+    ))
+
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
 

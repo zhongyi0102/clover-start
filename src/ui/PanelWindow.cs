@@ -92,6 +92,31 @@ namespace Clover
         /// </summary>
         bool suppressScrollRecord;
 
+        /// <summary>
+        /// 快速启动区（顶部固定几个常用应用）。
+        ///
+        /// **独立于 tilePanel**：键盘导航靠 tilePanel.Children 与 renderedApps 一一对应，
+        /// 往 tilePanel 里插非应用元素会让下标错位、方向键跳错磁贴。
+        /// </summary>
+        StackPanel quickBar;
+
+        /// <summary>快速启动区显示几个（0 = 关闭该功能）。</summary>
+        const int QuickBarCount = 7;
+
+        /// <summary>
+        /// 每块磁贴的图标容器（应用 → 容器），供就地刷新"运行中"小圆点用。
+        ///
+        /// 为什么不靠重渲染：一块磁贴约 6 个可视化元素，119 个就是 700+ 控件，
+        /// 而运行状态每 1.5 秒可能变一次。为了几颗 8px 的小点重建整棵树不值当。
+        /// 这里只增删一颗小圆点，代价是 O(应用数) 的字典查表，且不触发布局。
+        ///
+        /// 为什么记全部磁贴而不是只记"有小圆点的"：
+        /// 应用可能在面板开着期间**刚启动**（比如你点了 Chrome），
+        /// 这时需要**补画**圆点 —— 只记已有的就无法补。
+        /// </summary>
+        readonly Dictionary<string, Grid> tileIconBoxes =
+            new Dictionary<string, Grid>(StringComparer.OrdinalIgnoreCase);
+
         List<string> navCats = new List<string>();
         List<Border> navItems = new List<Border>();
         List<Border> navBars = new List<Border>();
@@ -133,6 +158,15 @@ namespace Clover
             orderPath = Path.Combine(baseDir, "config", "order.json");
             LoadCustomOrders();
             LoadLastCategory();
+
+            // 后台预热"应用是否在运行"要用的 .lnk 目标缓存。
+            //
+            // 首次解析 112 个快捷方式实测 239 ms（每个 1-3 ms 的 COM 调用）。
+            // 放在这里（而不是等用户打开面板）是因为：面板首次渲染时若缓存没热，
+            // 就只画不出小圆点，等预热完成由 1.5 秒的定时器补上 ——
+            // 用户看不到卡顿，最多第一眼少几个点。
+            // WarmUpAsync 内部起线程，不会阻塞构造函数。
+            WarmRunningCache();
 
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
@@ -316,9 +350,12 @@ namespace Clover
             if (h != IntPtr.Zero) Native.SetForegroundWindow(h);
 
             // 复用同一个 reveal 动画对象，避免每次显示都新建 DoubleAnimation
+            // （实测反复开关面板会造成托管堆持续增长）。
+            // 用 Ui.ReusableEnter：带 EaseOut 缓动，且**未冻结**
+            // —— 因为下面每回合都要改 From（从当前透明度起）。
             if (showAnim == null)
             {
-                showAnim = new DoubleAnimation(1, TimeSpan.FromMilliseconds(150));
+                showAnim = Ui.ReusableEnter(1, 150);
             }
             showAnim.From = 0;
             BeginAnimation(OpacityProperty, showAnim);
@@ -333,7 +370,8 @@ namespace Clover
             {
                 if (showShiftAnim == null)
                 {
-                    showShiftAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(160));
+                    // EaseOut：快起慢收，面板"落"得稳，不像被推到位置就急停
+                    showShiftAnim = Ui.ReusableEnter(0, 160);
                 }
                 showShiftAnim.From = ShowShiftPx;
                 showShift.BeginAnimation(TranslateTransform.YProperty, showShiftAnim);
@@ -360,7 +398,8 @@ namespace Clover
             // （实测反复开关面板会造成托管堆持续增长）。
             if (hideAnim == null)
             {
-                hideAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(110));
+                // EaseIn：慢起快收，走得干脆（出场比入场略快，观感上"收"得利落）
+                hideAnim = Ui.ReusableExit(0, 110);
                 hideAnim.Completed += delegate
                 {
                     BeginAnimation(OpacityProperty, null);
@@ -379,7 +418,7 @@ namespace Clover
             {
                 if (hideShiftAnim == null)
                 {
-                    hideShiftAnim = new DoubleAnimation(0, TimeSpan.FromMilliseconds(110));
+                    hideShiftAnim = Ui.ReusableExit(0, 110);
                 }
                 hideShiftAnim.From = showShift.Y;
                 hideShiftAnim.To = ShowShiftPx;
@@ -413,7 +452,7 @@ namespace Clover
                     expanded = false;
                     edgeMargin = 16;
                     rootBorder.Margin = new Thickness(16);
-                    rootBorder.CornerRadius = new CornerRadius(16);
+                    rootBorder.CornerRadius = new CornerRadius(Ui.R.Lg);
                     Left = normalRect.X;
                     Top = normalRect.Y;
                     Width = normalRect.Width;

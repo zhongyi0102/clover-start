@@ -49,6 +49,11 @@ namespace Clover
                 if (ErrorLog.ShuttingDown) return;
                 try { if (IsVisible) RefreshTaskList(); }
                 catch (Exception ex) { Ui.LogError(ex, "刷新任务栏列表"); }
+                // 顺带刷新磁贴上的"运行中"小圆点：应用可能在面板开着时启动/退出，
+                // 而后台预热完成后也要把先前没画上的点补上。
+                // 只有可见时才做（不可见时没人看），且内部只查表 + 增删一个小 Border。
+                try { RefreshRunningDots(); }
+                catch (Exception ex) { Ui.LogError(ex, "刷新运行状态圆点"); }
             };
             taskTimer.Start();
         }
@@ -130,7 +135,7 @@ namespace Clover
             if (wins.Count == 0)
             {
                 TextBlock none = Ui.T("没有打开的窗口", 10.5, Ui.Sub);
-                none.Margin = new Thickness(6, 4, 0, 0);
+                none.Margin = new Thickness(Ui.S.Sm, Ui.S.Xs, 0, 0);
                 taskStack.Children.Add(none);
                 return;
             }
@@ -142,7 +147,7 @@ namespace Clover
         {
             Border b = new Border();
             b.Height = 30;
-            b.CornerRadius = new CornerRadius(6);
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.Margin = new Thickness(0, 1, 0, 1);
             // 用缓存的句柄判断，不在构造时调 GetForegroundWindow
             b.Background = IsActiveRow(w.Hwnd, cachedActive) ? Ui.AccentSoft : Brushes.Transparent;
@@ -154,15 +159,17 @@ namespace Clover
             Grid g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition());
             g.ColumnDefinitions.Add(new ColumnDefinition());
-            g.ColumnDefinitions[0].Width = new GridLength(22);
+            g.ColumnDefinitions[0].Width = new GridLength(24);
             g.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
 
             if (w.Icon != null)
             {
                 Image img = new Image();
                 img.Source = w.Icon;
-                img.Width = 16;
-                img.Height = 16;
+                // 16 → 20：16px 在 20px 高的行里偏小，图标细节看不清；
+                // 列宽也同步放到 24 留出呼吸。
+                img.Width = 20;
+                img.Height = 20;
                 img.Stretch = Stretch.Uniform;
                 img.HorizontalAlignment = HorizontalAlignment.Center;
                 RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
@@ -177,7 +184,7 @@ namespace Clover
             t.Foreground = Ui.Fg;
             t.TextTrimming = TextTrimming.CharacterEllipsis;
             t.VerticalAlignment = VerticalAlignment.Center;
-            t.Margin = new Thickness(2, 0, 6, 0);
+            t.Margin = new Thickness(2, 0, Ui.S.Sm, 0);
             Grid.SetColumn(t, 1);
             g.Children.Add(t);
 

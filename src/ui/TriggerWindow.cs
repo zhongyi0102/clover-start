@@ -66,7 +66,7 @@ namespace Clover
             Reposition();
 
             root = new Border();
-            root.CornerRadius = new CornerRadius(6);
+            root.CornerRadius = new CornerRadius(Ui.R.Sm);
             root.Background = IdleBg;
             root.Cursor = Cursors.Hand;
 

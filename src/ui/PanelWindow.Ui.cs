@@ -15,7 +15,7 @@ namespace Clover
         void BuildUi()
         {
             Border root = new Border();
-            root.CornerRadius = new CornerRadius(16);
+            root.CornerRadius = new CornerRadius(Ui.R.Lg);
             root.Background = Ui.Bg;
             root.BorderBrush = Ui.Line;
             root.BorderThickness = new Thickness(1);
@@ -26,16 +26,18 @@ namespace Clover
             ApplyShadow();
 
             Grid grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition());
-            grid.RowDefinitions.Add(new RowDefinition());
-            grid.RowDefinitions.Add(new RowDefinition());
+            grid.RowDefinitions.Add(new RowDefinition());   // 0 header
+            grid.RowDefinitions.Add(new RowDefinition());   // 1 快速启动区
+            grid.RowDefinitions.Add(new RowDefinition());   // 2 body
+            grid.RowDefinitions.Add(new RowDefinition());   // 3 footer
             grid.RowDefinitions[0].Height = new GridLength(64);
-            grid.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
-            grid.RowDefinitions[2].Height = new GridLength(32);
+            grid.RowDefinitions[1].Height = GridLength.Auto;   // 没有常用项时自动收成 0
+            grid.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
+            grid.RowDefinitions[3].Height = new GridLength(32);
 
             // ---------------- header ----------------
             Grid header = new Grid();
-            header.Margin = new Thickness(18, 0, 14, 0);
+            header.Margin = new Thickness(Ui.S.Lg, 0, Ui.S.Md, 0);
             header.Background = Brushes.Transparent;
             header.ColumnDefinitions.Add(new ColumnDefinition());
             header.ColumnDefinitions.Add(new ColumnDefinition());
@@ -64,12 +66,12 @@ namespace Clover
             searchBorder = new Border();
             searchBorder.Width = 300;
             searchBorder.Height = 34;
-            searchBorder.CornerRadius = new CornerRadius(17);
+            searchBorder.CornerRadius = new CornerRadius(searchBorder.Height / 2);
             searchBorder.Background = Ui.SearchBg;
             searchBorder.BorderBrush = Ui.Line;
             searchBorder.BorderThickness = new Thickness(1);
             searchBorder.VerticalAlignment = VerticalAlignment.Center;
-            searchBorder.Margin = new Thickness(0, 0, 10, 0);
+            searchBorder.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
             Grid.SetColumn(searchBorder, 2);
 
             Grid sg = new Grid();
@@ -148,7 +150,7 @@ namespace Clover
             body.ColumnDefinitions[0].Width = new GridLength(160);
             body.ColumnDefinitions[1].Width = new GridLength(1);
             body.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
-            Grid.SetRow(body, 1);
+            Grid.SetRow(body, 2);   // 第 0 行 header、第 1 行快速启动区、第 2 行 body
             // 折叠动画改的是这一列的宽度（存成字段），见 ToggleNavCollapsed
             navColumn = body.ColumnDefinitions[0];
 
@@ -170,7 +172,7 @@ namespace Clover
             navScroll = new ScrollViewer();
             navScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             navScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            navScroll.Margin = new Thickness(10, 30, 4, 2);
+            navScroll.Margin = new Thickness(Ui.S.Sm, 32, Ui.S.Xs, Ui.S.Xs);
             navStack = new StackPanel();
             navScroll.Content = navStack;
             Grid.SetRow(navScroll, 0);
@@ -179,7 +181,7 @@ namespace Clover
             Border navSep = new Border();
             navSep.Height = 1;
             navSep.Background = Ui.Line;
-            navSep.Margin = new Thickness(10, 2, 10, 2);
+            navSep.Margin = new Thickness(Ui.S.Md, Ui.S.Xs, Ui.S.Md, Ui.S.Xs);
             Grid.SetRow(navSep, 1);
             navGrid.Children.Add(navSep);
 
@@ -195,7 +197,7 @@ namespace Clover
             ScrollViewer taskScroll = new ScrollViewer();
             taskScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             taskScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            taskScroll.Margin = new Thickness(6, 0, 4, 2);
+            taskScroll.Margin = new Thickness(Ui.S.Sm, 0, Ui.S.Xs, Ui.S.Xs);
             taskStack = new StackPanel();
             taskScroll.Content = taskStack;
             Grid.SetRow(taskScroll, 1);
@@ -209,7 +211,7 @@ namespace Clover
             Border sep = new Border();
             sep.Width = 1;
             sep.Background = Ui.Line;
-            sep.Margin = new Thickness(0, 6, 0, 6);
+            sep.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Sm);
             Grid.SetColumn(sep, 1);
             body.Children.Add(sep);
 
@@ -226,16 +228,32 @@ namespace Clover
 
             grid.Children.Add(body);
 
+            // ---------------- 快速启动区 ----------------
+            //
+            // 固定的几个常用应用，一眼能点，不占分类也不占磁贴区。
+            //
+            // 为什么单独放一行而不是塞进 tilePanel：
+            // 键盘导航靠 `tilePanel.Children[index]` 与 `renderedApps[index]` **一一对应**
+            // （见 SelectTile/MoveSelection）。往 tilePanel 里插非应用元素会让下标错位，
+            // 方向键就会跳到错误的磁贴上。所以这里用独立的容器。
+            //
+            // Height=Auto：没有常用项时整行收成 0，不占地方。
+            quickBar = new StackPanel();
+            quickBar.Orientation = Orientation.Horizontal;
+            quickBar.Margin = new Thickness(Ui.S.Lg, 0, Ui.S.Md, Ui.S.Sm);
+            Grid.SetRow(quickBar, 1);
+            grid.Children.Add(quickBar);
+
             // ---------------- footer ----------------
             Grid footer = new Grid();
-            footer.Margin = new Thickness(20, 0, 18, 0);
+            footer.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, 0);
             TextBlock hint = Ui.T("Esc 关闭 · 点击面板外自动收起 · 右键四叶草按钮可设置", 11, Ui.Sub);
             hint.HorizontalAlignment = HorizontalAlignment.Left;
             footer.Children.Add(hint);
             footerCount = Ui.T("", 11, Ui.Sub);
             footerCount.HorizontalAlignment = HorizontalAlignment.Right;
             footer.Children.Add(footerCount);
-            Grid.SetRow(footer, 2);
+            Grid.SetRow(footer, 3);
             grid.Children.Add(footer);
 
             root.Child = grid;
@@ -313,7 +331,7 @@ namespace Clover
             Border b = new Border();
             b.Width = 32;
             b.Height = 32;
-            b.CornerRadius = new CornerRadius(8);
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.VerticalAlignment = VerticalAlignment.Center;
             b.Cursor = Cursors.Hand;
             b.Background = Brushes.Transparent;
@@ -336,10 +354,10 @@ namespace Clover
             Border b = new Border();
             b.Width = 22;
             b.Height = 22;
-            b.CornerRadius = new CornerRadius(6);
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.HorizontalAlignment = HorizontalAlignment.Right;
             b.VerticalAlignment = VerticalAlignment.Top;
-            b.Margin = new Thickness(0, 4, 6, 0);
+            b.Margin = new Thickness(0, Ui.S.Xs, Ui.S.Sm, 0);
             b.Cursor = Cursors.Hand;
             b.Background = Brushes.Transparent;
             b.ToolTip = "收起 / 展开分类栏";

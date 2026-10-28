@@ -119,7 +119,7 @@ namespace Clover
             Border b = new Border();
             b.Width = 44;
             b.Height = 48;
-            b.CornerRadius = new CornerRadius(6);
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.Background = IdleBg;
             b.Cursor = Cursors.Hand;
 

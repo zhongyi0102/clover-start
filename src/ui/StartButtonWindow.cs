@@ -64,7 +64,7 @@ namespace Clover
             Top = sb.Y;
 
             root = new Border();
-            root.CornerRadius = new CornerRadius(6);
+            root.CornerRadius = new CornerRadius(Ui.R.Sm);
             root.Background = IdleBg;
             root.Cursor = Cursors.Hand;
 
@@ -80,7 +80,7 @@ namespace Clover
                     Border sq = new Border();
                     sq.Width = 8;
                     sq.Height = 8;
-                    sq.CornerRadius = new CornerRadius(1);
+                    sq.CornerRadius = new CornerRadius(2);
                     sq.Background = LogoBrush;
                     sq.HorizontalAlignment = HorizontalAlignment.Left;
                     sq.VerticalAlignment = VerticalAlignment.Top;

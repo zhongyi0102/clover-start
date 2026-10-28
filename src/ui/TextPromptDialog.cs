@@ -46,7 +46,7 @@ namespace Clover
                 }
 
                 Border root = new Border();
-                root.CornerRadius = new CornerRadius(12);
+                root.CornerRadius = new CornerRadius(Ui.R.Md);
                 root.Background = Ui.Bg;
                 root.BorderBrush = Ui.Line;
                 root.BorderThickness = new Thickness(1);
@@ -164,7 +164,7 @@ namespace Clover
                 }
 
                 Border root = new Border();
-                root.CornerRadius = new CornerRadius(12);
+                root.CornerRadius = new CornerRadius(Ui.R.Md);
                 root.Background = Ui.Bg;
                 root.BorderBrush = Ui.Line;
                 root.BorderThickness = new Thickness(1);
@@ -235,7 +235,7 @@ namespace Clover
             Border b = new Border();
             b.Height = 30;
             b.MinWidth = 66;
-            b.CornerRadius = new CornerRadius(7);
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.Margin = new Thickness(6, 0, 0, 0);
             b.Cursor = Cursors.Hand;
             b.Background = Ui.SearchBg;

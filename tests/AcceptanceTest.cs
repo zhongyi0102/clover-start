@@ -328,27 +328,32 @@ namespace Clover
             // 鼠标附近的磁贴会跳位。这里确认放大作用在**图标的 ScaleTransform**上。
             Verify("★图标悬停放大用 RenderTransform（不触发布局重排）", delegate
             {
-                // 磁贴尺寸应保持 96x90 —— 没有因为"放大"而被改
+                // 磁贴尺寸应保持 96x90 —— 没有因为"放大"而被改。
+                // 引用源码常量而不是硬编码：否则每次调尺寸都要同步改测试。
+                double tw = PanelWindow.TileWidthPx, th = PanelWindow.TileHeightPx;
+                double icon = PanelWindow.IconSizePx;
+
                 List<Border> tiles = FindAll<Border>(panel);
-                int tilesAt96 = 0;
+                int sizedTiles = 0;   // 名字不能叫 tileCount：外层 delegate 不引入新作用域
                 foreach (Border b in tiles)
                 {
-                    if (Math.Abs(b.Width - 96) < 0.1 && Math.Abs(b.Height - 90) < 0.1) tilesAt96++;
+                    if (Math.Abs(b.Width - tw) < 0.1 && Math.Abs(b.Height - th) < 0.1) sizedTiles++;
                 }
-                if (tilesAt96 == 0) return "找不到 96x90 的磁贴";
+                if (sizedTiles == 0) return string.Format("找不到 {0}x{1} 的磁贴", tw, th);
 
-                // 至少有一个 32x32 的图标视觉元素带 ScaleTransform
+                // 至少有一个图标尺寸的视觉元素带 ScaleTransform
                 int scaled = 0;
                 foreach (FrameworkElement fe in FindAll<FrameworkElement>(panel))
                 {
                     ScaleTransform st = fe.RenderTransform as ScaleTransform;
                     if (st == null) continue;
-                    // 图标是 32x32（Image 或占位 Border）
+                    // 图标是 icon x icon（Image 或占位 Border）
                     double w = fe.Width, h = fe.Height;
-                    if (Math.Abs(w - 32) < 0.1 && Math.Abs(h - 32) < 0.1) scaled++;
+                    if (Math.Abs(w - icon) < 0.1 && Math.Abs(h - icon) < 0.1) scaled++;
                 }
-                if (scaled == 0) return "没有任何图标带 ScaleTransform（放大未接线）";
-                return "ok（" + tilesAt96 + " 块磁贴保持 96x90，" + scaled + " 个图标已接放大）";
+                if (scaled == 0)
+                    return string.Format("没有任何 {0}x{0} 的图标带 ScaleTransform（放大未接线）", icon);
+                return string.Format("ok（{0} 块磁贴保持 {1}x{2}，{3} 个图标已接放大）", sizedTiles, tw, th, scaled);
             });
 
             // ---------- 12. 弹出动画用的位移变换已建立 ----------
@@ -362,6 +367,81 @@ namespace Clover
                 TranslateTransform tt = rootB.RenderTransform as TranslateTransform;
                 if (tt == null) return "根容器上没有 TranslateTransform（动画未接线）";
                 return "ok（根容器已接位移变换）";
+            });
+
+            // ---------- 13b. 设计令牌：圆角与间距已成体系 ----------
+            // 为什么断言这个：改动前圆角有 10 种（0/1/2/6/7/8/10/12/16/17）、
+            // 间距混了 1/6/10/18 这些不成倍数的值。看起来"每处都合理"，
+            // 合起来就没有体系 —— 这是最典型的"AI 拼出来"的痕迹。
+            // 这里守住"收敛后的档位"，防止以后又随手写一个新数值。
+            Verify("★设计令牌：圆角只有三档 + 胶囊", delegate
+            {
+                List<string> bad = new List<string>();
+                foreach (Border b in FindAll<Border>(panel))
+                {
+                    double r = b.CornerRadius.TopLeft;
+                    if (r <= 0) continue;                       // 0 = 无圆角，合法
+                    if (Math.Abs(r - Ui.R.Sm) < 0.1) continue;  // 8
+                    if (Math.Abs(r - Ui.R.Md) < 0.1) continue;  // 12
+                    if (Math.Abs(r - Ui.R.Lg) < 0.1) continue;  // 16
+                    if (Math.Abs(r - 2) < 0.1) continue;        // 2 = 1px 细条（选中条/分隔）
+                    if (Math.Abs(r - 4) < 0.1) continue;        // 4 = 8px 小圆点（正圆）
+                    if (Math.Abs(r - b.Height / 2) < 0.6) continue; // 胶囊（搜索框）
+                    bad.Add(string.Format("{0}（高 {1:N0}）", r, b.Height));
+                }
+                if (bad.Count > 0)
+                    return "发现不在体系内的圆角: " + string.Join(" / ", bad.ToArray());
+                return string.Format("ok（档位 {0:N0}/{1:N0}/{2:N0} + 细条 + 圆点 + 胶囊）",
+                    Ui.R.Sm, Ui.R.Md, Ui.R.Lg);
+            });
+
+            // ---------- 13c. 磁贴图标尺寸走常量（不再硬编码）------------
+            Verify("★磁贴/图标尺寸由常量控制", delegate
+            {
+                if (PanelWindow.TileWidthPx <= 0 || PanelWindow.TileHeightPx <= 0)
+                    return "磁贴常量未定义";
+                if (PanelWindow.IconSizePx <= 0) return "图标常量未定义";
+
+                // 图标占比应落在合理区间（Windows 开始菜单约 40%）
+                double ratio = PanelWindow.IconSizePx / PanelWindow.TileWidthPx;
+                if (ratio < 0.30 || ratio > 0.50)
+                    return string.Format("图标占比 {0:P0} 不在合理区间（30%-50%）", ratio);
+
+                return string.Format("ok（磁贴 {0}x{1}，图标 {2}，占比 {3:P0}）",
+                    PanelWindow.TileWidthPx, PanelWindow.TileHeightPx, PanelWindow.IconSizePx, ratio);
+            });
+
+            // ---------- 13d. ★缓动函数已接线（此前全项目 0 处）------------
+            // 为什么断言它：全线性动画的入场会在结尾"急停"、出场开头"猛冲"，
+            // 这是最容易被看出"没打磨过"的地方。
+            Verify("★动画已接缓动函数（非全线性）", delegate
+            {
+                // 面板透明度动画应带缓动
+                System.Windows.Media.Animation.DoubleAnimation a =
+                    Ui.ReusableEnter(1, 150);
+                if (a.EasingFunction == null) return "Ui.ReusableEnter 没有缓动";
+
+                System.Windows.Media.Animation.DoubleAnimation b =
+                    Ui.ReusableExit(0, 110);
+                if (b.EasingFunction == null) return "Ui.ReusableExit 没有缓动";
+
+                // 明确不要回弹类缓动（那会显得轻浮，且高频操作时晕）
+                System.Windows.Media.Animation.CubicEase ce = a.EasingFunction as System.Windows.Media.Animation.CubicEase;
+                if (ce == null) return "缓动不是 CubicEase（应统一用这一族）";
+                if (ce.EasingMode != System.Windows.Media.Animation.EasingMode.EaseOut)
+                    return "入场应为 EaseOut（快起慢收）";
+
+                System.Windows.Media.Animation.CubicEase ce2 = b.EasingFunction as System.Windows.Media.Animation.CubicEase;
+                if (ce2 == null || ce2.EasingMode != System.Windows.Media.Animation.EasingMode.EaseIn)
+                    return "出场应为 EaseIn（慢起快收）";
+
+                // 缓动对象应可复用（冻结后跨控件共享，避免反复 new）。
+                // IEasingFunction 接口本身没有 IsFrozen，要转成 Freezable 问。
+                System.Windows.Freezable fz = a.EasingFunction as System.Windows.Freezable;
+                if (fz == null) return "缓动不是 Freezable，无法冻结复用";
+                if (!fz.IsFrozen) return "缓动对象没冻结（会被反复重建）";
+
+                return "ok（入场 EaseOut / 出场 EaseIn，均为冻结的 CubicEase）";
             });
 
             // ---------- 14. 侧栏折叠按钮：位置在侧栏内、可收起可恢复 ----------
@@ -653,15 +733,16 @@ namespace Clover
             return best;
         }
 
-        /// <summary>数应用磁贴（96×90 的 Border）。</summary>
+        /// <summary>数应用磁贴（TileWidthPx × TileHeightPx 的 Border）。</summary>
         static int CountTiles(PanelWindow panel)
         {
             int n = 0;
             try
             {
+                double tw = PanelWindow.TileWidthPx, th = PanelWindow.TileHeightPx;
                 foreach (Border b in FindAll<Border>(panel))
                 {
-                    if (Math.Abs(b.Width - 96) < 0.1 && Math.Abs(b.Height - 90) < 0.1) n++;
+                    if (Math.Abs(b.Width - tw) < 0.1 && Math.Abs(b.Height - th) < 0.1) n++;
                 }
             }
             catch { }
