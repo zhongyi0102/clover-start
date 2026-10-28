@@ -17,7 +17,9 @@ namespace Clover
             Border root = new Border();
             root.CornerRadius = new CornerRadius(Ui.R.Lg);
             root.Background = Ui.Bg;
-            root.BorderBrush = Ui.Line;
+            // 外框用 Edge（更淡）而不是 Line：玻璃质感要求"外框最淡、内部稍实"。
+            // 同一个颜色用在两处会让边界显得过重。
+            root.BorderBrush = Ui.Edge;
             root.BorderThickness = new Thickness(1);
             root.Margin = new Thickness(16);
             // 投影交给 ApplyShadow()：深色主题下要加深，否则黑投影落在深底上几乎看不见。
@@ -257,12 +259,35 @@ namespace Clover
             grid.Children.Add(footer);
 
             root.Child = grid;
-            Content = root;
+
+            // ---------------- 双层投影 ----------------
+            //
+            // WPF 一个元素只能挂一个 Effect，所以用两层容器：
+            //   外层 shadowHost → 远距投影（大模糊、大偏移、低不透明）
+            //   内层 root       → 近距投影（小模糊、小偏移、较高不透明）
+            //
+            // 单层投影无论怎么调，要么像"贴在纸上"（太硬），要么像"糊了一团"（太软）。
+            // 真实的光是两层：近距离锐利的接触阴影 + 远距离弥散的环境阴影。
+            // 两层叠起来才有"面板浮在桌面上方"的立体感。
+            //
+            // Margin 的处理：root 本来有 16px 外边距（给投影留空间）。
+            // 现在外层不设 Margin，root 保留 —— 外层尺寸自动等于 root 的边界，
+            // 所以投影有足够空间展开，布局不变。
+            Border shadowHost = new Border();
+            shadowHost.Background = Brushes.Transparent;   // 只作投影载体，不画任何东西
+            shadowHost.Effect = Ui.PanelShadowFar();
+            shadowHost.Child = root;
+
+            Content = shadowHost;
 
             // 弹出/收起动画用的位移变换，在这里就接好（而不是等第一次 ShowPanel）。
             // 好处：窗口一构造完就是可断言的状态，测试能直接检查是否接线。
+            //
+            // 注意：位移变换挂在**外层** shadowHost 上，不挂 root ——
+            // 如果挂 root，它的投影会跟着一起位移，看起来像"影子在抖"。
+            // 挂外层则整体（含两层投影）一起平移，观感统一。
             showShift = new TranslateTransform(0, 0);
-            root.RenderTransform = showShift;
+            shadowHost.RenderTransform = showShift;
 
             // 滚动位置变化时记下来（按分类分别记），供下次切回该分类时恢复
             contentScroll.ScrollChanged += delegate(object s, ScrollChangedEventArgs e)
@@ -286,12 +311,42 @@ namespace Clover
             StartTaskTimer();
         }
 
-        /// <summary>按当前主题重设面板投影（切主题时调用）。</summary>
+        /// <summary>
+        /// 按当前主题重设**双层**投影（切主题时调用）。
+        ///
+        /// 两层分别在：
+        ///   · rootBorder（内层）→ 近距：勾出接触感
+        ///   · shadowHost（外层）→ 远距：拉开与桌面的距离
+        /// 只改其中一层会让两层不匹配（例如深色下近距变浓、远距还是浅色值），
+        /// 所以必须同时重设。
+        /// </summary>
         void ApplyShadow()
         {
             try
             {
-                if (rootBorder != null) rootBorder.Effect = Ui.PanelShadow();
+                if (rootBorder != null) rootBorder.Effect = Ui.PanelShadowNear();
+                SetShadowHostEffect(!expanded);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 开关**外层**远距投影。
+        ///
+        /// 最大化时必须关掉：外层没有 Margin，投影会画到窗口边界之外，
+        /// 在屏幕边缘看起来像"发黑"。还原后再打开。
+        ///
+        /// 内层（rootBorder）不用动 —— 它自己带 16px Margin（或最大化时的 0），
+        /// 投影始终在窗口内部。
+        /// </summary>
+        void SetShadowHostEffect(bool on)
+        {
+            try
+            {
+                Border host = null;
+                if (rootBorder != null) host = rootBorder.Parent as Border;
+                if (host == null) host = Content as Border;
+                if (host != null) host.Effect = on ? Ui.PanelShadowFar() : null;
             }
             catch { }
         }

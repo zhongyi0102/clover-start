@@ -439,6 +439,9 @@ namespace Clover
                     edgeMargin = 0;
                     rootBorder.Margin = new Thickness(0);
                     rootBorder.CornerRadius = new CornerRadius(0);
+                    // 最大化时铺满工作区：外层也要去掉投影，否则阴影会溢出到屏幕外
+                    // （外层没有 Margin，投影会画在窗口边界之外，看起来像屏幕边缘发黑）
+                    SetShadowHostEffect(false);
                     Rect wa = SystemParameters.WorkArea;
                     Left = wa.Left;
                     Top = wa.Top;
@@ -453,6 +456,8 @@ namespace Clover
                     edgeMargin = 16;
                     rootBorder.Margin = new Thickness(16);
                     rootBorder.CornerRadius = new CornerRadius(Ui.R.Lg);
+                    // 还原：恢复双层投影
+                    SetShadowHostEffect(true);
                     Left = normalRect.X;
                     Top = normalRect.Y;
                     Width = normalRect.Width;

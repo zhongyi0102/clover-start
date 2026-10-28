@@ -26,6 +26,14 @@ namespace Clover
         //     AppWatcher 的后台线程只调 Ui.Log，不碰刷子），所以这条天然成立。
         public static readonly SolidColorBrush Bg = new SolidColorBrush();
         public static readonly SolidColorBrush Line = new SolidColorBrush();
+        /// <summary>
+        /// 面板外框色（比 Line 更淡）。
+        ///
+        /// 分两个层级：外框只负责"勾出面板边界"，内部（侧栏分隔线、磁贴边框）
+        /// 用 Line。同一个颜色用在两处会显得边界过重 —— 玻璃质感的做法是
+        /// 外框最淡、内部稍实。
+        /// </summary>
+        public static readonly SolidColorBrush Edge = new SolidColorBrush();
         public static readonly SolidColorBrush Fg = new SolidColorBrush();
         public static readonly SolidColorBrush Sub = new SolidColorBrush();
         public static readonly SolidColorBrush Hover = new SolidColorBrush();
@@ -51,17 +59,31 @@ namespace Clover
         /// <summary>主题切换后的回调（各窗口用它重画临时控件上的颜色）。</summary>
         public static Action ThemeChanged = delegate { };
 
-        /// <summary>一套配色。</summary>
+        /// <summary>
+        /// 一套配色。
+        ///
+        /// 颜色用 **ARGB**（32 位），不再只有 RGB —— 因为"玻璃感"的关键
+        /// 恰恰在于边框和分隔线要**半透明**，而不是实色。
+        /// 参考 GlassBoard 的做法：边框用 alpha 0x2A / 0x24 的发丝线，
+        /// 让下层颜色透一点上来，边界才不会像"贴了张纸"。
+        /// </summary>
         class Palette
         {
             public uint Bg, Line, Fg, Sub, Hover, Pressed, SearchBg, Accent, AccentSoft, AccentText;
+            /// <summary>面板外框（比内部分隔线更淡，只用来勾出边界）。</summary>
+            public uint Edge;
         }
 
-        // 浅色（原来的样子，保持不变）
+        // 浅色
+        //
+        // Line 从实色 #E2DFDA 改为 #2A7687A2（蓝灰，alpha 16%）：
+        // 实色边框在任何底色上都是"硬线"，而发丝线会随底层明暗自然融合。
+        // Edge 更淡（alpha 12%），只负责勾边。
         static readonly Palette Light = new Palette
         {
             Bg = 0xFBFAF8,
-            Line = 0xE2DFDA,
+            Line = 0x2A7687A2,
+            Edge = 0x1F8A93A8,
             Fg = 0x202020,
             Sub = 0x787672,
             Hover = 0xF3F1ED,
@@ -76,10 +98,12 @@ namespace Clover
         //
         // 注意 Accent 系在深色下必须**变亮**：同一个 #388C48 放在深底上会显脏、
         // 对比度不足；AccentText 反向变亮（它是在 AccentSoft 底上的文字）。
+        // Line 用冷白 alpha 14%，在深底上是"微光"而不是"灰线"。
         static readonly Palette Dark = new Palette
         {
             Bg = 0x1E1F22,
-            Line = 0x35383D,
+            Line = 0x24D5E3FF,
+            Edge = 0x1AD5E3FF,
             Fg = 0xE9E9EA,
             Sub = 0x9A9AA0,
             Hover = 0x2A2C31,
@@ -90,6 +114,17 @@ namespace Clover
             AccentText = 0x8FD89B
         };
 
+        /// <summary>32 位 ARGB（含 alpha）。</summary>
+        static Color FromArgb32(uint argb)
+        {
+            return Color.FromArgb(
+                (byte)((argb >> 24) & 0xFF),
+                (byte)((argb >> 16) & 0xFF),
+                (byte)((argb >> 8) & 0xFF),
+                (byte)(argb & 0xFF));
+        }
+
+        /// <summary>24 位 RGB（alpha 固定 255）。</summary>
         static Color FromRgb24(uint rgb)
         {
             return Color.FromRgb((byte)((rgb >> 16) & 0xFF), (byte)((rgb >> 8) & 0xFF), (byte)(rgb & 0xFF));
@@ -98,7 +133,9 @@ namespace Clover
         static void Fill(Palette p)
         {
             Bg.Color = FromRgb24(p.Bg);
-            Line.Color = FromRgb24(p.Line);
+            // Line / Edge 用 ARGB（带 alpha）—— 半透明是玻璃感的来源
+            Line.Color = FromArgb32(p.Line);
+            Edge.Color = FromArgb32(p.Edge);
             Fg.Color = FromRgb24(p.Fg);
             Sub.Color = FromRgb24(p.Sub);
             Hover.Color = FromRgb24(p.Hover);
@@ -206,16 +243,46 @@ namespace Clover
         }
 
         /// <summary>
-        /// 按当前主题给面板投影。
+        /// 面板投影——**近距**那层。
         ///
-        /// 深色下要**加深且拉近**：黑投影落在 #1E1F22 的底上本来就几乎看不见，
-        /// 沿用浅色的 0.20 会让面板边界糊在背景里。
+        /// 双层投影（ambient + direct）是"材质感"的核心做法之一：
+        /// 单层投影无论怎么调，要么像"贴在纸上"（太硬），要么像"糊了一团"（太软）。
+        /// 真实的光是两层：近距离锐利的接触阴影 + 远距离弥散的環境阴影。
+        ///
+        /// 这层负责"接触"：小偏移、小模糊、较高不透明度 —— 让面板看起来
+        /// 真的贴在桌面上，而不是浮着。
+        ///
+        /// 注：WPF 一个元素只能挂一个 Effect，所以另一层（远距）挂在
+        /// 外层容器上，见 PanelWindow.Ui.cs 的 BuildUi。
+        /// </summary>
+        public static DropShadowEffect PanelShadowNear()
+        {
+            return AppliedTheme == ThemeMode.Dark
+                ? Shadow(8, 0.42, 2)     // 深色：短而实
+                : Shadow(10, 0.16, 2);   // 浅色：柔和一点
+        }
+
+        /// <summary>
+        /// 面板投影——**远距**那层（环境光）。
+        ///
+        /// 大模糊、大偏移、低不透明度：它不负责勾边，只负责让面板
+        /// "离开桌面"一段距离。没有它，面板会像直接印在壁纸上。
+        /// </summary>
+        public static DropShadowEffect PanelShadowFar()
+        {
+            return AppliedTheme == ThemeMode.Dark
+                ? Shadow(42, 0.50, 10)   // 深色：要靠浓度表现（暗底上距离感弱）
+                : Shadow(36, 0.14, 10);  // 浅色：大而淡
+        }
+
+        /// <summary>
+        /// 旧接口：单层投影。保留给弹窗等轻量场景（它们不需要双层）。
         /// </summary>
         public static DropShadowEffect PanelShadow()
         {
             return AppliedTheme == ThemeMode.Dark
-                ? Shadow(34, 0.55, 4)    // 深色：更浓、更贴近（投影在暗背景上靠浓度而非距离表现）
-                : Shadow(30, 0.20, 6);   // 浅色：保持原来的观感
+                ? Shadow(34, 0.55, 4)
+                : Shadow(30, 0.20, 6);
         }
 
         // ════════════════════════════════════════════════════════════
