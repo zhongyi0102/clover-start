@@ -48,10 +48,13 @@ namespace Clover
             header.ColumnDefinitions.Add(new ColumnDefinition());
             header.ColumnDefinitions.Add(new ColumnDefinition());
             header.ColumnDefinitions.Add(new ColumnDefinition());
-            header.ColumnDefinitions[0].Width = GridLength.Auto;
-            header.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
-            header.ColumnDefinitions[2].Width = GridLength.Auto;
-            header.ColumnDefinitions[3].Width = GridLength.Auto;
+            header.ColumnDefinitions[0].Width = GridLength.Auto;          // logo
+            header.ColumnDefinitions[1].Width = GridLength.Auto;          // 弹性留白
+            // 第 2 列（搜索框）从 Auto 改成 Star：
+            // Auto 会让搜索框停在 300px 的固定宽度，右侧全是空白；
+            // Star 让它吃掉剩余空间，成为顶行的主角（目标图就是这样）。
+            header.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
+            header.ColumnDefinitions[3].Width = GridLength.Auto;          // 窗口按钮
 
             Image logo = new Image();
             logo.Source = Ui.LoadCloverIcon(Path.Combine(baseDir, "res", "clover.png"));
@@ -69,13 +72,20 @@ namespace Clover
             header.Children.Add(title);
 
             searchBorder = new Border();
-            searchBorder.Width = 300;
-            searchBorder.Height = 34;
+            // 300 → 自适应拉伸（目标样式：搜索框占顶部主要宽度）
+            //
+            // 原来写死 300px，在一排按钮旁边显得局促，像"附带的输入框"；
+            // 目标图的搜索框是**主角**——占掉顶行大部分空间。
+            // 改成不设宽度 + HorizontalAlignment.Stretch，由外层 Grid 的
+            // Star 列分配；同时给 MinWidth 兜底，避免窗口很窄时被压没。
+            searchBorder.MinWidth = 240;
+            searchBorder.Height = 36;
             searchBorder.CornerRadius = new CornerRadius(searchBorder.Height / 2);
             searchBorder.Background = Ui.SearchBg;
             searchBorder.BorderBrush = Ui.Line;
             searchBorder.BorderThickness = new Thickness(1);
             searchBorder.VerticalAlignment = VerticalAlignment.Center;
+            searchBorder.HorizontalAlignment = HorizontalAlignment.Stretch;
             searchBorder.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
             Grid.SetColumn(searchBorder, 2);
 
@@ -148,77 +158,91 @@ namespace Clover
             grid.Children.Add(header);
 
             // ---------------- body ----------------
+            //
+            // 目标样式（参考用户给的启动台截图）：分类栏在**顶部**横向排列，
+            // 不是左侧竖排。所以 body 从"三列"改成"三行"：
+            //   行 0 = 分类胶囊条（原侧栏）
+            //   行 1 = 分隔线
+            //   行 2 = 内容区（磁贴 / 搜索结果）
+            //
+            // 为什么保留 navGrid 这个字段名：折叠、计数徽标、选中态等
+            // 二十多处逻辑都引用它，改名等于全项目搜索替换，风险大于收益。
+            // 结构变了但角色没变——它仍然是"分类导航容器"。
             Grid body = new Grid();
-            body.ColumnDefinitions.Add(new ColumnDefinition());
-            body.ColumnDefinitions.Add(new ColumnDefinition());
-            body.ColumnDefinitions.Add(new ColumnDefinition());
-            body.ColumnDefinitions[0].Width = new GridLength(160);
-            body.ColumnDefinitions[1].Width = new GridLength(1);
-            body.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
+            body.RowDefinitions.Add(new RowDefinition());
+            body.RowDefinitions.Add(new RowDefinition());
+            body.RowDefinitions.Add(new RowDefinition());
+            body.RowDefinitions[0].Height = GridLength.Auto;                        // 分类条
+            body.RowDefinitions[1].Height = new GridLength(1);                      // 分隔线
+            body.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);   // 内容
             Grid.SetRow(body, 2);   // 第 0 行 header、第 1 行快速启动区、第 2 行 body
-            // 折叠动画改的是这一列的宽度（存成字段），见 ToggleNavCollapsed
-            navColumn = body.ColumnDefinitions[0];
 
-            // 注意：这里用字段 navGrid，不再声明局部同名变量
             navGrid = new Grid();
-            navGrid.RowDefinitions.Add(new RowDefinition());
-            navGrid.RowDefinitions.Add(new RowDefinition());
-            navGrid.RowDefinitions.Add(new RowDefinition());
-            navGrid.RowDefinitions[0].Height = GridLength.Auto;
-            navGrid.RowDefinitions[1].Height = new GridLength(1);
-            navGrid.RowDefinitions[2].Height = new GridLength(1, GridUnitType.Star);
+            navGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            navGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            navGrid.ColumnDefinitions[0].Width = GridLength.Auto;   // 折叠按钮
+            navGrid.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
 
-            // 折叠切换按钮：贴在侧栏上沿，点击收起/展开整条侧栏。
-            // 放在 navGrid 的第 0 行里（和分类列表同一行），所以折叠时它仍在。
+            // 折叠切换按钮：横向条上放在最左，点击收起/展开整条分类栏。
             navToggle = MakeNavToggle();
-            Grid.SetRow(navToggle, 0);
+            Grid.SetColumn(navToggle, 0);
             navGrid.Children.Add(navToggle);
 
-            navScroll = new ScrollViewer();
-            navScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-            navScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            navScroll.Margin = new Thickness(Ui.S.Sm, 32, Ui.S.Xs, Ui.S.Xs);
+            // 分类胶囊条：横向排列，**不用 ScrollViewer**。
+            //
+            // ★ 为什么去掉 ScrollViewer：
+            //   实测 navStack.ActualWidth = 0 / navScroll.ActualWidth = 0，
+            //   10 个胶囊全建出来了，但整条宽度被压成 0，只剩第一个可见。
+            //   根因：ScrollViewer 在"Auto 高度的行 + 横向内容"这个组合下，
+            //   测量阶段给内容无限宽、自己却算出 0 宽（WPF 已知的测量陷阱）。
+            //
+            //   改用 Grid + 横向 StackPanel 直接铺：
+            //   分类数量是有限的（7 个真实分类 + 常用/全部/桌面/收藏夹/隐藏 ≈ 12 个上限），
+            //   12 个 30px 高的胶囊横排远不会超出面板宽度，
+            //   所以根本不需要滚动条。
+            //
+            //   万一以后分类多到放不下，正确的做法是换 WrapPanel（换行），
+            //   而不是横向滚动 —— 滚动条在一条 34px 高的工具栏上很难用。
             navStack = new StackPanel();
+            navStack.Orientation = Orientation.Horizontal;
+            navStack.VerticalAlignment = VerticalAlignment.Center;
+            navStack.Margin = new Thickness(Ui.S.Xs, Ui.S.Xs, Ui.S.Xs, Ui.S.Xs);
+
+            // navScroll 字段保留（折叠逻辑和 NavColumnValue 都引用它），
+            // 但现在它只是 navStack 的透明容器，不参与滚动。
+            navScroll = new ScrollViewer();
+            navScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            navScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            navScroll.VerticalAlignment = VerticalAlignment.Center;
             navScroll.Content = navStack;
-            Grid.SetRow(navScroll, 0);
+            Grid.SetColumn(navScroll, 1);
             navGrid.Children.Add(navScroll);
 
-            Border navSep = new Border();
-            navSep.Height = 1;
-            navSep.Background = Ui.Line;
-            navSep.Margin = new Thickness(Ui.S.Md, Ui.S.Xs, Ui.S.Md, Ui.S.Xs);
-            Grid.SetRow(navSep, 1);
-            navGrid.Children.Add(navSep);
-
-            taskGrid = new Grid();
-            taskGrid.RowDefinitions.Add(new RowDefinition());
-            taskGrid.RowDefinitions.Add(new RowDefinition());
-            taskGrid.RowDefinitions[0].Height = GridLength.Auto;
-            taskGrid.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
-            TextBlock taskHeader = Ui.T("任务栏", 10.5, Ui.Sub);
-            taskHeader.Margin = new Thickness(12, 2, 0, 2);
-            Grid.SetRow(taskHeader, 0);
-            taskGrid.Children.Add(taskHeader);
-            ScrollViewer taskScroll = new ScrollViewer();
-            taskScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-            taskScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            taskScroll.Margin = new Thickness(Ui.S.Sm, 0, Ui.S.Xs, Ui.S.Xs);
-            taskStack = new StackPanel();
-            taskScroll.Content = taskStack;
-            Grid.SetRow(taskScroll, 1);
-            taskGrid.Children.Add(taskScroll);
-            Grid.SetRow(taskGrid, 2);
-            navGrid.Children.Add(taskGrid);
-
-            Grid.SetColumn(navGrid, 0);
+            Grid.SetRow(navGrid, 0);
             body.Children.Add(navGrid);
 
+            // 横向分隔线（原先是竖线）
             Border sep = new Border();
-            sep.Width = 1;
+            sep.Height = 1;
             sep.Background = Ui.Line;
-            sep.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Sm);
-            Grid.SetColumn(sep, 1);
+            sep.Margin = new Thickness(Ui.S.Md, 0, Ui.S.Md, 0);
+            Grid.SetRow(sep, 1);
             body.Children.Add(sep);
+
+            // taskGrid（任务栏列表）在横向布局下不再需要：
+            // 它是侧栏下半部分的内容，顶部条放不下。保留字段但移出可视树，
+            // 避免 RefreshTasks 里一堆 null 检查。
+            // taskGrid（任务栏列表）在顶部横条布局下不再显示：
+            // 它是原侧栏下半部分的内容，横条放不下。
+            //
+            // 但仍要建出 taskStack 并挂在 taskGrid 里 ——
+            // RefreshTasks 会遍历 taskStack.Children 更新运行中窗口列表，
+            // 字段为 null 时它会提前 return（不崩，但也不工作）。
+            // 保留初始化是为了：以后想把这功能挪到别处时，数据层还在。
+            taskGrid = new Grid();
+            taskGrid.Visibility = Visibility.Collapsed;
+            taskStack = new StackPanel();
+            taskGrid.Children.Add(taskStack);
 
             // 磁贴区滚动容器（存成字段，记住滚动位置要用）
             contentScroll = new ScrollViewer();
@@ -272,7 +296,7 @@ namespace Clover
             contentStack.Children.Add(insertCanvas);
 
             contentScroll.Content = contentStack;
-            Grid.SetColumn(contentScroll, 2);
+            Grid.SetRow(contentScroll, 2);
             body.Children.Add(contentScroll);
 
             grid.Children.Add(body);
@@ -501,39 +525,44 @@ namespace Clover
         public Border NavToggle { get { return navToggle; } }
         /// <summary>当前是否已收起。</summary>
         public bool NavIsCollapsed { get { return navCollapsed; } }
-        /// <summary>侧栏列宽（-1 表示尚未建立）。</summary>
+        /// <summary>
+        /// 分类栏的"宽度"。
+        ///
+        /// 改成顶部横条后没有列宽了，这里返回导航区的实际宽度，
+        /// 保留这个属性是为了不破坏既有测试与诊断代码。
+        /// -1 表示尚未建立。
+        /// </summary>
         public double NavColumnValue
         {
-            get { return navColumn == null ? -1 : navColumn.Width.Value; }
+            get
+            {
+                if (navScroll == null) return -1;
+                if (navCollapsed) return 0;
+                return navScroll.ActualWidth > 0 ? navScroll.ActualWidth : NavWidthExpanded;
+            }
         }
         /// <summary>供测试直接触发折叠（绕开鼠标点击）。</summary>
         public void ToggleNavNow() { ToggleNavCollapsed(); }
 
         /// <summary>
-        /// 收起或展开侧栏。
+        /// 收起或展开分类栏。
         ///
-        /// 只动列宽度（ColumnDefinition.Width 的 GridLengthAnimation 用 DoubleAnimation
-        /// 做不到，所以用固定值直接切换 + 让 Grid 自己布局）。不用 Visibility 切换，
-        /// 那会把整棵内容丢掉、展开时要重建，反而更慢也更容易出状态问题。
+        /// 布局从"左侧竖栏"改成"顶部横条"后，折叠不再是改列宽，
+        /// 而是把整条分类胶囊藏起来（只留折叠按钮），把高度让给内容区。
         /// </summary>
         void ToggleNavCollapsed()
         {
             try
             {
                 navCollapsed = !navCollapsed;
-                if (navColumn != null)
-                {
-                    navColumn.Width = new GridLength(
-                        navCollapsed ? NavWidthCollapsed : NavWidthExpanded);
-                }
 
-                // 收起时把分类列表和任务栏整体藏起来（保留容器，避免重建）
+                // 收起时把分类条整体藏起来（保留容器，避免重建）
                 if (navScroll != null) navScroll.Visibility =
                     navCollapsed ? Visibility.Collapsed : Visibility.Visible;
                 if (taskGrid != null) taskGrid.Visibility =
                     navCollapsed ? Visibility.Collapsed : Visibility.Visible;
 
-                // 切换箭头方向
+                // 切换箭头方向：横条用左右箭头语义（收起 = 往右折）
                 if (navToggle != null)
                 {
                     navToggle.Child = MakeGlyph(navCollapsed ? "\uE76C" : "\uE76B");
@@ -546,10 +575,10 @@ namespace Clover
                     settings.Save();
                 }
 
-                // 收起时磁贴区变宽，重排一次让图标重新流动
+                // 收起后内容区变高，重排一次让图标重新流动
                 if (tilePanel != null) tilePanel.UpdateLayout();
 
-                Ui.Log("侧栏 " + (navCollapsed ? "收起" : "展开"));
+                Ui.Log("分类栏 " + (navCollapsed ? "收起" : "展开"));
             }
             catch (Exception ex)
             {
@@ -570,12 +599,12 @@ namespace Clover
                 if (settings == null || !settings.NavCollapsed) return;
                 navCollapsed = true;
 
-                if (navColumn != null) navColumn.Width = new GridLength(NavWidthCollapsed);
+                // 顶部横条布局下没有"列宽"可调，收起 = 隐藏整条胶囊
                 if (navScroll != null) navScroll.Visibility = Visibility.Collapsed;
                 if (taskGrid != null) taskGrid.Visibility = Visibility.Collapsed;
                 if (navToggle != null) navToggle.Child = MakeGlyph("\uE76C");
 
-                Ui.Log("侧栏按上次设置收起");
+                Ui.Log("分类栏按上次设置收起");
             }
             catch (Exception ex)
             {

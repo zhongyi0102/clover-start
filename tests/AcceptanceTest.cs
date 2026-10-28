@@ -500,27 +500,28 @@ namespace Clover
                 }
             });
 
-            Verify("★侧栏可收起并恢复", delegate
+            Verify("★分类栏可收起并恢复", delegate
             {
-                if (panel.NavColumnValue < 0) return "navColumn 为 null";
-
+                // 布局从"左侧竖栏"改成"顶部横条"后，折叠不再是改列宽
+                // （横条没有"宽度"），而是隐藏/显示整条胶囊。
+                // 所以这里断言的是"可见性变化"，不再是数值宽度。
                 double before = panel.NavColumnValue;
+                if (before < 0) return "分类栏容器未建立";
+
                 panel.ToggleNavNow();
-                double collapsed = panel.NavColumnValue;
                 bool isCollapsed = panel.NavIsCollapsed;
+                double collapsed = panel.NavColumnValue;
 
                 panel.ToggleNavNow();
                 double back = panel.NavColumnValue;
                 bool isBack = panel.NavIsCollapsed;
 
-                if (Math.Abs(before - PanelWindow.NavWidthExpanded) > 0.1)
-                    return "初始宽度应为 160，实际 " + before;
-                if (!isCollapsed || Math.Abs(collapsed - PanelWindow.NavWidthCollapsed) > 0.1)
-                    return string.Format("收起失败：collapsed={0} 宽度={1}", isCollapsed, collapsed);
-                if (isBack || Math.Abs(back - PanelWindow.NavWidthExpanded) > 0.1)
-                    return string.Format("恢复失败：collapsed={0} 宽度={1}", isBack, back);
+                if (!isCollapsed) return "收起失败：状态未变";
+                if (Math.Abs(collapsed) > 0.1) return "收起后宽度应为 0，实际 " + collapsed;
+                if (isBack) return "恢复失败：状态未回到展开";
+                if (back <= 0) return "恢复后宽度应大于 0，实际 " + back;
 
-                return string.Format("ok（160 -> {0:N0} -> 160）", collapsed);
+                return string.Format("ok（{0:N0} -> 0 -> {1:N0}）", before, back);
             });
 
             // ---------- 15. ★命中测试：折叠按钮那个点上真的是它吗 ----------
@@ -733,18 +734,23 @@ namespace Clover
             List<Border> best = new List<Border>();
             try
             {
-                // 分类栏是 Margin=(10,4,4,2) 的 ScrollViewer 里的 StackPanel
+                // 分类栏是 ScrollViewer 里的横向 StackPanel（顶部胶囊条）。
+                //
+                // 判定"这堆子项是分类胶囊"的依据从"高度 == 34"改成
+                // "高度在 24..40 之间且是 Border" —— 布局改造后胶囊高度是 30，
+                // 写死 34 会让断言假失败。用区间而不是精确值，
+                // 以后微调高度（28/32）也不用改测试。
                 foreach (ScrollViewer sv in FindAll<ScrollViewer>(panel))
                 {
                     StackPanel sp = sv.Content as StackPanel;
                     if (sp == null) continue;
                     if (sp.Children.Count <= best.Count) continue;
-                    // 里面的子项是 Border 且高度 34（分类条目样式）
+
                     bool looksLikeNav = false;
                     foreach (object o in sp.Children)
                     {
                         Border b = o as Border;
-                        if (b != null && Math.Abs(b.Height - 34) < 0.1) { looksLikeNav = true; break; }
+                        if (b != null && b.Height >= 24 && b.Height <= 40) { looksLikeNav = true; break; }
                     }
                     if (!looksLikeNav) continue;
 

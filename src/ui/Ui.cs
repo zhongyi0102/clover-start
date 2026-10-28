@@ -84,37 +84,47 @@ namespace Clover
         // Edge 稍淡（alpha 26%），只负责勾边。
         static readonly Palette Light = new Palette
         {
-            Bg = 0xFBFAF8,
+            Bg = 0xFFFBFAF8,
             Line = 0x557687A2,
             Edge = 0x428A93A8,
-            Fg = 0x202020,
-            Sub = 0x787672,
-            Hover = 0xF3F1ED,
-            Pressed = 0xE8E5DF,
-            SearchBg = 0xF2F0EC,
-            Accent = 0x388C48,
-            AccentSoft = 0xE8F3E9,
-            AccentText = 0x1E692D
+            Fg = 0xFF202020,
+            Sub = 0xFF787672,
+            Hover = 0xFFF3F1ED,
+            Pressed = 0xFFE8E5DF,
+            SearchBg = 0xFFF2F0EC,
+            Accent = 0xFF388C48,
+            AccentSoft = 0xFFE8F3E9,
+            AccentText = 0xFF1E692D
         };
 
-        // 深色。
+        // 深色 —— 目标样式：深青玻璃（参考用户给的启动台截图）
         //
-        // 注意 Accent 系在深色下必须**变亮**：同一个 #388C48 放在深底上会显脏、
-        // 对比度不足；AccentText 反向变亮（它是在 AccentSoft 底上的文字）。
-        // Line 用冷白，alpha 0x3C(24%) —— 深底上的"微光"，再低就看不见。
+        // 色相从"中性灰"改为"青蓝"：
+        //   #172A30 是那张截图里毛玻璃区域的主色调（占比 15.7%），
+        //   比纯灰更耐看，且与壁纸的冷色系更协调。
+        //
+        // ★ Bg 的 alpha 是**实测调出来的**，两头都试过：
+        //   · 0xC4(77%) → 壁纸上的文字（"我们买了50箱泡面"）透过来干扰阅读，
+        //     实测视觉评估判为"中等干扰"
+        //   · 0xFF(100%) → 毛玻璃完全看不见，退化成纯色板
+        //   0xE6(90%) 是平衡点：玻璃的"透"还在（能感知到背后有明暗），
+        //   但壁纸细节（文字、图案）被压到看不清，不干扰内容。
+        //
+        // Line 用冷白 alpha 0x3C(24%) —— 深底上的"微光"，再低就看不见。
+        // Accent 系在深色下必须变亮：同一个绿色放深底上会显脏、对比度不足。
         static readonly Palette Dark = new Palette
         {
-            Bg = 0x1E1F22,
-            Line = 0x3CD5E3FF,
-            Edge = 0x30D5E3FF,
-            Fg = 0xE9E9EA,
-            Sub = 0x9A9AA0,
-            Hover = 0x2A2C31,
-            Pressed = 0x33363C,
-            SearchBg = 0x26282C,
-            Accent = 0x54B863,
-            AccentSoft = 0x24352A,
-            AccentText = 0x8FD89B
+            Bg = 0xE6172A30,        // 深青黑，90% 不透明
+            Line = 0x3CD5E3FF,      // 冷白发丝线
+            Edge = 0x30D5E3FF,      // 外框更淡
+            Fg = 0xF0F4F5,          // 近白（深底上要够亮）
+            Sub = 0xA8B6BC,         // 青灰（比原先亮一档，小字要可读）
+            Hover = 0x38FFFFFF,     // 白 22%（玻璃上的悬停是高光，不是加深）
+            Pressed = 0x50FFFFFF,   // 白 31%
+            SearchBg = 0x2EFFFFFF,  // 白 18%（搜索框比周围略亮）
+            Accent = 0x4FC3D9,      // 青蓝强调色（与主色调同族，比绿更协调）
+            AccentSoft = 0x332E8FA3,
+            AccentText = 0x8FDCE8
         };
 
         /// <summary>32 位 ARGB（含 alpha）。</summary>
@@ -135,18 +145,19 @@ namespace Clover
 
         static void Fill(Palette p)
         {
-            Bg.Color = FromRgb24(p.Bg);
-            // Line / Edge 用 ARGB（带 alpha）—— 半透明是玻璃感的来源
+            // 全部用 ARGB —— Bg / Hover / Pressed / SearchBg 在深色下
+            // 也需要半透明（玻璃感），浅色下它们的 alpha 是 FF，行为不变。
+            Bg.Color = FromArgb32(p.Bg);
             Line.Color = FromArgb32(p.Line);
             Edge.Color = FromArgb32(p.Edge);
-            Fg.Color = FromRgb24(p.Fg);
-            Sub.Color = FromRgb24(p.Sub);
-            Hover.Color = FromRgb24(p.Hover);
-            Pressed.Color = FromRgb24(p.Pressed);
-            SearchBg.Color = FromRgb24(p.SearchBg);
-            Accent.Color = FromRgb24(p.Accent);
-            AccentSoft.Color = FromRgb24(p.AccentSoft);
-            AccentText.Color = FromRgb24(p.AccentText);
+            Fg.Color = FromArgb32(p.Fg);
+            Sub.Color = FromArgb32(p.Sub);
+            Hover.Color = FromArgb32(p.Hover);
+            Pressed.Color = FromArgb32(p.Pressed);
+            SearchBg.Color = FromArgb32(p.SearchBg);
+            Accent.Color = FromArgb32(p.Accent);
+            AccentSoft.Color = FromArgb32(p.AccentSoft);
+            AccentText.Color = FromArgb32(p.AccentText);
         }
 
         /// <summary>

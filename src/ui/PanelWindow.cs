@@ -61,14 +61,16 @@ namespace Clover
         TextBlock footerCount;
 
         /// <summary>
-        /// 侧栏所在列（折叠时改它的宽度）。由 BuildUi 赋值。
-        /// 折叠用 ColumnDefinition 的宽度动画，不碰 navGrid 的 Visibility——
-        /// 后者会把内容整棵丢掉，展开时还得重建。
+        /// 分类栏容器（顶部横条）。
+        ///
+        /// 布局从"左侧竖栏"改成"顶部横条"后，原来的 navColumn
+        /// （ColumnDefinition，折叠时改宽度）已经不存在了 ——
+        /// 横条折叠靠隐藏 navScroll，没有"宽度"这个概念。
+        /// 字段名保留为 navGrid，是因为折叠、徽标、选中态等
+        /// 二十多处逻辑都引用它；角色仍是"分类导航容器"。
         /// </summary>
-        ColumnDefinition navColumn;
-        /// <summary>侧栏容器（折叠时整体隐藏内部内容）。</summary>
         Grid navGrid;
-        /// <summary>分类列表的滚动容器（折叠时隐藏）。</summary>
+        /// <summary>分类胶囊的容器（折叠时隐藏它）。</summary>
         ScrollViewer navScroll;
         /// <summary>侧栏下半部分（任务栏列表，折叠时隐藏）。</summary>
         Grid taskGrid;

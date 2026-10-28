@@ -308,10 +308,18 @@ namespace Clover
                 else if (c == DesktopCategory) label = "桌面";
                 else label = CategoryDisplayName(c);
 
+                // 分类项：从"竖排列表行"改成"横向胶囊按钮"
+                //
+                // 变化点：
+                //   · 高度 34 → 30（横条上要更紧凑）
+                //   · 圆角 Sm(8) → 高度一半（胶囊形，目标图的样子）
+                //   · 外边距 0,2 → 0,2,4,2（胶囊之间要横向留白）
+                //   · 内边距加左右 10px（胶囊的文字不能贴边）
                 Border item = new Border();
-                item.Height = 34;
-                item.CornerRadius = new CornerRadius(Ui.R.Sm);
-                item.Margin = new Thickness(0, 2, 0, 2);
+                item.Height = 30;
+                item.CornerRadius = new CornerRadius(item.Height / 2);
+                item.Margin = new Thickness(0, 2, 4, 2);
+                item.Padding = new Thickness(10, 0, 10, 0);
                 item.Background = Brushes.Transparent;
                 item.Cursor = Cursors.Hand;
                 // 改过名的分类，悬停时提示原本叫什么，避免以后认不出来
@@ -323,17 +331,15 @@ namespace Clover
                 Grid g = new Grid();
                 g.ColumnDefinitions.Add(new ColumnDefinition());
                 g.ColumnDefinitions.Add(new ColumnDefinition());
-                g.ColumnDefinitions.Add(new ColumnDefinition());
-                g.ColumnDefinitions[0].Width = new GridLength(3);
-                g.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
-                g.ColumnDefinitions[2].Width = GridLength.Auto;
+                // 横条上没有"左侧竖线指示条"的位置了 —— 选中态靠背景色表达。
+                // 但仍保留这个元素（宽度设为 0），因为 navBars 列表被
+                // UpdateNav 直接索引，删掉会破坏它的下标对应关系。
+                g.ColumnDefinitions[0].Width = new GridLength(0);
+                g.ColumnDefinitions[1].Width = GridLength.Auto;
 
                 Border bar = new Border();
-                bar.Width = 3;
-                bar.Height = 16;
-                bar.CornerRadius = new CornerRadius(2);
-                bar.Background = Ui.Accent;
-                bar.HorizontalAlignment = HorizontalAlignment.Left;
+                bar.Width = 0;
+                bar.Height = 0;
                 bar.Visibility = Visibility.Collapsed;
                 Grid.SetColumn(bar, 0);
                 g.Children.Add(bar);
@@ -341,10 +347,10 @@ namespace Clover
                 TextBlock name = new TextBlock();
                 name.Text = label;
                 name.FontFamily = Ui.YaHei;
-                name.FontSize = 12.5;
+                name.FontSize = 12;
                 name.Foreground = Ui.Fg;
                 name.VerticalAlignment = VerticalAlignment.Center;
-                name.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+                name.Margin = new Thickness(0);
                 name.TextTrimming = TextTrimming.CharacterEllipsis;
                 Grid.SetColumn(name, 1);
                 g.Children.Add(name);
@@ -352,11 +358,13 @@ namespace Clover
                 TextBlock cnt = new TextBlock();
                 cnt.Text = count.ToString();
                 cnt.FontFamily = Ui.YaHei;
-                cnt.FontSize = 11;
+                cnt.FontSize = 10.5;
                 cnt.Foreground = Ui.Sub;
                 cnt.VerticalAlignment = VerticalAlignment.Center;
                 cnt.Margin = new Thickness(Ui.S.Xs, 0, Ui.S.Sm, 0);
-                Grid.SetColumn(cnt, 2);
+                // 数字紧跟在名字右边（原来有 3 列，现在只有 2 列）
+                cnt.Margin = new Thickness(5, 0, 0, 0);
+                Grid.SetColumn(cnt, 1);
                 g.Children.Add(cnt);
 
                 item.Child = g;
@@ -401,10 +409,18 @@ namespace Clover
             for (int i = 0; i < navItems.Count; i++)
             {
                 bool sel = navCats[i] == current;
-                navItems[i].Background = sel ? Ui.AccentSoft : Brushes.Transparent;
-                navBars[i].Visibility = sel ? Visibility.Visible : Visibility.Collapsed;
-                navNames[i].Foreground = sel ? Ui.AccentText : Ui.Fg;
+                // 胶囊的选中态用**实色强调底 + 白字**（目标图就是这样）：
+                // 竖排列表时代用的是"淡色底 + 左侧竖条"，那套在横条上不成立 ——
+                // 横条没有左边缘可言，竖条只会悬在胶囊里很怪。
+                navItems[i].Background = sel ? Ui.Accent : Brushes.Transparent;
+                navBars[i].Visibility = Visibility.Collapsed;   // 竖条已废弃
+                navNames[i].Foreground = sel ? Brushes.White : Ui.Fg;
                 navNames[i].FontWeight = sel ? FontWeights.SemiBold : FontWeights.Normal;
+                if (i < navCounts.Count && navCounts[i] != null)
+                {
+                    navCounts[i].Foreground = sel ? Brushes.White : Ui.Sub;
+                    navCounts[i].Opacity = sel ? 0.85 : 1.0;
+                }
             }
         }
 
