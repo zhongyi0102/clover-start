@@ -54,8 +54,22 @@ New-Item -ItemType Directory -Force -Path (Join-Path $pkgDir 'res') | Out-Null
 
 # ---------------- 3. 复制必需文件 ----------------
 Copy-Item $exe (Join-Path $pkgDir 'app\CloverStart.exe') -Force
-Copy-Item (Join-Path $root 'res\clover.png') (Join-Path $pkgDir 'res\clover.png') -Force
-Copy-Item (Join-Path $root 'res\clover.ico') (Join-Path $pkgDir 'res\clover.ico') -Force
+
+# res 下的图片全复制。
+# 为什么不再逐个列名：README 现在内嵌截图（screenshot-light/dark.png），
+# 而原先只列了 clover.png / clover.ico —— 加一张图就出死链，且不容易发现。
+# 改成"res 下有什么就带什么"，并让后面的 README 对账来兜底。
+#
+# 注意 PowerShell 陷阱：Get-ChildItem -Include 必须配 -Recurse，或路径以 \* 结尾，
+# 否则过滤器被静默忽略 —— 表现是"一个文件都没复制"，而且不报错。
+$resDir = Join-Path $root 'res'
+$resFiles = @(Get-ChildItem -Path (Join-Path $resDir '*') -File -ErrorAction SilentlyContinue)
+if ($resFiles.Count -eq 0) { throw "res 目录里没有任何文件（$resDir）" }
+foreach ($f in $resFiles) {
+    Copy-Item $f.FullName (Join-Path $pkgDir ('res\' + $f.Name)) -Force
+}
+Write-Host ("  res 资源: " + ($resFiles | ForEach-Object { $_.Name }) -join ', ')
+
 Copy-Item (Join-Path $root 'LICENSE') $pkgDir -Force
 Copy-Item (Join-Path $root 'README.md') (Join-Path $pkgDir 'README.md') -Force
 
@@ -175,12 +189,39 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
     $count = $zip.Entries.Count
-    $hasExe = ($zip.Entries | Where-Object { $_.FullName -like '*CloverStart.exe' }).Count -gt 0
-    $hasPng = ($zip.Entries | Where-Object { $_.FullName -like '*clover.png' }).Count -gt 0
+    $names = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
+    $hasExe = ($names | Where-Object { $_ -like '*CloverStart.exe' }).Count -gt 0
+    $hasPng = ($names | Where-Object { $_ -like '*clover.png' }).Count -gt 0
     Write-Host ("  zip 条目数: $count")
     Write-Host ("  zip 含主程序: " + $(if ($hasExe) { '是' } else { '否' }))
     Write-Host ("  zip 含界面图标: " + $(if ($hasPng) { '是' } else { '否' }))
     if (-not ($hasExe -and $hasPng)) { throw '压缩包缺少关键文件' }
+
+    # ★ 从 README 反查所有图片引用，逐个确认在包里。
+    # 为什么这样校验：原先只硬编码检查 clover.png，于是给 README 加了截图之后
+    # 包是"校验通过"的，但解压出来 README 里两张图都是死链。
+    # 改成从 README 提取 ![](...) 的路径来对账，以后再加图也会被兜住。
+    $readmeText = Get-Content (Join-Path $root 'README.md') -Raw -Encoding UTF8
+    $refs = [regex]::Matches($readmeText, '!\[[^\]]*\]\(([^)]+)\)') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Where-Object { $_ -notmatch '^https?://' } |
+        ForEach-Object { $_ -replace '/', '\' } |
+        Sort-Object -Unique
+
+    if ($refs.Count -eq 0) {
+        Write-Host '  README 图片引用: 0 个（跳过对账）'
+    } else {
+        $missing = @()
+        foreach ($r in $refs) {
+            # 包里路径形如 CloverStart-v1.0.3\res\xxx.png
+            $hit = $names | Where-Object { $_ -like ('*' + ($r -replace '\\', '/')) }
+            if (-not $hit) { $missing += $r }
+        }
+        Write-Host ("  README 图片引用: $($refs.Count) 个，包内缺失 $($missing.Count) 个")
+        if ($missing.Count -gt 0) {
+            throw ('README 引用了这些图片，但压缩包里没有（解压后会是死链）: ' + ($missing -join ', '))
+        }
+    }
 } finally {
     $zip.Dispose()
 }
