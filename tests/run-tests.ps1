@@ -61,6 +61,8 @@ function Invoke-Suite($name, $refs, $sources) {
 # Catalog 依赖这些（覆盖表 / 规则表 / 归一化 / 隐藏清单 / 存储），分类相关套件都要带上
 $catalogDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
+    (Join-Path $coreDir 'Migration.cs'),
+    (Join-Path $coreDir 'Settings.cs'),
     (Join-Path $coreDir 'AppPaths.cs'),
     (Join-Path $coreDir 'AppDedup.cs'),
     (Join-Path $coreDir 'ShortcutResolver.cs'),
@@ -83,6 +85,7 @@ $catalogDeps = @(
 # 去重：需要扫描器 + 去重器
 $dedupDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
+    (Join-Path $coreDir 'Migration.cs'),
     (Join-Path $coreDir 'Settings.cs'),
     (Join-Path $coreDir 'Log.cs'),
     (Join-Path $coreDir 'HiddenApps.cs'),
@@ -121,6 +124,10 @@ Invoke-Suite 'CategoryRulesTest' ($baseRefs + $webRef) `
 # 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存
 Invoke-Suite 'HiddenAppsTest' ($baseRefs + $webRef) `
     ($catalogDeps + @((Join-Path $testDir 'HiddenAppsTest.cs')))
+
+  # 一次性迁移：分类隐藏 → 逐条隐藏（幂等、不覆盖、读不出时保护原文件）
+  Invoke-Suite 'MigrationTest' ($baseRefs + $webRef) `
+      ($catalogDeps + @((Join-Path $testDir 'MigrationTest.cs')))
 
 # 分类顺序与重命名：只改显示名、不动内部名
 Invoke-Suite 'CategoriesTest' ($baseRefs + $webRef) `

@@ -78,6 +78,20 @@ namespace Clover
             Catalog c = new Catalog();
             string cfg = Path.Combine(baseDir, "config");
 
+            // ---- 一次性迁移：分类隐藏 → 逐条隐藏 ----
+            //
+            // **必须放在最前面**，早于任何读 apps.json 或触发扫描的代码：
+            // 迁移要读旧 apps.json 的 category 字段，而扫描会重写它。
+            // 迁移自身幂等（有标记文件 + HiddenApps.Hide 去重），重复调用无害。
+            try
+            {
+                Migration.Run(baseDir, Settings.Load(baseDir));
+            }
+            catch (Exception ex)
+            {
+                // 迁移失败绝不能阻止启动
+                Log.Warn("分类隐藏迁移失败（已跳过）: " + ex.Message);
+            }
             // 先加载分类规则表（config\category-rules.tsv）。
             // 必须在任何 GuessCategory 调用之前完成，否则会用到上一次的规则。
             // 带修改时间检查，文件没改就跳过重复解析。
