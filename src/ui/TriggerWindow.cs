@@ -413,6 +413,9 @@ namespace Clover
             else panel.ShowPanel();
         }
 
+        /// <summary>上次构建的菜单（仅测试用；生产代码不读它）。</summary>
+        internal ContextMenu lastMenu;
+
         void ShowMenu()
         {
             ContextMenu cm = new ContextMenu();
@@ -427,42 +430,80 @@ namespace Clover
             rescan.Click += delegate { if (panel != null) panel.Rescan(); };
             cm.Items.Add(rescan);
 
-            // ---- 设置子菜单 ----
+            // ================================================================
+            //  菜单结构（顶层 8 项，分隔线不计）
             //
-            // 为什么把开关收进来：顶层原先有 16 项，一眼扫不完，而且
-            // 「退出」（每天用）和「一键回滚」（用一次）平铺在同一层。
-            // 这些开关都是"设置一次就不动"的低频项，收进子菜单后
-            // 顶层只剩 8 项：打开面板 / 重新扫描 / 隐藏用不到的 / 主题 /
-            // 设置 / 诊断 / 开机自启 / 退出。
+            //    打开面板
+            //    重新扫描应用
+            //    ─────────
+            //    外观…              ← 直达（常用，不多点一层）
+            //    主题 ▸             ← 直达（常用）
+            //    ─────────
+            //    任务栏 ▸           4 个任务栏/迷你栏开关
+            //    设置 ▸             桌面行为 / 全屏 / 开机自启
+            //    维护与诊断 ▸        清理/还原/隐藏/诊断/回滚
+            //    ─────────
+            //    退出
             //
-            // 勾选状态在子菜单里照常显示，行为完全不变。
+            // 为什么这么分：
+            //   · 外观 / 主题是"看着不对就想改"的高频项，必须直达
+            //   · 任务栏相关 4 项同属一组，放一起语义清楚
+            //   · 清理/还原/诊断/回滚都是"出了问题才用"，收进维护组
+            //   · 开机自启设一次就不动，收进设置
+            // ================================================================
             cm.Items.Add(new Separator());
 
-            MenuItem settingsMenu = new MenuItem();
-            settingsMenu.Header = "设置";
-
-            // 桌面快捷方式的清理/还原也放进设置：低频，且与上面的开关同属"桌面行为"
-            MenuItem clean = new MenuItem();
-            clean.Header = "立即清理桌面快捷方式";
-            clean.Click += delegate { if (panel != null) panel.CleanDesktopFromMenu(); };
-            settingsMenu.Items.Add(clean);
-
-            MenuItem restore = new MenuItem();
-            restore.Header = "还原桌面快捷方式";
-            restore.ToolTip = "把 desktop-backup 里的快捷方式放回桌面（重名自动加后缀，不覆盖）";
-            restore.Click += delegate
+            // ---- 外观…（直达）----
+            //
+            // 为什么不保留一个「毛玻璃背景」勾选项：
+            //   · 浓度 0 就等于关闭，那个勾选项和「浓度」滑块重复
+            //   · 用户要调的不止开/关，还有模糊/染色/亮度/颜色/背景模式
+            // 统一收进外观窗口，一个入口管全部。
+            MenuItem appearanceItem = new MenuItem();
+            appearanceItem.Header = "外观…";
+            appearanceItem.ToolTip = "毛玻璃预设、浓度、模糊、染色、亮度、强调色、背景模式";
+            appearanceItem.IsEnabled = GlassBackdrop.Supported;
+            if (!GlassBackdrop.Supported)
             {
-                if (panel == null) return;
-                int n = panel.RestoreDesktopFromMenu();
-                MessageBox.Show(
-                    n > 0
-                        ? "已把 " + n + " 个快捷方式放回桌面。\r\n重名的会加上「-还原N」后缀，没有覆盖任何文件。"
-                        : "没有可还原的快捷方式。\r\n（desktop-backup 里没有 .lnk 文件）",
-                    "四叶草");
+                appearanceItem.ToolTip = "当前为软件渲染（无硬件加速），毛玻璃会自动拖慢界面，已禁用。";
+            }
+            appearanceItem.Click += delegate
+            {
+                try
+                {
+                    AppearanceDialog.Show(this, settings, panel, null);
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.Warn("打开外观窗口失败: " + ex.Message);
+                }
             };
-            settingsMenu.Items.Add(restore);
+            cm.Items.Add(appearanceItem);
 
-            settingsMenu.Items.Add(new Separator());
+            // ---- 主题 ▸（直达）----
+            // 三选一，当前项打勾。切换后立刻生效（颜色刷子是全局的，
+            // 改 .Color 整棵界面就变色，不用重建窗口）。
+            MenuItem themeItem = new MenuItem();
+            themeItem.Header = "主题";
+            Ui.ThemeMode currentTheme = Ui.ParseTheme(settings.Theme);
+            foreach (Ui.ThemeMode m in new Ui.ThemeMode[]
+                { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
+            {
+                Ui.ThemeMode mm = m;
+                MenuItem one = new MenuItem();
+                one.Header = Ui.ThemeDisplayName(mm);
+                one.IsCheckable = true;
+                one.IsChecked = (mm == currentTheme);
+                one.Click += delegate { ApplyThemeAndSave(mm); };
+                themeItem.Items.Add(one);
+            }
+            cm.Items.Add(themeItem);
+
+            cm.Items.Add(new Separator());
+
+            // ---- 任务栏 ▸ ----
+            MenuItem taskbarMenu = new MenuItem();
+            taskbarMenu.Header = "任务栏";
 
             MenuItem miniItem = new MenuItem();
             miniItem.Header = "启用迷你任务栏";
@@ -476,7 +517,72 @@ namespace Clover
                 if (panel != null) panel.ApplyMiniTaskbarSetting();
                 Ui.Log("迷你任务栏开关 -> " + settings.MiniTaskbar);
             };
-            settingsMenu.Items.Add(miniItem);
+            taskbarMenu.Items.Add(miniItem);
+
+            MenuItem taskbarItem = new MenuItem();
+            taskbarItem.Header = "隐藏系统任务栏";
+            taskbarItem.IsCheckable = true;
+            taskbarItem.IsChecked = hideTaskbar;
+            // 安全模式下禁用：隐藏任务栏是"程序挂了用户就没任务栏"的最高风险操作，
+            // 正是安全模式要挡住的事。菜单项置灰 + 提示原因，比点了没反应清楚。
+            taskbarItem.IsEnabled = settings.EffectiveTaskbarHiding;
+            if (Settings.SafeModeActive)
+            {
+                taskbarItem.ToolTip = "安全模式下已禁用（避免程序异常时系统任务栏回不来）。"
+                    + "退出安全模式后即可使用。";
+            }
+            taskbarItem.Click += delegate
+            {
+                // 双保险：IsEnabled 已挡住，但菜单可能在打开后被 SafeMode 变化影响
+                if (!settings.EffectiveTaskbarHiding) return;
+
+                hideTaskbar = !hideTaskbar;
+                settings.HideTaskbar = hideTaskbar;
+                settings.Save();
+                TaskbarVisibility.Apply(hideTaskbar);
+                if (hideTaskbar) startWin.Show();
+                else startWin.Hide();
+                lastLeft = double.NaN;
+                lastTop = double.NaN;
+                Reposition();
+                OverlayGate.Refresh();
+            };
+            taskbarMenu.Items.Add(taskbarItem);
+
+            // 「允许隐藏系统任务栏」是「隐藏系统任务栏」的**总开关**（不是重复项）：
+            //   · 它关掉 → 强制恢复任务栏，并把上面那项置灰
+            //   · 它开着 → 上面那项才能勾
+            // 两者语义不同，都保留。
+            MenuItem taskbarHidingItem = new MenuItem();
+            taskbarHidingItem.Header = "允许隐藏系统任务栏";
+            taskbarHidingItem.IsCheckable = true;
+            taskbarHidingItem.IsChecked = settings.TaskbarHiding;
+            taskbarHidingItem.ToolTip = "关闭后强制恢复任务栏，并禁用上面的“隐藏系统任务栏”";
+            taskbarHidingItem.Click += delegate
+            {
+                settings.TaskbarHiding = !settings.TaskbarHiding;
+                if (!settings.TaskbarHiding)
+                {
+                    // 关掉这个功能时，必须真的把任务栏放出来
+                    hideTaskbar = false;
+                    settings.HideTaskbar = false;
+                    TaskbarVisibility.Apply(false);
+                    startWin.Hide();
+                }
+                settings.Save();
+                lastLeft = double.NaN;
+                lastTop = double.NaN;
+                Reposition();
+                OverlayGate.Refresh();
+                Ui.Log("允许隐藏系统任务栏 -> " + settings.TaskbarHiding);
+            };
+            taskbarMenu.Items.Add(taskbarHidingItem);
+
+            cm.Items.Add(taskbarMenu);
+
+            // ---- 设置 ▸ ----
+            MenuItem settingsMenu = new MenuItem();
+            settingsMenu.Header = "设置";
 
             MenuItem autoCleanItem = new MenuItem();
             autoCleanItem.Header = "自动移走桌面快捷方式";
@@ -518,67 +624,12 @@ namespace Clover
             };
             settingsMenu.Items.Add(autoCleanItem);
 
-            MenuItem taskbarHidingItem = new MenuItem();
-            taskbarHidingItem.Header = "允许隐藏系统任务栏";
-            taskbarHidingItem.IsCheckable = true;
-            taskbarHidingItem.IsChecked = settings.TaskbarHiding;
-            taskbarHidingItem.ToolTip = "关闭后强制恢复任务栏，并禁用下面的“隐藏系统任务栏”";
-            taskbarHidingItem.Click += delegate
-            {
-                settings.TaskbarHiding = !settings.TaskbarHiding;
-                if (!settings.TaskbarHiding)
-                {
-                    // 关掉这个功能时，必须真的把任务栏放出来
-                    hideTaskbar = false;
-                    settings.HideTaskbar = false;
-                    TaskbarVisibility.Apply(false);
-                    startWin.Hide();
-                }
-                settings.Save();
-                lastLeft = double.NaN;
-                lastTop = double.NaN;
-                Reposition();
-                OverlayGate.Refresh();
-                Ui.Log("允许隐藏系统任务栏 -> " + settings.TaskbarHiding);
-            };
-            settingsMenu.Items.Add(taskbarHidingItem);
+            settingsMenu.Items.Add(new Separator());
 
-            MenuItem taskbarItem = new MenuItem();
-            taskbarItem.Header = "隐藏系统任务栏";
-            taskbarItem.IsCheckable = true;
-            taskbarItem.IsChecked = hideTaskbar;
-            // 安全模式下禁用：隐藏任务栏是"程序挂了用户就没任务栏"的最高风险操作，
-            // 正是安全模式要挡住的事。菜单项置灰 + 提示原因，比点了没反应清楚。
-            taskbarItem.IsEnabled = settings.EffectiveTaskbarHiding;
-            if (Settings.SafeModeActive)
-            {
-                taskbarItem.ToolTip = "安全模式下已禁用（避免程序异常时系统任务栏回不来）。"
-                    + "退出安全模式后即可使用。";
-            }
-            taskbarItem.Click += delegate
-            {
-                // 双保险：IsEnabled 已挡住，但菜单可能在打开后被 SafeMode 变化影响
-                if (!settings.EffectiveTaskbarHiding) return;
-
-                hideTaskbar = !hideTaskbar;
-                settings.HideTaskbar = hideTaskbar;
-                settings.Save();
-                TaskbarVisibility.Apply(hideTaskbar);
-                if (hideTaskbar) startWin.Show();
-                else startWin.Hide();
-                lastLeft = double.NaN;
-                lastTop = double.NaN;
-                Reposition();
-                OverlayGate.Refresh();
-            };
-            settingsMenu.Items.Add(taskbarItem);
-
-            // ---- 悬浮按钮显示策略（同样收在设置里）----
+            // ---- 悬浮按钮显示策略 ----
             // fullscreenDetect / hoverReveal 原先只能手改 settings.json，
             // 界面上没有开关 —— 这两个设置恰好也是被安全模式降级的项，
             // 一旦被固化就永久失效、还查不出原因（现在安全模式已不再改它们）。
-            settingsMenu.Items.Add(new Separator());
-
             MenuItem fullscreenItem = new MenuItem();
             fullscreenItem.Header = "全屏时隐藏悬浮按钮";
             fullscreenItem.IsCheckable = true;
@@ -615,37 +666,46 @@ namespace Clover
 
             settingsMenu.Items.Add(new Separator());
 
-            // ---- 外观…（取代原来的「毛玻璃背景」开关）----
-            //
-            // 为什么不保留一个「毛玻璃背景」勾选项：
-            //   · 浓度 0 就等于关闭，那个勾选项和「浓度」滑块重复
-            //   · 用户要调的不止开/关，还有模糊/染色/亮度/颜色/背景模式
-            // 统一收进外观窗口，一个入口管全部。
-            MenuItem appearanceItem = new MenuItem();
-            appearanceItem.Header = "外观…";
-            appearanceItem.ToolTip = "毛玻璃预设、浓度、模糊、染色、亮度、强调色、背景模式";
-            appearanceItem.IsEnabled = GlassBackdrop.Supported;
-            if (!GlassBackdrop.Supported)
-            {
-                appearanceItem.ToolTip = "当前为软件渲染（无硬件加速），毛玻璃会自动拖慢界面，已禁用。";
-            }
-            appearanceItem.Click += delegate
-            {
-                try
-                {
-                    AppearanceDialog.Show(this, settings, panel, null);
-                }
-                catch (Exception ex)
-                {
-                    ErrorLog.Warn("打开外观窗口失败: " + ex.Message);
-                }
-            };
-            settingsMenu.Items.Add(appearanceItem);
+            MenuItem auto = new MenuItem();
+            auto.Header = "开机自启";
+            auto.IsCheckable = true;
+            auto.IsChecked = File.Exists(startupLnk);
+            auto.Click += delegate { ToggleAutostart(); };
+            settingsMenu.Items.Add(auto);
 
-            // 设置子菜单到此组装完毕，挂到顶层
             cm.Items.Add(settingsMenu);
 
-            // ---- 隐藏的项目管理 ----
+            // ---- 维护与诊断 ▸ ----
+            //
+            // 这一组都是"出了问题才用"：清理/还原桌面、隐藏管理、诊断、一键回滚。
+            // 日常启动面板根本不会碰，收进来让顶层只剩 8 项。
+            MenuItem maintainMenu = new MenuItem();
+            maintainMenu.Header = "维护与诊断";
+
+            // 桌面快捷方式的清理/还原
+            MenuItem clean = new MenuItem();
+            clean.Header = "立即清理桌面快捷方式";
+            clean.Click += delegate { if (panel != null) panel.CleanDesktopFromMenu(); };
+            maintainMenu.Items.Add(clean);
+
+            MenuItem restore = new MenuItem();
+            restore.Header = "还原桌面快捷方式";
+            restore.ToolTip = "把 desktop-backup 里的快捷方式放回桌面（重名自动加后缀，不覆盖）";
+            restore.Click += delegate
+            {
+                if (panel == null) return;
+                int n = panel.RestoreDesktopFromMenu();
+                MessageBox.Show(
+                    n > 0
+                        ? "已把 " + n + " 个快捷方式放回桌面。\r\n重名的会加上「-还原N」后缀，没有覆盖任何文件。"
+                        : "没有可还原的快捷方式。\r\n（desktop-backup 里没有 .lnk 文件）",
+                    "四叶草");
+            };
+            maintainMenu.Items.Add(restore);
+
+            maintainMenu.Items.Add(new Separator());
+
+            // 隐藏的项目管理（保持原有的二级结构：隐藏用不到的 ▸ 隐藏全部X / 查看 / 取消）
             MenuItem hideTools = new MenuItem();
             hideTools.Header = "隐藏用不到的";
             if (panel == null)
@@ -686,32 +746,11 @@ namespace Clover
                 };
                 hideTools.Items.Add(unhideAll);
             }
-            cm.Items.Add(hideTools);
+            maintainMenu.Items.Add(hideTools);
 
-            cm.Items.Add(new Separator());
+            maintainMenu.Items.Add(new Separator());
 
-            // ---- 主题 ----
-            // 三选一，当前项打勾。切换后立刻生效（颜色刷子是全局的，
-            // 改 .Color 整棵界面就变色，不用重建窗口）。
-            MenuItem themeItem = new MenuItem();
-            themeItem.Header = "主题";
-            Ui.ThemeMode currentTheme = Ui.ParseTheme(settings.Theme);
-            foreach (Ui.ThemeMode m in new Ui.ThemeMode[]
-                { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
-            {
-                Ui.ThemeMode mm = m;
-                MenuItem one = new MenuItem();
-                one.Header = Ui.ThemeDisplayName(mm);
-                one.IsCheckable = true;
-                one.IsChecked = (mm == currentTheme);
-                one.Click += delegate { ApplyThemeAndSave(mm); };
-                themeItem.Items.Add(one);
-            }
-            cm.Items.Add(themeItem);
-
-            cm.Items.Add(new Separator());
-
-            // ---- 诊断 ----
+            // 诊断
             // 定位状态原先只写进日志，界面上看不到。定位降级时按钮会偏几像素，
             // 用户只会觉得"按钮位置怪怪的"却查不出原因，所以给一个可见入口。
             MenuItem diag = new MenuItem();
@@ -728,16 +767,23 @@ namespace Clover
             health.Click += delegate { ShowHealthStatus(); };
             diag.Items.Add(health);
 
-            cm.Items.Add(diag);
+            maintainMenu.Items.Add(diag);
 
-            cm.Items.Add(new Separator());
+            maintainMenu.Items.Add(new Separator());
 
-            MenuItem auto = new MenuItem();
-            auto.Header = "开机自启";
-            auto.IsCheckable = true;
-            auto.IsChecked = File.Exists(startupLnk);
-            auto.Click += delegate { ToggleAutostart(); };
-            cm.Items.Add(auto);
+            // 一键回滚（要二次确认）
+            // ResetAll 设计成**独立进程**跑：它会杀掉看门狗，且要求自己不是被回滚的对象。
+            // 所以这里不直接调 ResetAll.Run —— 那是自杀式操作（第 5 步会遍历同名进程）。
+            // 改为拉起一个带 --reset-all 的子进程；该分支在互斥锁之前，
+            // 所以主实例还在跑也不冲突。
+            MenuItem rollback = new MenuItem();
+            rollback.Header = "一键回滚…";
+            rollback.ToolTip = "撤销本程序对系统做过的所有改动：任务栏可见性、开机自启、"
+                + "看门狗、崩溃保护状态。你的设置和应用清单会保留";
+            rollback.Click += delegate { PromptRollback(); };
+            maintainMenu.Items.Add(rollback);
+
+            cm.Items.Add(maintainMenu);
 
             cm.Items.Add(new Separator());
 
@@ -751,23 +797,12 @@ namespace Clover
             };
             cm.Items.Add(exit);
 
-            // ---- 一键回滚（放最后，且要二次确认）----
-            // ResetAll 设计成**独立进程**跑：它会杀掉看门狗，且要求自己不是被回滚的对象。
-            // 所以这里不直接调 ResetAll.Run —— 那是自杀式操作（第 5 步会遍历同名进程）。
-            // 改为拉起一个带 --reset-all 的子进程；该分支在互斥锁之前，
-            // 所以主实例还在跑也不冲突。
-            cm.Items.Add(new Separator());
-
-            MenuItem rollback = new MenuItem();
-            rollback.Header = "一键回滚…";
-            rollback.ToolTip = "撤销本程序对系统做过的所有改动：任务栏可见性、开机自启、"
-                + "看门狗、崩溃保护状态。你的设置和应用清单会保留";
-            rollback.Click += delegate { PromptRollback(); };
-            cm.Items.Add(rollback);
-
             cm.Placement = PlacementMode.Bottom;
             cm.PlacementTarget = root;
             cm.IsOpen = true;
+
+            // 供 MenuStructureTest 反射读取（生产代码不用它）
+            lastMenu = cm;
         }
 
         /// <summary>

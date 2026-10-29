@@ -220,6 +220,10 @@ Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
 Invoke-Suite 'ActiveRowTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'ActiveRowTest.cs')))
 
+
+# 右键菜单结构：顶层 8 项、顺序、分隔线、子菜单归属、状态绑定
+Invoke-Suite 'MenuStructureTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'MenuStructureTest.cs')))
 # ---------------- 验收测试 ----------------
 # 真实创建 PanelWindow，检查界面确实画出来了，并输出 JSON 证据报告。
 # 强制使用临时目录，拒绝接触用户真实 config（见 AcceptanceTest.cs 的安全闸）。

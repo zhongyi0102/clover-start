@@ -51,6 +51,7 @@ namespace Clover
             TestAccentEmptyRestoresTheme();
             TestUnknownFieldsPreserved();
             TestAllPathsInjectParams();
+            TestAccentLabelAndHint();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -292,7 +293,56 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 9. 三条路径都注入外观参数（回归）----------
+        // ---------- 8b. 强调色标签与说明（源码级）----------
+        //
+        // 为什么用源码级：外观窗口是纯代码构建的 WPF 窗口，
+        // 要真的读出 TextBlock 文字需要建窗口 + 遍历可视树，
+        // 而这里只需确认「标签叫界面强调色」「有那句说明」，源码断言足够。
+        static void TestAccentLabelAndHint()
+        {
+            Console.WriteLine("--- 8b. 强调色标签与说明 ---");
+
+            string srcDir = FindSourceDir();
+            if (srcDir == null)
+            {
+                Console.WriteLine("      跳过：找不到 src 目录");
+                Console.WriteLine();
+                return;
+            }
+
+            string path = Path.Combine(srcDir, "ui", "AppearanceDialog.cs");
+            if (!File.Exists(path))
+            {
+                Console.WriteLine("      跳过：找不到 AppearanceDialog.cs");
+                Console.WriteLine();
+                return;
+            }
+
+            string text = File.ReadAllText(path, Encoding.UTF8);
+
+            Check(text.IndexOf("MakeColorRow(\"界面强调色\"", StringComparison.Ordinal) >= 0,
+                "★标签是「界面强调色」（不是「强调色」）");
+            Check(text.IndexOf("影响整个界面的强调色，包括按钮、选中状态等；不只影响面板背景。",
+                StringComparison.Ordinal) >= 0,
+                "★有那句说明文字");
+            Check(text.IndexOf("MakeColorRow(\"染色\"", StringComparison.Ordinal) >= 0,
+                "「染色」标签未被误改");
+            Check(text.IndexOf("settings.GlassAccent", StringComparison.Ordinal) >= 0,
+                "★配置键仍是 glassAccent（未重命名）");
+            Check(text.IndexOf("Ui.SetAccentOverride", StringComparison.Ordinal) >= 0,
+                "★仍调用 Ui.SetAccentOverride（行为不变）");
+
+            // 说明文字必须挂在「界面强调色」那一行，不能挂到「染色」上
+            int accentPos = text.IndexOf("MakeColorRow(\"界面强调色\"", StringComparison.Ordinal);
+            int hintPos = text.IndexOf("影响整个界面的强调色", StringComparison.Ordinal);
+            int tintPos = text.IndexOf("MakeColorRow(\"染色\"", StringComparison.Ordinal);
+            Check(accentPos >= 0 && hintPos > accentPos && (tintPos < 0 || hintPos > tintPos),
+                "★说明挂在「界面强调色」行内（不在「染色」行）",
+                "accent=" + accentPos + " hint=" + hintPos + " tint=" + tintPos);
+            Console.WriteLine();
+        }
+
+        // ---------- 9. 三条路径都注入外观参数
         //
         // 真实 bug：第 1 个提交只把参数注入放进 ApplyGlassSetting，
         // 而它只被「毛玻璃背景」菜单开关调用。启动走 RefreshGlassSoon，

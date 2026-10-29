@@ -306,10 +306,16 @@ namespace Clover
                         AppearancePresets.MarkCustom(settings);
                     },
                     "空 = 用当前强调色",
+                    null,   // 染色不需要额外说明
                     schedulePreview, commit, refreshPresetButtons, refreshers));
 
-                // 强调色板
-                body.Children.Add(MakeColorRow("强调色", settings,
+                // 界面强调色板
+                //
+                // 名字带「界面」前缀，因为它**不只影响面板背景**：
+                // glassAccent → Ui.SetAccentOverride → 全局 Ui.Accent 刷子，
+                // 按钮、选中态、胶囊、搜索框焦点都跟着变。
+                // 用户在这里改，是整个界面变色，不是只改玻璃染色。
+                body.Children.Add(MakeColorRow("界面强调色", settings,
                     delegate { return settings == null ? "" : settings.GlassAccent; },
                     delegate(string hex)
                     {
@@ -325,6 +331,7 @@ namespace Clover
                             Ui.SetAccentOverride(null);
                     },
                     "空 = 用主题默认强调色",
+                    "影响整个界面的强调色，包括按钮、选中状态等；不只影响面板背景。",
                     schedulePreview, commit, refreshPresetButtons, refreshers));
 
                 // ===== 背景模式 =====
@@ -654,6 +661,7 @@ namespace Clover
             string label, Settings settings,
             Func<string> getter, Action<string> setter,
             string tooltip,
+            string hint,          // 可选：标签下方的灰色说明（null = 不显示）
             Action schedulePreview, Action commit,
             Action refreshPresetButtons, List<Action> refreshers)
         {
@@ -797,6 +805,15 @@ namespace Clover
             swatches.Children.Add(input);
 
             wrap.Children.Add(row);
+
+            // 可选说明（灰色小字，复用 Ui.Sub 样式）
+            if (!string.IsNullOrEmpty(hint))
+            {
+                TextBlock hintText = Ui.T(hint, 10.5, Ui.Sub);
+                hintText.Margin = new Thickness(64, 2, 0, 0);   // 与标签列对齐
+                hintText.TextWrapping = TextWrapping.Wrap;
+                wrap.Children.Add(hintText);
+            }
 
             // 刷新器
             refreshers.Add(delegate
