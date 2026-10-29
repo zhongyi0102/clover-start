@@ -213,6 +213,10 @@ Invoke-Suite 'SearchTest' $baseRefs `
 Invoke-Suite 'FullscreenTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'FullscreenTest.cs')))
 
+# 搜索合并：主（MatchCatalog）+ 补充（Instant）的去重/排序/上限
+Invoke-Suite 'SearchMergeTest' $baseRefs `
+    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'Categories.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
+
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))
 

@@ -115,8 +115,21 @@ namespace Clover
         }
 
         /// <summary>
-        /// 执行一次完整搜索（Instant 一级：已安装应用 + 开始菜单 + 注册表）。
-        /// 必须在界面线程调用。
+        /// 执行一次完整搜索。**必须在界面线程调用**。
+        ///
+        /// 两路职责（不是"完全统一"，是主 + 补充）：
+        ///   · 主：MatchCatalog —— 已扫描进面板的应用清单，**支持拼音**
+        ///     （`wx` / `weixin` → 微信），这是 Instant 做不到的
+        ///   · 补充：SystemSearch.Instant —— 现场扫开始菜单（递归 depth≤3）
+        ///     + 注册表 App Paths / Uninstall，能发现没被扫进清单的程序
+        ///     （`notepad` / `7z` / `code` 这类只在注册表里的）
+        ///
+        /// **为什么两路都要**（实测数据）：
+        ///   · 只有 MatchCatalog：`notepad` / `7z` 搜不到（0 条）
+        ///   · 只有 Instant：`wx` / `weixin` 搜不到（0 条，无拼音）
+        ///
+        /// 补充结果**总是执行**（不因主搜索有结果就跳过），
+        /// 但追加在主结果之后，且受统一的 MaxDisplay 上限控制。
         /// </summary>
         public void Search(string query)
         {
@@ -169,7 +182,27 @@ namespace Clover
                 {
                     if (r == null) continue;
                     if (shown.Count >= MaxDisplay) return;
+                    // ---- 去重：路径 + 归一化名字，双键 ----
+                    //
+                    // 为什么单靠 Path 不够（实测）：同一应用在两路里路径不同 ——
+                    //   微信  →  Catalog: ...\微信.lnk      Instant: ...\Weixin.exe
+                    //   Steam →  Catalog: ...\Steam.lnk     Instant: ...\uninstall.exe
+                    //   QQ    →  Catalog: ...\QQ.lnk        Instant: ...\QQ.exe
+                    // 但它们的 **Name 完全相同**，所以再加一道名字键就能拦住。
+                    //
+                    // 名字键**只用 Trim + 小写**，不用 NameMatch.Normalize：
+                    // Normalize 是为分类设计的（丢掉所有非字母数字），会把
+                    //   Notepad++  →  notepad     ← 和 Notepad 撞车
+                    // 实测 Notepad++ 被误合并成 Notepad，所以这里用最保守的键。
+                    //
+                    // 保守键能覆盖实测里的全部重复场景（微信/Steam/QQ/迅雷），
+                    // 且不会误合并 Notepad vs Notepad++ / Chrome vs Chrome Beta。
+                    // 代价：全角ＱＱ vs 半角QQ 不会合并（少见，可接受）。
                     if (!shown.Add(r.Path)) continue;
+
+                    // 只对**非空**名字加键：空名的结果不做名字去重。
+                    string normName = (r.Name ?? "").Trim().ToLowerInvariant();
+                    if (normName.Length > 0 && !shown.Add("N:" + normName)) continue;
 
                     // 来源变化时插入分组标题（去重后第一次遇到该来源）
                     string groupKey = "G:" + r.Source;
