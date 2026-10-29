@@ -394,6 +394,10 @@ clover-start\
   desktop-backup\            被移走的桌面快捷方式（可恢复）
 ```
 
+> **`src\core\Version.cs` 由 `build.ps1` 自动生成，不入库。**
+> 它包含版本号和构建时间戳，每次编译都会重写。
+> 所以 `git clone` 后**必须先跑一次 `build.ps1`**，否则编译会缺 `BuildInfo` 类。
+
 ## 改完源码立刻看效果
 
 改完 `src\` 下的代码，双击桌面的 **「四叶草-改完即跑」** 即可：它会自动完成
