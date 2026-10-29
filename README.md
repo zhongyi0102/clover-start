@@ -91,17 +91,89 @@
 - 过滤程序内部资源：`.pak` / `.dll` / `.json` 等 40+ 种扩展名，以及 `node_modules` / `Caches` / `Program Files` 等 30+ 种目录（实测搜 "chrome" 从 60 条噪音降到 6 条有意义结果）
 - 点结果直接打开；右键可打开所在位置 / 复制路径
 
-### 外观
+### 外观（毛玻璃）
 
-- **毛玻璃背景**：三层叠加 —— 模糊 + 染色（10% 强调色）+ 噪点（2.5% 磨砂颗粒）+ 边缘高光（模拟玻璃厚度）
-  - 背景是**固定图** `res\background-cyangray.png`（青灰玻璃，1920×1200），不跟随桌面壁纸
-  - 想换成跟随壁纸：改 `GlassBackdrop.cs` 的 `Capture()`，调用 `CaptureFromScreen()` 即可（截屏逻辑已保留并调好参数）
-- **深色主题**：深青玻璃 `#172A30`（90% 不透明）+ 青蓝强调色 `#4FC3D9`
-- **磁贴动效**：
-  - 悬停：放大 1.25 倍 + 上浮 4px（160ms EaseOut）
-  - 点击：弹跳 6px（350ms，上去 EaseOut / 回来 EaseIn）
-  - 拖动：浮层放大 1.08 + 阴影 18px，其他磁贴 200ms 平滑让位
+**右键四叶草 → 设置 ▸ → 外观…** 打开外观窗口，所有参数可视化调整，**拖动即时预览，松手才写盘**。
 
+#### 六款预设
+
+| 预设 | 浓度 | 模糊 | 染色 | 强度 | 亮度 | 强调色 | 主题 | 视觉特征 |
+|---|---|---|---|---|---|---|---|---|
+| **自定义** | *（保留你当前的值）* | — | — | — | — | — | 不改 | 手动调参后的状态 |
+| **经典毛玻璃** | 80 | 10 | 空（用强调色）| 10 | 0 | 空 | 不改 | 柔和半透明，**与改动前的默认观感一致** |
+| **磨砂玻璃** | 78 | 25 | `#DCE4E8` | 22 | +6 | 空 | 不改 | 发白发雾、强模糊 |
+| **深色玻璃** | 92 | 12 | `#172A30` | 45 | -8 | `#4FC3D9` | **深色** | 深青厚重 |
+| **浅色玻璃** | 65 | 8 | `#FFFFFF` | 30 | +18 | `#388C48` | **浅色** | 通透亮白 |
+| **液态玻璃** | 45 | 3 | `#7FA8B8` | 26 | -18 | 空 | 不改 | 冷调清透 |
+
+实测差异（912×632 面板截图，4px 步长采样全图平均 RGB）：
+
+| 预设 | Avg R/G/B | 亮度 |
+|---|---|---|
+| 经典毛玻璃 | 84 / 106 / 107 | 100 |
+| 磨砂玻璃 | 112 / 128 / 133 | 124 |
+| 深色玻璃 | 68 / 86 / 93 | 82 |
+| 浅色玻璃 | 129 / 142 / 146 | 139 |
+| 液态玻璃 | 98 / 119 / 128 | 114 |
+
+**10 对两两差异全部 ≥ 20**（最小 28），切换时肉眼可辨。
+
+#### 可调参数
+
+| 控件 | 键 | 范围 | 含义 |
+|---|---|---|---|
+| **浓度** | `glassOpacity` | 0-100 | 面板底色盖住壁纸的程度。**0 = 关闭玻璃**（纯色），越大越透出壁纸 |
+| **模糊** | `glassBlur` | 0-30 | 底图模糊半径。固定图模式下差异较小，跟随桌面模式更明显 |
+| **染色强度** | `glassTintStrength` | 0-100 | **染色层**的颜色浓度 |
+| **亮度** | `glassBrightness` | -50 ~ +50 | 正值提亮、负值压暗（作用在模糊后的底图上）|
+| **染色** | `glassTint` | `#RRGGBB` 或空 | 空 = 用当前强调色 |
+| **强调色** | `glassAccent` | `#RRGGBB` 或空 | 空 = 用主题默认强调色 |
+| **背景模式** | `glassMode` | `fixed` / `screen` | 固定青灰图 / 跟随桌面壁纸（截屏 + 模糊）|
+
+> **「浓度」与「染色强度」不是一回事**：
+> · **浓度** 管「多少面板色盖在壁纸上」→ 影响**透出多少**
+> · **染色强度** 管「染色层多重」→ 影响**颜色多浓**
+>
+> 高浓度 + 低染色 = 不透明但无色；低浓度 + 高染色 = 很透但强色调（像彩色玻璃）。
+
+#### 状态规则
+
+| 操作 | 行为 |
+|---|---|
+| 点预设 | 一次性应用整组参数；`深色玻璃` / `浅色玻璃` 会顺带切主题，其余预设**不动主题** |
+| 点「自定义」 | **只改预设名，不动任何参数**（保留你当前的值）|
+| 手动拖滑块 / 选颜色 | 预设自动变成「自定义」，**保留修改后的效果** |
+| 「恢复默认」 | 回到当前预设的初始值；当前是自定义时回退「经典毛玻璃」；**不改主题** |
+
+#### 渲染管线（五层叠加）
+
+```
+outerLayer（圆角裁剪）
+  └ Grid
+      ├ innerLayer    底图 + BlurEffect（玻璃的"透"）
+      ├ brightLayer   半透明白/黑（亮度 ±50）
+      ├ tintLayer     半透明染色（颜色 + 强度）
+      ├ grainLayer    64×64 噪点平铺（2.5%，固定不可调）
+      └ highlightLayer 1px 内边缘高光（30%，固定不可调）
+```
+
+#### 性能
+
+| 阶段 | 做什么 | 耗时 |
+|---|---|---|
+| 拖动滑块 | 120ms 防抖 → 只重跑合成（`Attach`），**不重新截屏** | 几毫秒 |
+| 松手 | 写盘一次 + 全尺寸重算 | ~50ms |
+| 启动 / 显示面板 | `RefreshGlassSoon` 延迟截屏 + 合成 | 50-150ms |
+
+**关键**：截屏结果缓存在 `glassBackdrop.cached` 里，外观参数只影响合成阶段 —— 所以拖滑块不会反复截屏。
+
+#### 已知视觉限制
+
+| 限制 | 原因 |
+|---|---|
+| **磨砂玻璃不能靠噪点做** | `GrainStrength = 0.025` 写死不可调（不在可调键里），最大影响 2.5%（约 6/255）→ 靠**加大 blur + 白染色**近似 |
+| **液态玻璃没有真正的折射** | WPF 无透镜/折射能力 → 只能靠**低浓度 + 低模糊 + 冷色染色**做"清透"感 |
+| **固定图模式下模糊差异不明显** | 固定图本身就是柔和渐变，再模糊也看不出边界 → 预设差异靠**染色 + 亮度**实现 |
 ### 右键四叶草按钮的菜单
 
 | 菜单项 | 说明 |
@@ -115,6 +187,8 @@
 | **允许隐藏系统任务栏** | 勾选项，默认开。关掉会立即恢复任务栏，并禁用下面一项 |
 | 隐藏系统任务栏 | 勾选项，默认关。勾上后整条系统任务栏隐藏，左下角只留「开始」+ 四叶草 |
 | **隐藏用不到的** | 子菜单：一键隐藏整类（如「系统工具」「工具/命令行」共 60+ 个从没用过的条目）、查看隐藏的项目、取消隐藏全部。见下方「减少噪音」 |
+| **设置 ▸ 外观…** | 打开外观窗口：毛玻璃预设、浓度/模糊/染色/亮度滑块、颜色选择、背景模式。见下方「外观（毛玻璃）」 |
+| 设置 ▸ 主题 | 浅色 / 深色 / 跟随系统 |
 | 开机自启 | 勾选项 |
 | 退出 | 退出前会自动还原系统状态并清除运行标记 |
 
@@ -141,41 +215,45 @@
 | `hideTaskbar` | `false` | 隐藏系统任务栏（当前状态） |
 | `taskbarHiding` | `true` | 是否**允许**隐藏系统任务栏这个功能 |
 | `miniTaskbar` | `true` | 迷你任务栏 |
-| `desktopAutoClean` | **`false`** | 自动移走桌面快捷方式（本轮从 `true` 改为 `false`） |
-| `desktopAutoCleanNoticeShown` | `false` | 是否已展示过首次开启确认（展示过就不再弹） |
+| `desktopAutoClean` | **`false`** | 自动移走桌面快捷方式 |
+| `desktopAutoCleanNoticeShown` | `false` | 是否已展示过首次开启确认 |
 | `hoverReveal` | `true` | 悬停唤出（全屏时鼠标移到按钮位置临时显示） |
 | `fullscreenDetect` | `true` | 全屏检测（全屏时自动隐藏悬浮按钮） |
 | `safeMode` | `false` | 强制安全模式 |
-| `hiddenCategories` | `["系统工具"]` | 隐藏的分类 |
-| `navCollapsed` | `false` | 侧栏是否收起（点收起按钮后自动记住） |
-| `theme` | `"system"` | 主题：`light` / `dark` / `system`（跟随 Windows）。右键四叶草 →「主题」也能切 |
+| `hiddenCategories` | `[]` | 隐藏的分类 |
+| `navCollapsed` | `false` | 侧栏是否收起 |
+| `theme` | `"system"` | 主题：`light` / `dark` / `system` |
 | `glassOpacity` | `0` | 毛玻璃浓度 0-100（0 = 关闭） |
-| `glassMode` | `"fixed"` | 背景模式：`fixed`（固定青灰图）/ `screen`（跟随桌面壁纸） |
-| `wallpaperFolder` | `""` | 壁纸文件夹（「壁纸」页扫描它） |
-| `accentFromWallpaper` | `true` | 强调色是否跟随壁纸主色 |
-| `accentOverride` | `""` | 自定义强调色 `#RRGGBB`（空 = 用壁纸主色或主题默认） |
-| `diskSearchEnabled` | `false` | **磁盘文件搜索**（默认关，只搜可启动的程序） |
+| `glassMode` | `"fixed"` | 背景模式：`fixed` / `screen` |
+| `glassPreset` | `"custom"` | 预设名：`custom` / `classic` / `frosted` / `dark` / `light` / `liquid` |
+| `glassBlur` | `10.0` | 模糊半径 0-30 |
+| `glassTint` | `""` | 染色色 `#RRGGBB`（空 = 用强调色） |
+| `glassTintStrength` | `10` | 染色强度 0-100 |
+| `glassBrightness` | `0` | 亮度 -50 ~ +50 |
+| `glassAccent` | `""` | 强调色 `#RRGGBB`（空 = 主题默认） |
 
-> **共 17 个键**，按用途分四组：
+> **共 19 个键**，按用途分四组：
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
 > | **功能开关** | `taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode` | 6 |
-> | **状态与标记** | `hideTaskbar`（当前是否隐藏）/ `desktopAutoCleanNoticeShown`（首次确认标记） | 2 |
-> | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `wallpaperFolder` / `accentFromWallpaper` / `accentOverride` | 7 |
-> | **数据与搜索** | `hiddenCategories`（隐藏的分类）/ `diskSearchEnabled`（磁盘文件搜索） | 2 |
+> | **状态与标记** | `hideTaskbar` / `desktopAutoCleanNoticeShown` | 2 |
+> | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` | 10 |
+> | **数据** | `hiddenCategories` | 1 |
 >
-> **界面入口**：`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect`
-> 都有右键菜单开关（右键四叶草）；`theme` / `glassOpacity` / `glassMode` 在「设置」子菜单里。
-> 剩下 `safeMode` / `hiddenCategories` / `diskSearchEnabled` / `accentFromWallpaper` / `accentOverride`
-> / `wallpaperFolder` 需要手改文件（`safeMode` 也可用 `--safe-mode` 强制，或在诊断里退出安全模式）。
+> **界面入口**：
+> - 右键四叶草直接有：`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `theme`
+> - **「设置 ▸ 外观…」窗口**：`glassOpacity` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `glassMode` / `glassPreset`
+> - 需要手改文件：`safeMode`（也可用 `--safe-mode`）/ `hiddenCategories`
 >
 > **出问题可以单独关掉对应功能，不用卸载。**
 >
 > **兼容性**：
-> - 老配置里如果显式写了 `"desktopAutoClean": true`，升级后**仍保持 `true`**，不会被新默认值覆盖；只有没写这一项的配置才采用新默认 `false`。
+> - 老配置里如果显式写了 `"desktopAutoClean": true`，升级后**仍保持 `true`**。
 > - 配置里**多出的未知字段会原样保留**，不会因为本程序不认识就丢掉。
-
+> - **非法值（越界 / 颜色格式错 / 类型错）一律回退默认并写 `config\error.log`**，不会崩溃。
+> - `glassOpacity` 映射：`alpha = 1.0 - (g/100)*0.50`，下限 **0.40**。80 → 0.60（与改动前一致），100 → 0.50。
+>   **注意：`glassOpacity > 80` 的旧配置观感会变透** —— 改动前 80 和 100 都是 0.60，滑块后半段无效。
 ## 应用来源与合并
 
 「全部」里的条目来自**三个独立数据源**，各自写入独立文件，读取时合并去重。
@@ -463,6 +541,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `Log.cs` | 日志抽象（core 只调它，实现由 ui 注入） |
 | `JsonIO.cs` | 原子写 + `.bak` 回退 + 每日备份 |
 | `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
+| `AppearancePresets.cs` | **毛玻璃预设集中定义**（6 款 × 7 参数）、`Apply` / `Find` / `MarkCustom` / `RestoreDefaults` / `DetectKey` |
 | `Catalog.cs` | 软件清单模型、分类规则、排序 |
 | `AppPaths.cs` | Shell 路径（`shell:AppsFolder\...`）识别与归一化：`IsShellPath` / `ExtractAumid` / `Normalize` |
 | `AppDedup.cs` | **跨来源去重合并**：真实路径优先 → 名称+发布者 → 名称+同 exe 名（三重证据）|
@@ -517,6 +596,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `TaskbarGeometry.cs` | 任务栏所在边/厚度、开始按钮定位 |
 | `TaskList.cs` | 枚举顶层窗口、切换/关闭 |
 | `IconCache.cs` | 图标内存 + 磁盘缓存、过期清理、**快捷方式去箭头**、**商店应用图标**（`IShellItemImageFactory`）|
+| `AppearanceDialog.cs` | **外观窗口**：预设按钮、参数滑块（拖动预览/松手写盘）、色板 + `#RRGGBB` 输入框、背景模式、恢复默认 |
 | `AppIcons.cs` | 图标获取（把 `ImageSource` 挡在 core 之外） |
 | `HiddenItemsDialog.cs` | 「查看隐藏的项目」对话框：列出被隐藏的应用，逐个恢复 |
 | `Ui.cs` | 配色（ARGB 色板、设计令牌 R/S、缓动函数）、字体、图片加载 |
@@ -854,6 +934,16 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 **触发重新评估的条件**：单个分类的应用数超过 ~300 个，或渲染耗时超过 300 ms。届时重写一版比改那份旧代码更快。
 
 
+### 毛玻璃外观
+
+| 限制 | 原因 | 影响 |
+|---|---|---|
+| **磨砂玻璃不能靠噪点做** | `GrainStrength = 0.025` 写死不可调（不在 6 个可调键里），最大影响 2.5%（约 6/255）| 靠**加大 blur + 白染色**近似，不是真正的磨砂颗粒 |
+| **液态玻璃没有真正的折射/透镜** | WPF 无透镜、折射、色散能力 | 只能靠**低浓度 + 低模糊 + 冷色染色**做"清透"感 |
+| **固定图模式下模糊差异不明显** | 固定图本身就是柔和渐变，再模糊也看不出边界 | 预设差异靠**染色 + 亮度**实现，不靠 blur |
+| **`glassOpacity > 80` 的旧配置观感会变透** | 下限从 0.60 改为 0.40（改动前 80 和 100 都是 0.60，滑块后半段无效）| 属于修正缺陷，但确实改变了这部分旧配置的外观 |
+| **拖动滑块时预览不重新截屏** | 只重跑合成（几毫秒），截屏结果复用缓存 | 拖动中若面板移动/换壁纸，预览图会短暂滞后，松手后修正 |
+
 ### 其他
 
 - **单实例**：重复双击 / 开机自启后再手动打开，只会通知已运行的实例弹出面板，不会出现第二个进程或第二个四叶草图标
@@ -904,25 +994,35 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**十九个套件，共 627 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**二十三个套件，共 966 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
 | `CatalogTest` | 76 | 分类规则、大小写、优先级、`ContainsName/Path`、`JsonIO` 往返、`.bak` 回退、每日备份与裁剪 |
-| `CategoryOverrideTest` | 30 | 分类覆盖表：优先级、重新加载后保持、路径大小写不敏感、**文件损坏时回退**、跳过空 key/value |
-| `CategoryRulesTest` | 61 | 外置规则表：三层优先级、四种匹配模式、长别名优先、**全角折叠**、中文子串、首次生成、坏行跳过、热加载 |
+| `CategoryOverrideTest` | 30 | 分类覆盖表：优先级、重新加载后保持、路径大小写不敏感、文件损坏回退 |
+| `CategoryRulesTest` | 61 | 外置规则表：三层优先级、四种匹配模式、全角折叠、中文子串、热加载 |
 | `CategoriesTest` | 63 | 重命名只改显示名、顺序只重排已存在分类、上移下移边界、坏文件回退 |
 | `PinyinTest` | 37 | 单字拼音、首字母、全拼、中英混合、边界值、真实应用名覆盖率、性能 |
-| `SettingsTest` | 61 | 全部键的默认值、老配置显式值不被覆盖、首次确认标记、未知字段保留、损坏 JSON 回退、安全模式生效值 |
+| `SettingsTest` | 59 | 19 个键的默认值、老配置显式值不被覆盖、未知字段保留、损坏 JSON 回退、已删键原样保留 |
 | `WatcherTest` | 5 | 事件风暴下监听链路、Error 处理器已挂、`Dispose` 后无泄漏回调 |
 
-**新增来源测试**：
+**应用来源测试**：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `DedupTest` | 40 | 去重：路径合并、名称+发布者合并、**同名不同程序不合并**、商店应用独立、空值容错、**结果确定性**、注册表信息补充；**lnk 解析**：解析后路径匹配、**原始路径不被修改**、同名但 exe 名不同不合并、解析失败保留条目、缓存复用 |
+| `DedupTest` | 79 | 去重：路径合并、名称+发布者、同名不同程序不合并、**shell:AppsFolder 分两类**（真商店/传统软件）、lnk 解析、**卸载入口判定**、**安装包路径排除**、**同来源多入口不合并** |
+| `MigrationTest` | 58 | 分类隐藏 → 逐条隐藏的一次性迁移：幂等、不覆盖、读不出时不写标记、标记写入策略 |
+| `IconTest` | 21 | 图标：普通 exe、**lnk 左下角无箭头**、透明通道、缓存键版本化、商店应用图标 |
+| `GlassBackdropTest` | 21 | 毛玻璃：`glassMode` 映射、`FollowWallpaper` 开关、截屏路径不抛异常、设置项默认值与往返 |
+
+**外观参数测试**：
+
+| 套件 | 断言数 | 覆盖 |
+|---|---|---|
+| `AppearanceTest` | 50 | **每个参数「真的改变输出」**：亮度 → 平均亮度单调变化；染色 → 采样点颜色偏移；模糊 → 相邻像素差异减小；`glassAccent` → `Ui.Accent` 真变色。另含默认值、越界/非法颜色/损坏回退、**三条路径都注入参数**的回归 |
+| `AppearancePresetTest` | 162 | 6 个预设的参数映射、切换生效、custom 模式、保存重载、恢复默认、旧配置兼容、非法 preset 回退、大小写、**10 对预设两两差异 ≥2 维度**、`glassOpacity` 边界 |
 
 **集成测试**（链接完整源码，真建窗口 / 真发消息 / 真调 API）：
 
@@ -930,20 +1030,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 |---|---|---|
 | `CrashGuardTest` | 45 | 崩溃计数、2 分钟窗口边界、安全模式阈值、时钟回拨防护；运行标记法；重新隐藏配额 |
 | `DesktopRestoreTest` | 21 | 重名不覆盖、多轮还原互不覆盖、文件被占用时失败不重试、只处理 `.lnk` |
-| `OpenFolderTest` | 25 | 「打开文件所在位置」：存在的文件走 `/select`、文件没了退回目录、`.lnk` 解析真实目标、无效 `.lnk` 退回自身、**商店应用路径给专门提示**、null/空串安全 |
+| `OpenFolderTest` | 33 | 「打开文件所在位置」：`/select`、退回目录、`.lnk` 解析、**商店应用专门提示**、**搜索结果右键菜单对商店应用的处理** |
 | `HiddenAppsTest` | 47 | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
-| `ScanChainTest` | 15 | 扫描链：便携条目不会被每轮扫描抹掉；**商店应用不被死链清理误删** |
-| `RunningAppsTest` | 24 | 运行状态判定：**必须精确路径匹配**、缓存不解析 lnk、预热不阻塞、**商店应用不显示圆点** |
-| `IconTest` | 21 | 图标：普通 exe、**lnk 左下角无箭头**、透明通道保留、**缓存键带版本前缀**、商店应用图标、缓存失效与重新生成 |
-| `ActiveRowTest` | 14 | 任务栏行高亮判定：只有一行亮、前台句柄为 0 时不高亮、切换后翻转 |
-| `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 确认成为前台窗口 → 断言 `IsFullscreen()` = true |
-| `TaskbarCreatedTest` | 6 | 消息号注册唯一性、与 `Native` 一致、子进程监听 → 父进程投递 → 确认收到 |
+| `ScanChainTest` | 15 | 扫描链：便携条目不被抹掉、**商店应用不被死链清理误删** |
+| `RunningAppsTest` | 24 | 运行状态：精确路径匹配、缓存不解析 lnk、**商店应用不显示圆点** |
+| `ActiveRowTest` | 14 | 任务栏行高亮：只有一行亮、前台句柄为 0 时不高亮、切换后翻转 |
+| `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 断言 `IsFullscreen()` |
+| `TaskbarCreatedTest` | 6 | 消息号注册唯一性、子进程监听 → 父进程投递 → 确认收到 |
 
 **验收测试**（真实创建窗口，验证"界面确实画出来了"）：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `AcceptanceTest` | 31 | **真实创建 `PanelWindow`** 并 Show → 控件树可遍历、**分类栏恰好两个标签**、磁贴已渲染、搜索框可输入、图标悬停放大已接线、设计令牌合规、缓动已接线、**「全部」按逐字拼音排序**、**「常用」为空时自动切到「全部」**、**已消失分类回退** |
+| `AcceptanceTest` | 34 | **真实创建 `PanelWindow`** → 控件树可遍历、**分类栏恰好两个标签**、磁贴已渲染、搜索框可输入、**「全部」按逐字拼音排序**、**「常用」为空自动切「全部」**、**已消失分类回退**、**外观窗口能创建并关闭**、**外观窗口控件齐全**、**切换预设后 settings 一致** |
 
 `AcceptanceTest` 借鉴了两个做法（**只借鉴形态，不复制代码** —— 参考项目用的是与 MIT 不兼容的非商业许可）：
 
@@ -958,7 +1057,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：19 个套件、627 个断言全部通过（2026-10-29）**
+**最近一次运行结果：23 个套件、966 个断言全部通过（2026-10-29）**
 
 > **`FullscreenTest` 是环境相关的**：它需要真的创建一个全屏窗口来测判定逻辑。
 > 某些环境下窗口创建失败时会提前退出（5 → 3 PASS），但 `FAIL` 计数始终为 0、退出码 0，
@@ -1000,10 +1099,13 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 | B | **卡死后恢复重隐藏** | 承接 A，解除卡死后观察 | 任务栏可以再次隐藏，但同一次运行最多自动重隐藏 1 次 |
 | C | **真实强杀不算/算异常退出** | 1. 正常启动并稳定 6 分钟（清计数）<br>2. 任务管理器强杀主进程<br>3. 重新启动，看 `crash-guard.json` | 强杀后 `running` 残留 → 重启时补记 1 次异常退出 |
 | D | **首次勾选确认框** | 右键四叶草 → 勾选「自动移走桌面快捷方式」 | 弹说明框；点取消则不勾选、下次还会弹；点确定后 `desktopAutoCleanNoticeShown` 变 `true`，以后不再弹 |
+| E | **外观窗口拖动实时预览** | 1. 右键四叶草 → 设置 ▸ → 外观…<br>2. 拖「浓度」滑块，不松手<br>3. 观察面板背景 | 面板背景**跟着变**（不用松手）；松手后 `settings.json` 才被写入 |
+| F | **6 个预设是否一眼可辨** | 在外观窗口里逐个点预设 | 每次切换背景色调/明暗**明显不同**；「经典毛玻璃」= 改动前的观感 |
 
 ## 自定义
 
-- **改分类规则**：编辑 `src\core\Catalog.cs` 的 `GuessCategory`（按名称关键字）和 `src\core\NativeScanner.cs` 的 `GuessCategory`（按开始菜单目录），重新编译后右键四叶草 → 重新扫描应用。
+- **改外观参数**：优先用「设置 ▸ 外观…」窗口；也可以直接编辑 `config\settings.json` 的 6 个 `glass*` 键（改完重启程序）。
+- ~~改分类规则~~：分类体系已移除（分类栏只剩「常用」「全部」）。`category-rules.tsv` / `category-overrides.json` 不再读取，但文件保留不删。
 - **手动加软件**：编辑 `config\manual-apps.json`，格式 `{ "apps":[{"name":"名称","path":"C:\\...\\app.exe","category":"其他"}] }`。
 - **换图标**：直接替换 `res\clover.ico`（编译用）和 `res\clover.png`（界面用），再运行 `build.ps1`。
 - **重新编译**：`powershell -NoProfile -ExecutionPolicy Bypass -File build.ps1`（自动生成 `src\core\Version.cs`，版本号取自根目录 `VERSION`，另写入构建时间）
