@@ -25,19 +25,10 @@ namespace Clover
     ///
     /// 目标 < 20 ms（实测这台机器约 8-15 ms）。
     ///
-    /// 只搜「可启动的程序」—— 磁盘文件搜索（原来的 Deep 阶段）已移除，
-    /// 因为用户打开启动面板通常是想启动程序，不是找文件；
-    /// 找文件用资源管理器更合适。
+    /// 只搜「可启动的程序」：用户打开启动面板通常是想启动程序，不是找文件。
     /// </summary>
     static class SystemSearch
     {
-        /// <summary>总结果上限。</summary>
-        const int MaxTotal = 120;
-
-        /// <summary>单个根目录上限。</summary>
-        const int MaxPerRoot = 80;
-
-
         /// <summary>Instant 阶段的结果上限（开始菜单 + 注册表）。</summary>
         const int MaxInstant = 150;
 
@@ -288,21 +279,6 @@ namespace Clover
         // ════════════════════════════════════════════════════════════
 
 
-
-
-        static string GetDownloads()
-        {
-            try
-            {
-                // .NET Framework 没有 SpecialFolder.Downloads，用已知路径拼
-                string p = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-                return p;
-            }
-            catch { return null; }
-        }
-
-        // ════════════════════════════════════════════════════════════
         //  排序
         // ════════════════════════════════════════════════════════════
 

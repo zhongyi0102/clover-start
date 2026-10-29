@@ -40,7 +40,6 @@ namespace Clover
             Check(s1.Theme == "system", "默认主题跟随系统");
             Check(Settings.SafeModeActive == false, "默认不在安全模式");
 
-            // 本阶段新增：磁盘搜索默认关闭（只显示可启动的程序）
             // 本阶段新增的其它字段默认值
             Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
 

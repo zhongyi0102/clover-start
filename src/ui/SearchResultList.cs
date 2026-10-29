@@ -19,9 +19,7 @@ namespace Clover
     /// 不是 AppItem —— 磁贴的启动/拖动/右键那套完全不适用。
     /// 所以用独立的列表，只做"点击打开"。
     ///
-    /// 两级加载（参考 GlassBoard）：
-    ///   1. Instant：同步、&lt; 40ms，立刻显示
-    ///   （磁盘文件搜索已移除，只保留 Instant 一级）
+    /// 单级加载：Instant 同步、&lt; 40ms，立刻显示。
     ///
     /// 取消机制：每次输入新词就取消上一次的搜索，
     /// 避免连续打字累积成多个并发搜索。
@@ -29,9 +27,6 @@ namespace Clover
     class SearchResultList
     {
         readonly StackPanel host;
-
-        /// <summary>当前这次搜索的取消源。</summary>
-    
 
         /// <summary>已显示的结果（用于去重与计数）。</summary>
         readonly HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -216,18 +211,6 @@ namespace Clover
             catch { }
         }
 
-        void AddStatusLine(string text)
-        {
-            try
-            {
-                TextBlock t = Ui.T(text, 12, Ui.Sub);
-                t.Margin = new Thickness(Ui.S.Sm, Ui.S.Sm, 0, 0);
-                host.Children.Add(t);
-            }
-            catch { }
-        }
-
-        /// <summary>
         /// 一行搜索结果：图标 + 名字 + 路径。
         ///
         /// 图标列**固定 30px 宽、内容居中**：

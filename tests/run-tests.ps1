@@ -206,7 +206,10 @@ Invoke-Suite 'AppearancePresetTest' ($baseRefs + $webRef) `
 Invoke-Suite 'ContrastTest' $baseRefs `
     (@((Join-Path $coreDir 'ContrastGuard.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'ContrastTest.cs')))
   Invoke-Suite 'IconTest' $wpfRefs `
-      ($allSrc + @((Join-Path $testDir 'IconTest.cs')))
+    ($allSrc + @((Join-Path $testDir 'IconTest.cs')))
+# 系统级搜索：Instant 行为回归 + 确认磁盘搜索逻辑已彻底移除
+Invoke-Suite 'SearchTest' $baseRefs `
+    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SearchTest.cs')))
 Invoke-Suite 'FullscreenTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'FullscreenTest.cs')))
 
