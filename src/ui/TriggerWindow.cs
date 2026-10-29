@@ -615,27 +615,32 @@ namespace Clover
 
             settingsMenu.Items.Add(new Separator());
 
-            // ---- 毛玻璃背景 ----
-            // 放在设置里而不是顶层：它是"想要就开"的外观增强，不是日常操作。
-            MenuItem glassItem = new MenuItem();
-            glassItem.Header = "毛玻璃背景";
-            glassItem.IsCheckable = true;
-            glassItem.IsChecked = settings.GlassOpacity > 0;
-            glassItem.ToolTip = "截取桌面背景并模糊，垫在面板下面（透出壁纸的颜色）。"
-                + "关闭时是纯色背景。软件渲染的机器上会自动禁用";
-            glassItem.IsEnabled = GlassBackdrop.Supported;
+            // ---- 外观…（取代原来的「毛玻璃背景」开关）----
+            //
+            // 为什么不保留一个「毛玻璃背景」勾选项：
+            //   · 浓度 0 就等于关闭，那个勾选项和「浓度」滑块重复
+            //   · 用户要调的不止开/关，还有模糊/染色/亮度/颜色/背景模式
+            // 统一收进外观窗口，一个入口管全部。
+            MenuItem appearanceItem = new MenuItem();
+            appearanceItem.Header = "外观…";
+            appearanceItem.ToolTip = "毛玻璃预设、浓度、模糊、染色、亮度、强调色、背景模式";
+            appearanceItem.IsEnabled = GlassBackdrop.Supported;
             if (!GlassBackdrop.Supported)
             {
-                glassItem.ToolTip = "当前为软件渲染（无硬件加速），毛玻璃会自动拖慢界面，已禁用。";
+                appearanceItem.ToolTip = "当前为软件渲染（无硬件加速），毛玻璃会自动拖慢界面，已禁用。";
             }
-            glassItem.Click += delegate
+            appearanceItem.Click += delegate
             {
-                settings.GlassOpacity = settings.GlassOpacity > 0 ? 0 : 80;
-                settings.Save();
-                if (panel != null) panel.ApplyGlassSetting();
-                Ui.Log("毛玻璃背景 -> " + settings.GlassOpacity + "%");
+                try
+                {
+                    AppearanceDialog.Show(this, settings, panel, null);
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.Warn("打开外观窗口失败: " + ex.Message);
+                }
             };
-            settingsMenu.Items.Add(glassItem);
+            settingsMenu.Items.Add(appearanceItem);
 
             // 设置子菜单到此组装完毕，挂到顶层
             cm.Items.Add(settingsMenu);

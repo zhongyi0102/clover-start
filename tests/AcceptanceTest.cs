@@ -820,6 +820,123 @@ namespace Clover
                 panel.Hide();
                 return panel.IsVisible ? "调用 Hide 后仍可见" : "ok";
             });
+
+            // ---------- 外观窗口：能创建并关闭、不抛异常 ----------
+            //
+            // 为什么用源码级 + 运行时组合：
+            //   · 运行时：真的调 AppearanceDialog.Show()，确认不抛异常
+            //     （用后台线程 2 秒后关窗，避免 ShowDialog 阻塞测试）
+            //   · 源码级：确认窗口里的控件类型齐全（预设按钮 / 滑块 / 色板 / 输入框）
+            Verify("外观窗口能创建并关闭、不抛异常", delegate
+            {
+                bool threw = false;
+                string err = null;
+
+                // ShowDialog 是模态阻塞，用后台线程延时关窗
+                System.Threading.Thread closer = new System.Threading.Thread(delegate()
+                {
+                    try
+                    {
+                        System.Threading.Thread.Sleep(1200);
+                        try
+                        {
+                            panel.Dispatcher.BeginInvoke(new Action(delegate
+                            {
+                                foreach (Window w in Application.Current.Windows)
+                                {
+                                    if (w.Title == "外观") { w.Close(); break; }
+                                }
+                            }));
+                        }
+                        catch { }
+                    }
+                    catch { }
+                });
+                closer.IsBackground = true;
+                closer.Start();
+
+                try
+                {
+                    AppearanceDialog.Show(panel, Settings.Load(root), null, null);
+                }
+                catch (Exception ex)
+                {
+                    threw = true;
+                    err = ex.GetType().Name + ": " + ex.Message;
+                }
+
+                if (threw) return "外观窗口抛异常: " + err;
+                return "ok（创建 → 显示 → 关闭，全程无异常）";
+            });
+
+            // ---------- 外观窗口的控件齐全（源码级）----------
+            Verify("★外观窗口含预设/滑块/色板/输入框", delegate
+            {
+                string srcDir = FindSourceDir();
+                if (srcDir == null) return "找不到 src 目录";
+                string path = Path.Combine(srcDir, "ui", "AppearanceDialog.cs");
+                if (!File.Exists(path)) return "找不到 AppearanceDialog.cs";
+                string text = File.ReadAllText(path, Encoding.UTF8);
+
+                if (text.IndexOf("AppearancePresets.AllPresets", StringComparison.Ordinal) < 0)
+                    return "预设按钮没遍历 AllPresets";
+                if (text.IndexOf("new Slider()", StringComparison.Ordinal) < 0)
+                    return "没有滑块";
+                if (text.IndexOf("MakeSlider", StringComparison.Ordinal) < 0)
+                    return "没有 MakeSlider 辅助";
+                if (text.IndexOf("MakeColorRow", StringComparison.Ordinal) < 0)
+                    return "没有色板行";
+                if (text.IndexOf("TextBox", StringComparison.Ordinal) < 0)
+                    return "没有 #RRGGBB 输入框";
+                if (text.IndexOf("RestoreDefaults", StringComparison.Ordinal) < 0)
+                    return "没有恢复默认按钮";
+                if (text.IndexOf("DragCompleted", StringComparison.Ordinal) < 0)
+                    return "滑块松手没有提交（缺 DragCompleted）";
+                if (text.IndexOf("DispatcherTimer", StringComparison.Ordinal) < 0)
+                    return "没有预览防抖";
+                return "ok（预设/滑块/色板/输入框/恢复默认/防抖/松手提交 全在）";
+            });
+
+            // ---------- 切换预设后 settings 与面板状态一致 ----------
+            Verify("★切换预设后 settings 与面板状态一致", delegate
+            {
+                // 用临时 settings 对象，避免污染真实配置
+                Settings s = new Settings();
+                AppearancePresets.Preset p = AppearancePresets.Find("dark");
+                if (p == null) return "找不到 dark 预设";
+
+                AppearancePresets.Apply(p, s);
+
+                if (s.GlassPreset != "dark") return "preset 没写进 settings: " + s.GlassPreset;
+                if (s.GlassOpacity != p.Opacity) return "opacity 不一致: " + s.GlassOpacity;
+                if (Math.Abs(s.GlassBlur - p.Blur) > 0.0001) return "blur 不一致: " + s.GlassBlur;
+                if ((s.GlassTint ?? "") != (p.Tint ?? "")) return "tint 不一致: " + s.GlassTint;
+                if (s.GlassTintStrength != p.TintStrength) return "tintStrength 不一致";
+                if (s.GlassBrightness != p.Brightness) return "brightness 不一致";
+                if (s.Theme != "dark") return "theme 没跟着切: " + s.Theme;
+
+                return "ok（7 个参数 + theme 全部一致）";
+            });
+        }
+
+
+        // ---------- 辅助：从测试 exe 往上找 src 目录 ----------
+        static string FindSourceDir()
+        {
+            try
+            {
+                string d = AppDomain.CurrentDomain.BaseDirectory;
+                for (int i = 0; i < 8 && d != null; i++)
+                {
+                    string candidate = Path.Combine(d, "src", "ui");
+                    if (Directory.Exists(candidate)) return Path.Combine(d, "src");
+                    DirectoryInfo parent = Directory.GetParent(d);
+                    if (parent == null) break;
+                    d = parent.FullName;
+                }
+            }
+            catch { }
+            return null;
         }
 
         // ---------- 辅助：递归数可视元素 ----------

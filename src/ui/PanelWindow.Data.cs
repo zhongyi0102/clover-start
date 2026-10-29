@@ -172,6 +172,50 @@ namespace Clover
         /// 这些参数只影响 Attach 阶段的合成，**不需要重新截屏**。
         /// 数值越界由 Settings 读取时已回退默认，这里直接赋值。
         /// </summary>
+        /// <summary>
+        /// 外观窗口拖动滑块时的**轻量预览**。
+        ///
+        /// 与 ApplyGlassSetting 的区别：
+        ///   · 只重跑 Attach（合成），**不重新截屏**（cached 原图还在）
+        ///   · 不写盘（写盘由调用方在松手时做）
+        ///   · 异常只写日志，绝不抛给界面
+        ///
+        /// 为什么这样够快：外观参数（blur/tint/brightness）只影响 Attach 阶段，
+        /// 而截屏结果缓存在 glassBackdrop.cached 里。所以拖动滑块时
+        /// 每次只花几毫秒重新合成，不是 50-150ms 重新截屏。
+        /// </summary>
+        public void ApplyGlassPreview()
+        {
+            try
+            {
+                if (glassBackdrop == null || settings == null) return;
+
+                InjectGlassParams();
+
+                // 浓度 0 → 关掉玻璃（与正式路径一致）
+                if (settings.GlassOpacity <= 0)
+                {
+                    glassBackdrop.Clear();
+                    glassBackdrop.OpacityPercent = 0;
+                    ApplyGlassTint();
+                    return;
+                }
+
+                glassBackdrop.OpacityPercent = settings.GlassOpacity;
+                glassBackdrop.CornerRadius = Ui.R.Lg;
+                ApplyGlassTint();
+
+                // 关键：直接 Refresh 会走「重截」分支吗？
+                // 不会 —— Refresh 里先比 cacheKey，条件没变就只调 Attach。
+                // 所以这里调 Refresh 是安全的，开销只有合成那几毫秒。
+                if (IsVisible) glassBackdrop.Refresh();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "毛玻璃预览");
+            }
+        }
+
         void InjectGlassParams()
         {
             try
