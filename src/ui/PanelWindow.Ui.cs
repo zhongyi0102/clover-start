@@ -455,6 +455,8 @@ namespace Clover
 
                 // 毛玻璃也要重截：缓存键里含主题（深浅色影响图片透明度），
                 // 不重截的话切主题后背景还是旧亮度，看起来像"没生效"。
+                // 切主题后强调色变了（染色默认用强调色），外观参数要重新注入
+                InjectGlassParams();
                 ApplyGlassTint();
                 if (glassBackdrop != null && settings != null && settings.GlassOpacity > 0)
                 {

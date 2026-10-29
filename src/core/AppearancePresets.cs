@@ -91,9 +91,9 @@ namespace Clover
             {
                 Key = "frosted",
                 DisplayName = "磨砂玻璃",
-                Description = "模糊明显、略提亮，视觉更柔和（噪点强度固定，靠 blur 近似磨砂感）",
-                Opacity = 75, Blur = 25.0, Tint = "", TintStrength = 15,
-                Brightness = 5, Accent = "", Theme = "keep"
+                Description = "模糊明显、发白发雾，像磨砂玻璃（噪点强度固定，靠 blur + 白染色近似）",
+                Opacity = 78, Blur = 25.0, Tint = "#DCE4E8", TintStrength = 22,
+                Brightness = 6, Accent = "", Theme = "keep"
             },
             new Preset
             {
@@ -116,8 +116,13 @@ namespace Clover
                 Key = "liquid",
                 DisplayName = "液态玻璃",
                 Description = "极通透、几乎不模糊，像水滴（真正的折射效果 WPF 做不了，这是近似）",
-                Opacity = 45, Blur = 4.0, Tint = "", TintStrength = 6,
-                Brightness = 8, Accent = "", Theme = "keep"
+                // 液态感靠「很透 + 很清 + 略暗」三者叠加：
+                //   · opacity 45（很透）
+                //   · blur 3（几乎不模糊，边界清楚）
+                //   · 冷色淡染色（像水滴的折射色偏）
+                //   · brightness -12（压暗，与 classic 的 0 拉开距离）
+                Opacity = 45, Blur = 3.0, Tint = "#7FA8B8", TintStrength = 26,
+                Brightness = -18, Accent = "", Theme = "keep"
             }
         };
 

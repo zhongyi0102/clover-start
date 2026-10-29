@@ -146,7 +146,8 @@ namespace Clover
             Check(s.GlassPreset == "custom", "★改参数后 preset 变 custom", s.GlassPreset);
             Check(Math.Abs(s.GlassBlur - 18.0) < 0.0001, "★修改后的值被保留（不被覆盖）",
                 Convert.ToString(s.GlassBlur));
-            Check(s.GlassOpacity == 75, "其他参数保持磨砂玻璃的值（opacity=75）",
+            AppearancePresets.Preset fp = AppearancePresets.Find("frosted");
+            Check(s.GlassOpacity == fp.Opacity, "其他参数保持磨砂玻璃的值（opacity=" + fp.Opacity + "）",
                 Convert.ToString(s.GlassOpacity));
 
             // 已经是 custom 时再调 MarkCustom 不报错
@@ -169,11 +170,14 @@ namespace Clover
 
                 Settings s2 = Settings.Load(root);
                 Check(s2.GlassPreset == "liquid", "★重载后 preset 保持 liquid", s2.GlassPreset);
-                Check(s2.GlassOpacity == 45, "重载后 opacity=45", Convert.ToString(s2.GlassOpacity));
-                Check(Math.Abs(s2.GlassBlur - 4.0) < 0.0001, "重载后 blur=4",
+                AppearancePresets.Preset lp = AppearancePresets.Find("liquid");
+                Check(s2.GlassOpacity == lp.Opacity, "重载后 opacity=" + lp.Opacity,
+                    Convert.ToString(s2.GlassOpacity));
+                Check(Math.Abs(s2.GlassBlur - lp.Blur) < 0.0001, "重载后 blur=" + lp.Blur,
                     Convert.ToString(s2.GlassBlur));
-                Check(s2.GlassBrightness == 8, "重载后 brightness=8", Convert.ToString(s2.GlassBrightness));
-                Check(s2.GlassTintStrength == 6, "重载后 tintStrength=6");
+                Check(s2.GlassBrightness == lp.Brightness, "重载后 brightness=" + lp.Brightness,
+                    Convert.ToString(s2.GlassBrightness));
+                Check(s2.GlassTintStrength == lp.TintStrength, "重载后 tintStrength=" + lp.TintStrength);
             }
             finally { Clean(root); }
             Console.WriteLine();
@@ -194,9 +198,12 @@ namespace Clover
             AppearancePresets.Preset restored = AppearancePresets.RestoreDefaults(s);
             Check(restored != null && restored.Key == "frosted", "恢复到磨砂玻璃",
                 restored == null ? "null" : restored.Key);
-            Check(s.GlassOpacity == 75, "opacity 恢复为 75", Convert.ToString(s.GlassOpacity));
-            Check(Math.Abs(s.GlassBlur - 25.0) < 0.0001, "blur 恢复为 25");
-            Check(s.GlassBrightness == 5, "brightness 恢复为 5");
+            Check(s.GlassOpacity == restored.Opacity, "opacity 恢复为 " + restored.Opacity,
+                Convert.ToString(s.GlassOpacity));
+            Check(Math.Abs(s.GlassBlur - restored.Blur) < 0.0001, "blur 恢复为 " + restored.Blur,
+                Convert.ToString(s.GlassBlur));
+            Check(s.GlassBrightness == restored.Brightness, "brightness 恢复为 " + restored.Brightness,
+                Convert.ToString(s.GlassBrightness));
 
             // 5b. 当前是 custom → 回退到经典毛玻璃
             Settings s2 = new Settings();
@@ -205,7 +212,8 @@ namespace Clover
             AppearancePresets.Preset r2 = AppearancePresets.RestoreDefaults(s2);
             Check(r2 != null && r2.Key == "classic", "★custom 时回退到经典毛玻璃",
                 r2 == null ? "null" : r2.Key);
-            Check(s2.GlassOpacity == 80, "opacity = 经典毛玻璃的 80");
+            Check(s2.GlassOpacity == r2.Opacity, "opacity = 经典毛玻璃的 " + r2.Opacity,
+                Convert.ToString(s2.GlassOpacity));
 
             // 5c. 恢复默认不改 Theme
             Settings s3 = new Settings();

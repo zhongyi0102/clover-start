@@ -50,6 +50,7 @@ namespace Clover
             TestAccentApplied();
             TestAccentEmptyRestoresTheme();
             TestUnknownFieldsPreserved();
+            TestAllPathsInjectParams();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -289,6 +290,108 @@ namespace Clover
             // 清理状态，避免影响后续测试
             Ui.ApplyTheme(Ui.ThemeMode.Dark);
             Console.WriteLine();
+        }
+
+        // ---------- 9. 三条路径都注入外观参数（回归）----------
+        //
+        // 真实 bug：第 1 个提交只把参数注入放进 ApplyGlassSetting，
+        // 而它只被「毛玻璃背景」菜单开关调用。启动走 RefreshGlassSoon，
+        // 切主题走 ApplyTheme —— 两条路径都没注入，导致改 settings.json
+        // 后重启只有 glassOpacity 生效、blur/tint/brightness 全是默认值。
+        //
+        // 这里做源码级断言：确认三个方法体内都出现 InjectGlassParams()。
+        // 为什么不用运行时测试：需要真实窗口 + 截屏，无桌面会话跑不了。
+        static void TestAllPathsInjectParams()
+        {
+            Console.WriteLine("--- 9. 三条路径都注入外观参数 ---");
+
+            string srcDir = FindSourceDir();
+            if (srcDir == null)
+            {
+                Console.WriteLine("      跳过：找不到 src 目录");
+                Console.WriteLine();
+                return;
+            }
+
+            // RefreshGlassSoon（启动 / 显示面板 / 尺寸变化）
+            Check(MethodBodyContains(srcDir, "PanelWindow.cs", "void RefreshGlassSoon(int delayMs)", "InjectGlassParams()"),
+                "★RefreshGlassSoon 里注入参数（启动路径）");
+
+            // ApplyTheme（切主题）
+            Check(MethodBodyContains(srcDir, "PanelWindow.Ui.cs", "public void ApplyTheme()", "InjectGlassParams()"),
+                "★ApplyTheme 里注入参数（切主题路径）");
+
+            // ApplyGlassSetting（菜单开关）
+            Check(MethodBodyContains(srcDir, "PanelWindow.Data.cs", "public void ApplyGlassSetting()", "InjectGlassParams()"),
+                "★ApplyGlassSetting 里注入参数（菜单路径）");
+
+            // InjectGlassParams 本身存在且注入 4 个参数
+            Check(MethodBodyContains(srcDir, "PanelWindow.Data.cs", "void InjectGlassParams()", "BlurRadius"),
+                "InjectGlassParams 注入 BlurRadius");
+            Check(MethodBodyContains(srcDir, "PanelWindow.Data.cs", "void InjectGlassParams()", "TintStrength"),
+                "InjectGlassParams 注入 TintStrength");
+            Check(MethodBodyContains(srcDir, "PanelWindow.Data.cs", "void InjectGlassParams()", "Brightness"),
+                "InjectGlassParams 注入 Brightness");
+            Check(MethodBodyContains(srcDir, "PanelWindow.Data.cs", "void InjectGlassParams()", "TintColor"),
+                "InjectGlassParams 注入 TintColor");
+            Console.WriteLine();
+        }
+
+        /// <summary>从测试 exe 位置往上找 src 目录。</summary>
+        static string FindSourceDir()
+        {
+            try
+            {
+                string d = AppDomain.CurrentDomain.BaseDirectory;
+                for (int i = 0; i < 8 && d != null; i++)
+                {
+                    string candidate = Path.Combine(d, "src", "ui");
+                    if (Directory.Exists(candidate)) return Path.Combine(d, "src");
+                    DirectoryInfo parent = Directory.GetParent(d);
+                    if (parent == null) break;
+                    d = parent.FullName;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// 在源文件里找某个方法的方法体，判断是否包含某段文本。
+        ///
+        /// 用「大括号配平」定位方法体范围 —— 比正则可靠（能处理嵌套）。
+        /// </summary>
+        static bool MethodBodyContains(string srcDir, string file, string signature, string needle)
+        {
+            try
+            {
+                string path = Path.Combine(srcDir, "ui", file);
+                if (!File.Exists(path)) return false;
+                string text = File.ReadAllText(path, Encoding.UTF8);
+
+                int sig = text.IndexOf(signature, StringComparison.Ordinal);
+                if (sig < 0) return false;
+
+                int brace = text.IndexOf('{', sig);
+                if (brace < 0) return false;
+
+                int depth = 0;
+                int end = -1;
+                for (int i = brace; i < text.Length; i++)
+                {
+                    if (text[i] == '{') depth++;
+                    else if (text[i] == '}')
+                    {
+                        depth--;
+                        if (depth == 0) { end = i; break; }
+                    }
+                }
+                if (end < 0) return false;
+
+                string body = text.Substring(brace, end - brace + 1);
+                return body.IndexOf(needle, StringComparison.Ordinal) >= 0;
+            }
+            catch { return false; }
         }
 
         // ---------- 8. 未知字段保留 ----------

@@ -634,6 +634,8 @@ namespace Clover
                 if (glassBackdrop == null) return;
                 if (settings == null || settings.GlassOpacity <= 0) return;
 
+                // 外观参数必须在这里也注入 —— 否则启动后 blur/tint/brightness 全是默认值
+                InjectGlassParams();
                 glassBackdrop.OpacityPercent = settings.GlassOpacity;
                 glassBackdrop.CornerRadius = Ui.R.Lg;
                 ApplyGlassTint();

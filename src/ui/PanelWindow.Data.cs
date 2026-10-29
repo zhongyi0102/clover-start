@@ -157,21 +157,27 @@ namespace Clover
         /// 关闭时要**主动移除**已挂上的背景层并把底色改回不透明 ——
         /// 只改设置不管界面的话，用户会看到"勾掉了但还在"。
         /// </summary>
-        public void ApplyGlassSetting()
+        /// <summary>
+        /// 把 settings 里的外观参数注入 GlassBackdrop。
+        ///
+        /// **为什么必须抽成独立方法**：这三条路径都要注入，
+        /// 否则参数只在其中一条生效（第 1 个提交的真实 bug）：
+        ///   · ApplyGlassSetting  —— 用户点「毛玻璃背景」菜单开关
+        ///   · RefreshGlassSoon   —— 启动 / 显示面板 / 窗口尺寸变化
+        ///   · ApplyTheme         —— 切主题
+        ///
+        /// 之前只有 ApplyGlassSetting 注入，所以改 settings.json 后重启
+        /// 只有 glassOpacity 生效、blur/tint/brightness 全是默认值。
+        ///
+        /// 这些参数只影响 Attach 阶段的合成，**不需要重新截屏**。
+        /// 数值越界由 Settings 读取时已回退默认，这里直接赋值。
+        /// </summary>
+        void InjectGlassParams()
         {
             try
             {
-                if (glassBackdrop == null) return;
+                if (glassBackdrop == null || settings == null) return;
 
-                // 先同步背景模式（fixed / screen）—— 它决定 OpacityPercent 之外
-                // 的另一半行为：读固定图还是截屏。
-                glassBackdrop.FollowWallpaper = settings != null
-                    && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
-
-                // ---- 外观参数注入（第 1 个提交）----
-                //
-                // 这些参数只影响 Attach 阶段的合成，不需要重新截屏。
-                // 数值越界由 Settings 读取时已回退默认，这里直接赋值。
                 glassBackdrop.BlurRadius = settings.GlassBlur;
                 glassBackdrop.TintStrength = settings.GlassTintStrength / 100.0;
                 glassBackdrop.Brightness = settings.GlassBrightness;
@@ -187,6 +193,23 @@ namespace Clover
                 {
                     glassBackdrop.TintColor = null;   // 用 Ui.Accent
                 }
+            }
+            catch { }
+        }
+
+        public void ApplyGlassSetting()
+        {
+            try
+            {
+                if (glassBackdrop == null) return;
+
+                // 先同步背景模式（fixed / screen）—— 它决定 OpacityPercent 之外
+                // 的另一半行为：读固定图还是截屏。
+                glassBackdrop.FollowWallpaper = settings != null
+                    && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
+
+                // 外观参数注入（抽成独立方法，启动/切主题/改设置三条路径都调）
+                InjectGlassParams();
 
                 if (settings.GlassOpacity <= 0)
                 {
