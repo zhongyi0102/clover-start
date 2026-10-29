@@ -185,6 +185,10 @@ Invoke-Suite 'DesktopRestoreTest' $wpfRefs `
 Invoke-Suite 'OpenFolderTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'OpenFolderTest.cs')))
 
+# 毛玻璃背景：删壁纸页后 glassMode / accentFromWallpaper 仍工作
+Invoke-Suite 'GlassBackdropTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'GlassBackdropTest.cs')))
+
 
   # 图标缓存：快捷方式去箭头、透明通道、缓存键版本化、商店应用
   Invoke-Suite 'IconTest' $wpfRefs `

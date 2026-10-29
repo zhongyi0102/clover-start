@@ -143,36 +143,6 @@ namespace Clover
         public const string HiddenCategory = "\u0001hidden";
 
         /// <summary>
-        /// 「收藏夹」虚拟分类的标识。
-        ///
-        /// 与 HiddenCategory 一样用不可见字符开头，确保不会与真实分类名撞。
-        /// 内容不是 AppItem 而是 PinnedItem，所以渲染走单独分支。
-        /// </summary>
-        public const string PinnedCategory = "\u0001pinned";
-
-        /// <summary>
-        /// 「桌面」虚拟分类的标识（虚拟桌面视图）。
-        ///
-        /// 内容不是 AppItem 而是 DesktopItem，走单独渲染路径。
-        /// **只读真实桌面，不移动任何文件** —— 这是与"桌面整理"方案的关键区别。
-        /// </summary>
-        public const string DesktopCategory = "\u0001desktop";
-
-        /// <summary>
-        /// 「壁纸」虚拟分类的标识。
-        ///
-        /// 内容是 WallpaperItem（图片缩略图网格），走单独渲染路径。
-        /// 点缩略图 = 换桌面壁纸（SPI_SETDESKWALLPAPER）+ 提主色改强调色。
-        /// </summary>
-        public const string WallpaperCategory = "\u0001wallpaper";
-
-        /// <summary>收藏的文件夹/文件（config\pinned-folders.json）。</summary>
-        List<PinnedItem> pinnedFolders = new List<PinnedItem>();
-
-        /// <summary>桌面项目缓存（进入「桌面」视图时重新读取）。</summary>
-        List<DesktopItem> desktopItems = new List<DesktopItem>();
-
-        /// <summary>
         /// 拖拽插入标记的覆盖层（Canvas，绝对定位）。
         ///
         /// 为什么用独立 Canvas 而不是往 tilePanel 里插元素：
@@ -221,10 +191,6 @@ namespace Clover
             this.overrides = CategoryOverrides.Load(baseDir);
             this.hiddenApps = HiddenApps.Load(baseDir);
             this.categories = Categories.Load(baseDir);
-            // 收藏的文件夹/文件（与 AppItem 分开：它由用户手动指定，
-            // 重新扫描不会覆盖，也不参与分类统计）
-            try { pinnedFolders = PinnedFolders.Load(baseDir); }
-            catch { pinnedFolders = new List<PinnedItem>(); }
             catalog = Catalog.Load(baseDir);            usage = UsageStore.Load(baseDir);
             hiddenCats = this.settings.HiddenCategories;
             catalog.ApplyUsage(usage);

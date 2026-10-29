@@ -350,9 +350,6 @@ namespace Clover
 
                 if (cat == PanelWindow.HiddenCategory)
                     return "停在已消失的「隐藏的项目」上（bug 复发）";
-                if (cat == PanelWindow.PinnedCategory || cat == PanelWindow.DesktopCategory
-                    || cat == PanelWindow.WallpaperCategory)
-                    return "停在已移除的虚拟分类上: " + cat;
                 // 合法终值只有两个：常用 / 全部(空串)
                 if (cat != "常用" && cat != "")
                     return "回退到了非法分类: " + cat;

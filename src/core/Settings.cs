@@ -82,8 +82,6 @@ namespace Clover
         /// </summary>
         public string GlassMode = "fixed";
 
-        /// <summary>壁纸文件夹（面板里「壁纸」入口扫描它）。空 = 未设置。</summary>
-        public string WallpaperFolder = "";
 
         /// <summary>
         /// 强调色是否跟随壁纸主色。
@@ -199,7 +197,6 @@ namespace Clover
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
-                if (d.TryGetValue("wallpaperFolder", out v) && v != null) s.WallpaperFolder = Convert.ToString(v);
                 if (d.TryGetValue("accentFromWallpaper", out v) && v != null) s.AccentFromWallpaper = Convert.ToBoolean(v);
                 if (d.TryGetValue("accentOverride", out v) && v != null) s.AccentOverride = Convert.ToString(v);
                 // 旧配置没有这个键时保持字段默认值 false（不回退报错）
@@ -248,7 +245,6 @@ namespace Clover
                 d["theme"] = Theme;
                 d["glassOpacity"] = GlassOpacity;
                 d["glassMode"] = GlassMode;
-                d["wallpaperFolder"] = WallpaperFolder;
                 d["accentFromWallpaper"] = AccentFromWallpaper;
                 d["accentOverride"] = AccentOverride;
                 d["diskSearchEnabled"] = DiskSearchEnabled;

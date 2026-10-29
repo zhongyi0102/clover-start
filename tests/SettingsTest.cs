@@ -46,7 +46,6 @@ namespace Clover
             Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
             Check(s1.AccentFromWallpaper == true, "默认强调色跟随壁纸");
             Check(string.IsNullOrEmpty(s1.AccentOverride), "默认没有自定义强调色");
-            Check(string.IsNullOrEmpty(s1.WallpaperFolder), "默认未设置壁纸文件夹");
 
             // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
             // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
@@ -153,7 +152,6 @@ namespace Clover
             // ---------- 2b. 本阶段新增字段的往返 ----------
             s1.DiskSearchEnabled = true;
             s1.GlassMode = "screen";
-            s1.WallpaperFolder = @"D:\wallpapers";
             s1.AccentFromWallpaper = false;
             s1.AccentOverride = "#4FC3D9";
             s1.Save();
@@ -161,7 +159,6 @@ namespace Clover
             Settings s2b = Settings.Load(r1);
             Check(s2b.DiskSearchEnabled == true, "diskSearchEnabled 往返");
             Check(s2b.GlassMode == "screen", "glassMode 往返");
-            Check(s2b.WallpaperFolder == @"D:\wallpapers", "wallpaperFolder 往返");
             Check(s2b.AccentFromWallpaper == false, "accentFromWallpaper 往返");
             Check(s2b.AccentOverride == "#4FC3D9", "accentOverride 往返");
 
@@ -199,6 +196,30 @@ namespace Clover
             s3.Save();
             string after = File.ReadAllText(p3, Encoding.UTF8);
             Check(after.Contains("keep-me"), "保存时保留未知字段", after);
+
+            // ---------- 3b. ★已删除的设置键：旧值作为未知字段保留 ----------
+            //
+            // 本阶段删除了 wallpaperFolder / diskSearchEnabled / hiddenCategories 三个键。
+            // 老 settings.json 里如果还有它们，必须原样保留（不能被「清理」掉），
+            // 否则用户降级回旧版本时会丢失配置。
+            {
+                string rDel = NewRoot();
+                string pDel = Path.Combine(rDel, "config", "settings.json");
+                File.WriteAllText(pDel,
+                    "{\"theme\":\"dark\",\"wallpaperFolder\":\"D:\\\\wp\",\"diskSearchEnabled\":true,"
+                    + "\"hiddenCategories\":[\"系统工具\"],\"myOwnKey\":\"keep\"}",
+                    new UTF8Encoding(false));
+
+                Settings sDel = Settings.Load(rDel);
+                Check(sDel.Theme == "dark", "已知字段正常读取");
+                sDel.Theme = "light";
+                sDel.Save();
+
+                string afterDel = File.ReadAllText(pDel, Encoding.UTF8);
+                Check(afterDel.Contains("wallpaperFolder"), "★已删除的 wallpaperFolder 作为未知字段保留");
+                Check(afterDel.Contains("D:\\\\wp"), "★wallpaperFolder 的值原样保留");
+                Check(afterDel.Contains("myOwnKey"), "用户自定义字段保留");
+            }
 
             // ---------- 4. 开关联动：功能关闭时强制不隐藏 ----------
             string r4 = NewRoot();
