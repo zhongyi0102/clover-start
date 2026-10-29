@@ -443,6 +443,48 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 「打开所在位置」应该打开哪个目录。
+        ///
+        /// 商店应用（shell:AppsFolder\...）没有文件系统位置，返回 null ——
+        /// 调用方据此弹提示，不尝试打开。
+        ///
+        /// 抽成静态方法是为了可单测：不需要真的弹菜单、不需要真的打开资源管理器。
+        /// </summary>
+        public static string LocationDirOf(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path)) return null;
+                if (AppPaths.IsShellPath(path)) return null;
+                string dir = Path.GetDirectoryName(path);
+                if (string.IsNullOrEmpty(dir)) return null;
+                return Directory.Exists(dir) ? dir : null;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// 「复制路径」应该复制什么。
+        ///
+        /// 商店应用复制 AppUserModelID（唯一能标识它的字符串），
+        /// 而不是 shell:AppsFolder\... 整个前缀 —— 后者对用户没用。
+        /// </summary>
+        public static string CopyTextOf(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path)) return "";
+                if (AppPaths.IsShellPath(path))
+                {
+                    string aumid = AppPaths.ExtractAumid(path);
+                    return string.IsNullOrEmpty(aumid) ? path : aumid;
+                }
+                return path;
+            }
+            catch { return path ?? ""; }
+        }
+
         /// <summary>右键：打开 / 打开所在位置 / 复制路径。</summary>
         void ShowRowMenu(SearchResult r, FrameworkElement anchor)
         {
@@ -455,13 +497,26 @@ namespace Clover
                 open.Click += delegate { Open(r); };
                 cm.Items.Add(open);
 
+                // ---- 打开所在位置 ----
+                //
+                // 商店应用（shell:AppsFolder\...）没有文件系统位置，
+                // Path.GetDirectoryName 会返回 "shell:AppsFolder" 这种非法目录。
+                // 这里与面板磁贴保持一致：弹提示，不尝试打开。
                 MenuItem loc = new MenuItem();
                 loc.Header = "打开所在位置";
                 loc.Click += delegate
                 {
                     try
                     {
-                        string dir = r.IsFolder ? Path.GetDirectoryName(r.Path) : Path.GetDirectoryName(r.Path);
+                        if (AppPaths.IsShellPath(r.Path))
+                        {
+                            MessageBox.Show("商店应用没有文件位置。\r\n\r\n"
+                                + "它由 Microsoft Store 管理，安装文件在受保护的 WindowsApps 目录下。\r\n"
+                                + "如需管理，请打开「设置 → 应用 → 已安装的应用」。", "四叶草");
+                            return;
+                        }
+
+                        string dir = Path.GetDirectoryName(r.Path);
                         if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir))
                             Process.Start("explorer.exe", "\"" + dir + "\"");
                     }
@@ -473,7 +528,19 @@ namespace Clover
                 copy.Header = "复制路径";
                 copy.Click += delegate
                 {
-                    try { Clipboard.SetText(r.Path); } catch { }
+                    try
+                    {
+                        if (AppPaths.IsShellPath(r.Path))
+                        {
+                            string aumid = AppPaths.ExtractAumid(r.Path);
+                            Clipboard.SetText(string.IsNullOrEmpty(aumid) ? r.Path : aumid);
+                        }
+                        else
+                        {
+                            Clipboard.SetText(r.Path);
+                        }
+                    }
+                    catch { }
                 };
                 cm.Items.Add(copy);
 

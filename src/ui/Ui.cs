@@ -169,7 +169,10 @@ namespace Clover
         /// （这也是 Fill() 里注释说的那个设计）
         ///
         /// 注意：这个覆盖是"一次性的" —— 下次 ApplyTheme 会重新填主题默认色。
-        /// 所以换主题后需要重新调一次 SetAccent（PanelWindow.ApplyTheme 里已接）。
+        ///
+        /// **当前没有任何调用方**（2026-10 核实）：曾经由壁纸页的取色功能调用，
+        /// 该功能已随壁纸浏览页一起移除，accentFromWallpaper / accentOverride
+        /// 两个设置键也已删除。这个 API 保留，供将来重新接线时使用。
         /// </summary>
         public static void SetAccent(Color accent, Color accentSoft, Color accentText)
         {

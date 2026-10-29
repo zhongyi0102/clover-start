@@ -84,21 +84,6 @@ namespace Clover
 
 
         /// <summary>
-        /// 强调色是否跟随壁纸主色。
-        ///
-        /// true 时每次换壁纸会重新提取主色并覆盖 Accent 系列；
-        /// false 时用主题里写死的强调色（深色青蓝 / 浅色绿）。
-        /// </summary>
-        public bool AccentFromWallpaper = true;
-
-        /// <summary>
-        /// 自定义强调色（#RRGGBB）。空 = 用主题默认或壁纸主色。
-        ///
-        /// 优先级：AccentOverride > 壁纸主色（AccentFromWallpaper 为 true 时）> 主题默认
-        /// </summary>
-        public string AccentOverride = "";
-
-        /// <summary>
         /// 是否启用磁盘文件搜索（默认 **false**）。
         ///
         /// 为什么默认关：磁盘遍历即使有 900ms 时间预算，也会让搜索结果里
@@ -197,8 +182,6 @@ namespace Clover
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
-                if (d.TryGetValue("accentFromWallpaper", out v) && v != null) s.AccentFromWallpaper = Convert.ToBoolean(v);
-                if (d.TryGetValue("accentOverride", out v) && v != null) s.AccentOverride = Convert.ToString(v);
                 // 旧配置没有这个键时保持字段默认值 false（不回退报错）
                 if (d.TryGetValue("diskSearchEnabled", out v) && v != null) s.DiskSearchEnabled = Convert.ToBoolean(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
@@ -245,8 +228,6 @@ namespace Clover
                 d["theme"] = Theme;
                 d["glassOpacity"] = GlassOpacity;
                 d["glassMode"] = GlassMode;
-                d["accentFromWallpaper"] = AccentFromWallpaper;
-                d["accentOverride"] = AccentOverride;
                 d["diskSearchEnabled"] = DiskSearchEnabled;
                 d["hiddenCategories"] = HiddenCategories;
 

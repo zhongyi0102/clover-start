@@ -99,21 +99,15 @@ namespace Clover
 
                 Check(s.GlassOpacity == 0, "glassOpacity 默认 0", Convert.ToString(s.GlassOpacity));
                 Check(s.GlassMode == "fixed", "glassMode 默认 fixed", s.GlassMode ?? "null");
-                Check(s.AccentFromWallpaper == true, "accentFromWallpaper 默认 true");
-                Check(string.IsNullOrEmpty(s.AccentOverride), "accentOverride 默认空", s.AccentOverride ?? "null");
 
                 // 往返
                 s.GlassMode = "screen";
                 s.GlassOpacity = 80;
-                s.AccentOverride = "#4FC3D9";
-                s.AccentFromWallpaper = false;
                 s.Save();
 
                 Settings s2 = Settings.Load(root);
                 Check(s2.GlassMode == "screen", "glassMode 往返", s2.GlassMode);
                 Check(s2.GlassOpacity == 80, "glassOpacity 往返", Convert.ToString(s2.GlassOpacity));
-                Check(s2.AccentOverride == "#4FC3D9", "accentOverride 往返", s2.AccentOverride);
-                Check(s2.AccentFromWallpaper == false, "accentFromWallpaper 往返");
             }
             finally { Clean(root); }
             Console.WriteLine();
@@ -184,14 +178,14 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 4. 强调色相关设置保留 ----------
+        // ---------- 4. 已删除的强调色键：作为未知字段保留 ----------
         static void TestAccentSettingsPreserved()
         {
-            Console.WriteLine("--- 4. 强调色设置保留 ---");
+            Console.WriteLine("--- 4. 已删键作为未知字段保留 ---");
 
-            // 删除壁纸页后 accentFromWallpaper 失去触发点，但字段必须保留：
-            //   · 用户手动改 settings.json 仍应生效
-            //   · 将来若加回取色触发点，配置不用迁移
+            // accentFromWallpaper / accentOverride 已删除（从未接线）。
+            // 旧 settings.json 里还有这两个键时，必须原样保留 ——
+            // 否则用户降级回旧版本会丢失配置。
             string root = NewRoot();
             try
             {
@@ -201,9 +195,14 @@ namespace Clover
                     new UTF8Encoding(false));
 
                 Settings s = Settings.Load(root);
-                Check(s.AccentFromWallpaper == false, "旧配置的 accentFromWallpaper=false 被读到");
-                Check(s.AccentOverride == "#FF8800", "旧配置的 accentOverride 被读到", s.AccentOverride);
-                Check(s.GlassMode == "screen", "旧配置的 glassMode=screen 被读到", s.GlassMode);
+                Check(s.GlassMode == "screen", "已知键 glassMode=screen 被读到", s.GlassMode);
+                s.Theme = "light";
+                s.Save();
+
+                string after = File.ReadAllText(p, Encoding.UTF8);
+                Check(after.Contains("accentFromWallpaper"), "★已删的 accentFromWallpaper 作为未知字段保留");
+                Check(after.Contains("#FF8800"), "★accentOverride 的值原样保留");
+                Check(after.Contains("glassMode"), "已知键 glassMode 仍写入");
             }
             finally { Clean(root); }
             Console.WriteLine();

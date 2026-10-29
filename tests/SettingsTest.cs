@@ -44,8 +44,6 @@ namespace Clover
             Check(s1.DiskSearchEnabled == false, "默认关闭磁盘文件搜索");
             // 本阶段新增的其它字段默认值
             Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
-            Check(s1.AccentFromWallpaper == true, "默认强调色跟随壁纸");
-            Check(string.IsNullOrEmpty(s1.AccentOverride), "默认没有自定义强调色");
 
             // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
             // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
@@ -152,15 +150,11 @@ namespace Clover
             // ---------- 2b. 本阶段新增字段的往返 ----------
             s1.DiskSearchEnabled = true;
             s1.GlassMode = "screen";
-            s1.AccentFromWallpaper = false;
-            s1.AccentOverride = "#4FC3D9";
             s1.Save();
 
             Settings s2b = Settings.Load(r1);
             Check(s2b.DiskSearchEnabled == true, "diskSearchEnabled 往返");
             Check(s2b.GlassMode == "screen", "glassMode 往返");
-            Check(s2b.AccentFromWallpaper == false, "accentFromWallpaper 往返");
-            Check(s2b.AccentOverride == "#4FC3D9", "accentOverride 往返");
 
             // ---------- 2c. ★旧配置缺 diskSearchEnabled 时补默认值、不报错 ----------
             //
@@ -178,7 +172,6 @@ namespace Clover
             Check(sCfgOld.Theme == "dark", "旧配置：已有字段正常读取（theme）");
             Check(sCfgOld.DiskSearchEnabled == false, "旧配置：缺 diskSearchEnabled 时补默认 false");
             Check(sCfgOld.GlassMode == "fixed", "旧配置：缺 glassMode 时补默认 fixed");
-            Check(sCfgOld.AccentFromWallpaper == true, "旧配置：缺 accentFromWallpaper 时补默认 true");
 
             // 保存后旧字段仍在、新字段被写入
             sCfgOld.Save();
@@ -207,6 +200,7 @@ namespace Clover
                 string pDel = Path.Combine(rDel, "config", "settings.json");
                 File.WriteAllText(pDel,
                     "{\"theme\":\"dark\",\"wallpaperFolder\":\"D:\\\\wp\",\"diskSearchEnabled\":true,"
+                    + "\"accentFromWallpaper\":true,\"accentOverride\":\"#FF8800\","
                     + "\"hiddenCategories\":[\"系统工具\"],\"myOwnKey\":\"keep\"}",
                     new UTF8Encoding(false));
 
@@ -219,6 +213,9 @@ namespace Clover
                 Check(afterDel.Contains("wallpaperFolder"), "★已删除的 wallpaperFolder 作为未知字段保留");
                 Check(afterDel.Contains("D:\\\\wp"), "★wallpaperFolder 的值原样保留");
                 Check(afterDel.Contains("myOwnKey"), "用户自定义字段保留");
+                Check(afterDel.Contains("accentFromWallpaper"), "★已删的 accentFromWallpaper 作为未知字段保留");
+                Check(afterDel.Contains("accentOverride"), "★已删的 accentOverride 作为未知字段保留");
+                Check(afterDel.Contains("#FF8800"), "★accentOverride 的值原样保留");
             }
 
             // ---------- 4. 开关联动：功能关闭时强制不隐藏 ----------

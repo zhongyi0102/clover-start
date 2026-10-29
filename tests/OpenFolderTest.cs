@@ -81,6 +81,35 @@ namespace Clover
 
                 ok = PanelWindow.TryBuildExplorerArgs(@"shell:AppsFolder\SomeApp", out args, out err);
                 Check(!ok, "裸 shell: 路径也返回 false");
+
+                  // ---------- 4c. 搜索结果右键菜单：商店应用 ----------
+                  //
+                  // 面板磁贴和搜索结果必须行为一致：
+                  //   · 「打开所在位置」→ 商店应用无文件位置，返回 null（调用方弹提示）
+                  //   · 「复制路径」→ 复制 AUMID，不是 shell:AppsFolder\... 整个前缀
+                  // 关键：不能把 shell 路径当文件路径处理（Path.GetDirectoryName 会返回非法目录）。
+                  string calcShell = AppPaths.FromAumid("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+
+                  Check(SearchResultList.LocationDirOf(calcShell) == null,
+                      "★搜索结果：商店应用「打开所在位置」返回 null（不拼非法目录）");
+                  Check(SearchResultList.LocationDirOf(@"shell:AppsFolder\NoAumid") == null,
+                      "★搜索结果：残缺 shell 路径也返回 null");
+
+                  string copyShell = SearchResultList.CopyTextOf(calcShell);
+                  Check(copyShell == "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App",
+                      "★搜索结果：商店应用「复制路径」复制 AUMID", copyShell);
+                  Check(copyShell.IndexOf("shell:AppsFolder", StringComparison.OrdinalIgnoreCase) < 0,
+                      "★复制内容不含 shell: 前缀", copyShell);
+
+                  // 普通文件路径行为不变
+                  string realExe2 = Path.Combine(dir, "menu.exe");
+                  File.WriteAllText(realExe2, "x", new UTF8Encoding(false));
+                  Check(SearchResultList.LocationDirOf(realExe2) == dir,
+                      "普通 exe「打开所在位置」返回父目录", SearchResultList.LocationDirOf(realExe2) ?? "null");
+                  Check(SearchResultList.CopyTextOf(realExe2) == realExe2,
+                      "普通 exe「复制路径」原样复制");
+                  Check(SearchResultList.LocationDirOf(null) == null, "null 路径返回 null");
+                  Check(SearchResultList.CopyTextOf(null) == "", "null 路径复制空串");
                 Check(!string.IsNullOrEmpty(err), "裸 shell: 路径有提示");
 
 
