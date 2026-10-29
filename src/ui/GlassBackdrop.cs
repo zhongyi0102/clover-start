@@ -71,6 +71,7 @@ namespace Clover
         Border outerLayer;             // 外层：统一裁剪圆角
         Border innerLayer;             // 内层：图片 + 模糊
         Border tintLayer;              // 染色层：叠在模糊图上，提供"玻璃色调"
+        Border brightLayer;            // 亮度层：半透明白/黑，实现提亮/压暗
         Border grainLayer;             // 噪点层：磨砂颗粒感
         Border highlightLayer;         // 高光层：内边缘 1px 亮线，模拟玻璃厚度
 
@@ -129,6 +130,18 @@ namespace Clover
         /// </summary>
         public double TintStrength = 0.10;
 
+        // ---------- 外观参数（第 1 个提交新增）----------
+        //
+        // 由 ApplyGlassSettings 从 settings.json 注入。
+        // 这些是「运行时可变」的参数，改了要 Refresh() 才生效。
+
+        /// <summary>自定义染色色。null = 用当前强调色（改动前的行为）。</summary>
+        public Color? TintColor;
+
+        /// <summary>亮度偏移 -50 ~ +50（作用在模糊后的底图上）。</summary>
+        public int Brightness;
+
+
         /// <summary>
         /// 噪点强度（0-1）。
         ///
@@ -179,8 +192,12 @@ namespace Clover
                 if (w < 56 || h < 56) return;
 
                 int dpi = DpiOf(hwnd);
+                // 截屏条件 key：只含「影响截到的像素」的因素。
+                // 外观参数（模糊/染色/亮度）不在这个 key 里 ——
+                // 它们只影响 Attach 阶段的合成，不需要重新截屏。
                 string key = rect.Left + "_" + rect.Top + "_" + w + "_" + h + "_" + dpi
-                           + "_" + Ui.AppliedTheme;
+                           + "_" + Ui.AppliedTheme
+                           + "_" + (FollowWallpaper ? "screen" : "fixed");
 
                 if (cached != null && cacheKey == key)
                 {
@@ -509,6 +526,12 @@ namespace Clover
                     tintLayer = new Border();
                     tintLayer.Tag = "glassBackdropTint";
 
+                    // 亮度层：叠一层半透明白/黑实现提亮/压暗。
+                    // 为什么不用 Effect 调亮度：WPF 没有内置亮度 Effect，
+                    // 而叠一层纯色是零成本（GPU 一次 alpha 混合）。
+                    brightLayer = new Border();
+                    brightLayer.Tag = "glassBackdropBright";
+
                     grainLayer = new Border();
                     grainLayer.Tag = "glassBackdropGrain";
 
@@ -517,6 +540,7 @@ namespace Clover
 
                     Grid stack = new Grid();
                     stack.Children.Add(innerLayer);
+                    stack.Children.Add(brightLayer);   // 亮度层压在模糊图上方、染色下方
                     stack.Children.Add(tintLayer);
                     stack.Children.Add(grainLayer);
                     stack.Children.Add(highlightLayer);
@@ -579,10 +603,11 @@ namespace Clover
                 // 强调色随主题变（深色下更亮），所以每次 Attach 都重设。
                 try
                 {
-                    Color accent = Ui.Accent.Color;
+                    // 染色色优先用自定义 TintColor，否则用当前强调色（改动前的行为）
+                    Color tintColor = TintColor.HasValue ? TintColor.Value : Ui.Accent.Color;
                     byte a = (byte)Math.Round(Math.Max(0, Math.Min(1, TintStrength)) * 255);
                     SolidColorBrush tint = new SolidColorBrush(
-                        Color.FromArgb(a, accent.R, accent.G, accent.B));
+                        Color.FromArgb(a, tintColor.R, tintColor.G, tintColor.B));
                     tint.Freeze();
                     tintLayer.Background = tint;
                 }

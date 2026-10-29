@@ -168,6 +168,26 @@ namespace Clover
                 glassBackdrop.FollowWallpaper = settings != null
                     && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
 
+                // ---- 外观参数注入（第 1 个提交）----
+                //
+                // 这些参数只影响 Attach 阶段的合成，不需要重新截屏。
+                // 数值越界由 Settings 读取时已回退默认，这里直接赋值。
+                glassBackdrop.BlurRadius = settings.GlassBlur;
+                glassBackdrop.TintStrength = settings.GlassTintStrength / 100.0;
+                glassBackdrop.Brightness = settings.GlassBrightness;
+
+                // 染色色：空 = 用强调色（改动前的行为）
+                byte tr, tg, tb;
+                if (!string.IsNullOrEmpty(settings.GlassTint)
+                    && Settings.TryParseHexColor(settings.GlassTint, out tr, out tg, out tb))
+                {
+                    glassBackdrop.TintColor = System.Windows.Media.Color.FromRgb(tr, tg, tb);
+                }
+                else
+                {
+                    glassBackdrop.TintColor = null;   // 用 Ui.Accent
+                }
+
                 if (settings.GlassOpacity <= 0)
                 {
                     glassBackdrop.Clear();

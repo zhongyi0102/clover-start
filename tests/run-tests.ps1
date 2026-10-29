@@ -156,7 +156,7 @@ Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
 
 Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
-    @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'SettingsTest.cs'))
+    @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
 Invoke-Suite 'WatcherTest' $baseRefs `
     @((Join-Path $testDir 'WatcherTest.cs'))
@@ -189,6 +189,10 @@ Invoke-Suite 'OpenFolderTest' $wpfRefs `
 Invoke-Suite 'GlassBackdropTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'GlassBackdropTest.cs')))
 
+
+# 外观参数：每个参数「真的改变渲染输出」的断言
+Invoke-Suite 'AppearanceTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'AppearanceTest.cs')))
 
   # 图标缓存：快捷方式去箭头、透明通道、缓存键版本化、商店应用
   Invoke-Suite 'IconTest' $wpfRefs `

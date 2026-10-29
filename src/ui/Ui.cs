@@ -170,10 +170,67 @@ namespace Clover
         ///
         /// 注意：这个覆盖是"一次性的" —— 下次 ApplyTheme 会重新填主题默认色。
         ///
-        /// **当前没有任何调用方**（2026-10 核实）：曾经由壁纸页的取色功能调用，
-        /// 该功能已随壁纸浏览页一起移除，accentFromWallpaper / accentOverride
-        /// 两个设置键也已删除。这个 API 保留，供将来重新接线时使用。
+        /// **调用方**（2026-10 接线）：
+        ///   · Ui.ApplyTheme —— 当 accentOverride 有值时（settings.glassAccent 非空）
+        ///   · Ui.SetAccentOverride —— 设置/清除自定义强调色
+        /// 之前的注释写「PanelWindow.ApplyTheme 里已接」是错的（实际没接），已改正。
         /// </summary>
+        /// <summary>
+        /// 用户自定义的强调色（来自 settings.glassAccent）。null = 用主题默认。
+        ///
+        /// 为什么要存成静态字段：ApplyTheme 会在切主题时重跑，
+        /// 它必须知道"要不要在 Fill(palette) 之后再覆盖强调色"。
+        /// </summary>
+        static Color? accentOverride;
+
+        /// <summary>
+        /// 设置/清除自定义强调色。传 null 表示回到主题默认。
+        ///
+        /// 会立刻重跑一次当前主题，让新颜色生效。
+        /// </summary>
+        public static void SetAccentOverride(Color? accent)
+        {
+            accentOverride = accent;
+            ApplyTheme(AppliedTheme);   // 重新填色（内部会再调 SetAccent）
+        }
+
+        /// <summary>当前是否设置了自定义强调色（诊断用）。</summary>
+        public static bool HasAccentOverride { get { return accentOverride.HasValue; } }
+
+        /// <summary>
+        /// 从一个强调色派生 AccentSoft（浅色强调底）和 AccentText（强调文字色）。
+        ///
+        /// 规则（与 Dark/Light 调色板里那三色的关系一致）：
+        ///   · 深色主题：Soft = 主色压暗 + 低不透明度（33%）；Text = 主色提亮
+        ///   · 浅色主题：Soft = 主色提亮 + 高不透明度（浅底上的浅色块）；Text = 主色压暗
+        /// </summary>
+        static void DeriveAccentVariants(Color accent, bool dark, out Color soft, out Color text)
+        {
+            if (dark)
+            {
+                soft = Color.FromArgb(0x33,
+                    (byte)(accent.R * 0.55), (byte)(accent.G * 0.55), (byte)(accent.B * 0.55));
+                text = Color.FromArgb(0xFF,
+                    Lighten(accent.R, 0.45), Lighten(accent.G, 0.45), Lighten(accent.B, 0.45));
+            }
+            else
+            {
+                soft = Color.FromArgb(0xFF,
+                    Lighten(accent.R, 0.85), Lighten(accent.G, 0.85), Lighten(accent.B, 0.85));
+                text = Color.FromArgb(0xFF,
+                    (byte)(accent.R * 0.55), (byte)(accent.G * 0.55), (byte)(accent.B * 0.55));
+            }
+        }
+
+        /// <summary>把颜色通道往 255 靠 t（0=不变，1=纯白）。</summary>
+        static byte Lighten(byte c, double t)
+        {
+            double v = c + (255 - c) * t;
+            if (v < 0) v = 0;
+            if (v > 255) v = 255;
+            return (byte)Math.Round(v);
+        }
+
         public static void SetAccent(Color accent, Color accentSoft, Color accentText)
         {
             try
@@ -204,6 +261,18 @@ namespace Clover
 
             AppliedTheme = effective;
             Fill(effective == ThemeMode.Dark ? Dark : Light);
+
+            // ---- 自定义强调色覆盖（settings.glassAccent）----
+            //
+            // 必须放在 Fill(palette) **之后** —— Fill 会把 Accent 系列重置成主题默认值。
+            // 覆盖色由 SetAccentOverride 存进静态字段，所以切主题后仍然生效。
+            if (accentOverride.HasValue)
+            {
+                Color c = accentOverride.Value;
+                Color soft, text;
+                DeriveAccentVariants(c, effective == ThemeMode.Dark, out soft, out text);
+                SetAccent(c, soft, text);
+            }
 
             try { ThemeChanged(); }
             catch { }

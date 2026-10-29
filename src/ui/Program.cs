@@ -200,6 +200,14 @@ namespace Clover
                 // 颜色刷子是全局对象，窗口构造时就把它们挂到控件上了；
                 // 这里先定好颜色，后续所有窗口一建出来就是对的。
                 Ui.ApplyTheme(Ui.ParseTheme(settings.Theme));
+
+                // 自定义强调色（settings.glassAccent）：空 = 用主题默认
+                byte ar, ag, ab;
+                if (!string.IsNullOrEmpty(settings.GlassAccent)
+                    && Settings.TryParseHexColor(settings.GlassAccent, out ar, out ag, out ab))
+                {
+                    Ui.SetAccentOverride(System.Windows.Media.Color.FromRgb(ar, ag, ab));
+                }
                 ErrorLog.Log("主题: " + Ui.ThemeDisplayName(Ui.ParseTheme(settings.Theme))
                     + "（实际应用 " + Ui.ThemeDisplayName(Ui.AppliedTheme) + "）");
 

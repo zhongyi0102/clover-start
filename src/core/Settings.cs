@@ -82,6 +82,64 @@ namespace Clover
         /// </summary>
         public string GlassMode = "fixed";
 
+        // ---------- 外观参数（第 1 个提交新增）----------
+        //
+        // 默认值必须与「加这些键之前」的写死常量**完全一致**，
+        // 否则老用户升级后外观会变（用户明确要求「像素级不变」）。
+        //
+        // 写死常量的来源（GlassBackdrop.cs / Ui.cs）：
+        //   BlurRadius        = 10.0
+        //   TintStrength      = 0.10   （= 10%）
+        //   GrainStrength     = 0.025  （= 2.5%，不在本次 6 个键里）
+        //   HighlightStrength = 0.30   （= 30%，不在本次 6 个键里）
+        //   Accent（深色）     = #4FC3D9 / 浅色 = #388C48
+        //   Tint 色            = 取 Accent 同色（GlassBackdrop 里用 Ui.Accent.Color）
+
+        /// <summary>
+        /// 预设名。
+        ///
+        /// "custom" = 手动调过参数（默认）。
+        /// 其他值见 AppearancePresets（第 2 个提交）。
+        /// 未知值一律按 "custom" 处理，不报错。
+        /// </summary>
+        public string GlassPreset = "custom";
+
+        /// <summary>
+        /// 模糊半径（WPF BlurEffect.Radius，作用在**已缩小 1/4** 的图上）。
+        ///
+        /// 注意：视觉模糊 ≈ Radius × Downscale(4)，所以 10 实际看起来像 40px。
+        /// 默认 10.0 = 改动前的写死值。
+        /// 范围 0-30（0 = 不模糊，30 = 非常糊）。
+        /// </summary>
+        public double GlassBlur = 10.0;
+
+        /// <summary>
+        /// 染色色（#RRGGBB）。空 = 用当前强调色（改动前的行为）。
+        ///
+        /// 改动前 GlassBackdrop 直接用 Ui.Accent.Color 当染色色，
+        /// 所以「空」这个默认值精确复刻了旧行为。
+        /// </summary>
+        public string GlassTint = "";
+
+        /// <summary>
+        /// 染色强度 0-100（%）。默认 10 = 改动前的 TintStrength 0.10。
+        /// </summary>
+        public int GlassTintStrength = 10;
+
+        /// <summary>
+        /// 亮度偏移 -50 ~ +50。默认 0 = 改动前没有这一步（不变）。
+        ///
+        /// 正值提亮、负值压暗，作用在模糊后的底图上。
+        /// </summary>
+        public int GlassBrightness = 0;
+
+        /// <summary>
+        /// 自定义强调色（#RRGGBB）。空 = 用主题默认（改动前的行为）。
+        ///
+        /// 这个键**真的会被应用**：Ui.ApplyTheme 里调 Ui.SetAccent。
+        /// </summary>
+        public string GlassAccent = "";
+
 
 
         /// <summary>
@@ -169,6 +227,13 @@ namespace Clover
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
+                // ---- 外观参数（越界/格式错 → 回退默认 + 写日志，不崩溃）----
+                s.GlassPreset = ReadString(d, "glassPreset", s.GlassPreset, null);
+                s.GlassBlur = ReadDoubleClamped(d, "glassBlur", s.GlassBlur, 0.0, 30.0);
+                s.GlassTint = ReadColor(d, "glassTint", s.GlassTint);
+                s.GlassTintStrength = ReadIntClamped(d, "glassTintStrength", s.GlassTintStrength, 0, 100);
+                s.GlassBrightness = ReadIntClamped(d, "glassBrightness", s.GlassBrightness, -50, 50);
+                s.GlassAccent = ReadColor(d, "glassAccent", s.GlassAccent);
                 // 旧配置没有这个键时保持字段默认值 false（不回退报错）
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
@@ -214,6 +279,12 @@ namespace Clover
                 d["theme"] = Theme;
                 d["glassOpacity"] = GlassOpacity;
                 d["glassMode"] = GlassMode;
+                d["glassPreset"] = GlassPreset;
+                d["glassBlur"] = GlassBlur;
+                d["glassTint"] = GlassTint;
+                d["glassTintStrength"] = GlassTintStrength;
+                d["glassBrightness"] = GlassBrightness;
+                d["glassAccent"] = GlassAccent;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
@@ -223,6 +294,150 @@ namespace Clover
             {
                 Warn("保存 settings.json 失败: " + ex.Message);
             }
+        }
+
+        // ---------- 带校验的读取辅助（外观参数用）----------
+        //
+        // 共同原则：任何非法值都回退默认 + 写 error.log，绝不抛异常。
+        // 用户明确要求「越界/颜色格式错 → 回退默认并写 error.log，不得崩溃」。
+
+        static string ReadString(Dictionary<string, object> d, string key, string def, string[] allowed)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                string s = Convert.ToString(v);
+                if (string.IsNullOrWhiteSpace(s)) return def;
+                s = s.Trim();
+                if (allowed != null)
+                {
+                    bool ok = false;
+                    foreach (string a in allowed)
+                    {
+                        if (string.Equals(a, s, StringComparison.OrdinalIgnoreCase)) { ok = true; break; }
+                    }
+                    if (!ok)
+                    {
+                        Log.Warn("settings." + key + " 值非法（" + s + "），已回退默认 " + def);
+                        return def;
+                    }
+                }
+                return s;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退默认 " + def);
+                return def;
+            }
+        }
+
+        static double ReadDoubleClamped(Dictionary<string, object> d, string key, double def, double min, double max)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                double x = Convert.ToDouble(v);
+                if (double.IsNaN(x) || double.IsInfinity(x))
+                {
+                    Log.Warn("settings." + key + " 不是有限数，已回退默认 " + def);
+                    return def;
+                }
+                if (x < min || x > max)
+                {
+                    Log.Warn("settings." + key + " = " + x + " 越界 [" + min + ", " + max + "]，已回退默认 " + def);
+                    return def;
+                }
+                return x;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退默认 " + def);
+                return def;
+            }
+        }
+
+        static int ReadIntClamped(Dictionary<string, object> d, string key, int def, int min, int max)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                int x = Convert.ToInt32(v);
+                if (x < min || x > max)
+                {
+                    Log.Warn("settings." + key + " = " + x + " 越界 [" + min + ", " + max + "]，已回退默认 " + def);
+                    return def;
+                }
+                return x;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退默认 " + def);
+                return def;
+            }
+        }
+
+        /// <summary>
+        /// 读 #RRGGBB 颜色。空串是合法值（表示"用默认"），格式错则回退 def。
+        /// </summary>
+        static string ReadColor(Dictionary<string, object> d, string key, string def)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                string s = Convert.ToString(v);
+                if (s == null) return def;
+                s = s.Trim();
+                if (s.Length == 0) return "";   // 空 = 用默认，合法
+
+                if (!IsHexColor(s))
+                {
+                    Log.Warn("settings." + key + " 不是合法颜色（" + s + "），已回退默认 " + (def.Length == 0 ? "空" : def));
+                    return def;
+                }
+                return "#" + s.TrimStart('#').ToUpperInvariant();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退默认");
+                return def;
+            }
+        }
+
+        /// <summary>是不是 #RRGGBB / RRGGBB 格式（大小写不敏感）。</summary>
+        public static bool IsHexColor(string s)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(s)) return false;
+                string h = s.Trim().TrimStart('#');
+                if (h.Length != 6) return false;
+                foreach (char c in h)
+                {
+                    if (!Uri.IsHexDigit(c)) return false;
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>把 #RRGGBB 解析成 (r,g,b)。格式错返回 false。</summary>
+        public static bool TryParseHexColor(string s, out byte r, out byte g, out byte b)
+        {
+            r = 0; g = 0; b = 0;
+            try
+            {
+                if (!IsHexColor(s)) return false;
+                string h = s.Trim().TrimStart('#');
+                r = Convert.ToByte(h.Substring(0, 2), 16);
+                g = Convert.ToByte(h.Substring(2, 2), 16);
+                b = Convert.ToByte(h.Substring(4, 2), 16);
+                return true;
+            }
+            catch { return false; }
         }
     }
 }
