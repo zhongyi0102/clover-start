@@ -145,20 +145,32 @@ namespace Clover
             Grid.SetColumn(winButtons, 3);
             header.Children.Add(winButtons);
 
-            // 「最小化」按钮已移除：它的行为和「关闭」完全一样（都是 HidePanel），
-            // 两个按钮做同一件事只会让用户犹豫点哪个。
-            // minBtn 字段也一起删了（下面第 163 行的命中测试同步更新）。
+            // 三个窗口按钮，从左到右：最小化 / 最大化·还原 / 关闭。
+            //
+            // 「最小化」和「关闭」行为相同（都是 HidePanel）—— 面板不是常规窗口，
+            // 它没有任务栏图标（ShowInTaskbar = false），真正最小化到任务栏会
+            // 变得不可恢复。所以两者都只是收起面板，区别在图标语义：
+            //   · 最小化（—）：用户以为"收起来，待会儿还要用"
+            //   · 关闭（×）：用户以为"用完了"
+            // 保留两个是照顾习惯 —— 很多人下意识点 —。
+
+            minBtn = MakeHeaderButton("\uE921", delegate { HidePanel(); });
+            minBtn.ToolTip = "收起面板（等同于关闭）";
+            winButtons.Children.Add(minBtn);
 
             maxBtn = MakeHeaderButton("\uE922", delegate { ToggleExpand(); });
+            maxBtn.ToolTip = "最大化 / 还原";
             winButtons.Children.Add(maxBtn);
 
             closeBtn = MakeHeaderButton("\uE711", delegate { HidePanel(); });
+            closeBtn.ToolTip = "关闭面板";
             winButtons.Children.Add(closeBtn);
 
             header.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {
                 DependencyObject d = e.OriginalSource as DependencyObject;
-                if (IsDescendantOf(d, searchBorder) || IsDescendantOf(d, closeBtn) || IsDescendantOf(d, maxBtn)) return;
+                if (IsDescendantOf(d, searchBorder) || IsDescendantOf(d, minBtn)
+                    || IsDescendantOf(d, maxBtn) || IsDescendantOf(d, closeBtn)) return;
                 try { DragMove(); } catch { }
             };
 

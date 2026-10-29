@@ -37,6 +37,7 @@ namespace Clover
         /// <summary>上次浏览的分类（重启后恢复到它，见 config\last-category.json）。</summary>
         string lastCatPath;
         Border searchBorder;
+        Border minBtn;              // 最小化（与关闭同行为：HidePanel）
         Border closeBtn;
         UsageStore usage;
         List<string> hiddenCats;

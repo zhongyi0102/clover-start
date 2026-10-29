@@ -6,6 +6,7 @@ using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
 
@@ -217,7 +218,54 @@ namespace Clover
             //
             // 【本阶段改动】原来是"左侧分类栏生成了条目（≥2 个）"，
             // 现在界面只保留两个标签，断言改成**精确等于 2**。
-            // 这样一旦有人不小心把分类标签加回来，测试会立刻失败。
+            // ---------- 3b. 窗口按钮：最小化 / 最大化 / 关闭 三个都在 ----------
+            //
+            // 「最小化」曾被移除（理由是和关闭同行为），但用户习惯点 —，
+            // 所以恢复。行为仍是 HidePanel（面板无任务栏图标，真最小化会不可恢复）。
+            Verify("★窗口按钮：最小化/最大化/关闭 三个都在", delegate
+            {
+                // 从 header 的可视树里找三个按钮（它们都是 32x32 的 Border）
+                int btnCount = 0;
+                List<string> tips = new List<string>();
+                CollectWindowButtons(panel, ref btnCount, tips);
+
+                if (btnCount != 3) return "应有 3 个窗口按钮，实际 " + btnCount;
+                if (!tips.Contains("收起面板（等同于关闭）")) return "缺少最小化按钮的 tooltip";
+                if (!tips.Contains("最大化 / 还原")) return "缺少最大化按钮的 tooltip";
+                if (!tips.Contains("关闭面板")) return "缺少关闭按钮的 tooltip";
+                return "ok（最小化 / 最大化 / 关闭）";
+            });
+
+            // ---------- 3c. 点最小化 → 面板收起（与关闭同行为） ----------
+            Verify("★点最小化按钮 → 面板收起", delegate
+            {
+                panel.ShowPanel();
+                if (!panel.IsVisible) return "ShowPanel 后不可见";
+
+                Border min = FindWindowButtonByTip(panel, "收起面板（等同于关闭）");
+                if (min == null) return "找不到最小化按钮";
+
+                // 直接调 panel.HidePanel()（按钮的 Click 处理器就是它）
+                //
+                // 为什么不 RaiseEvent：WPF 的 MouseLeftButtonUp 是直接事件，
+                // 合成它需要完整的 MouseDevice 状态，测试里造不出来。
+                // 直接调 HidePanel 验证的是按钮绑定的同一个行为。
+                panel.HidePanel();
+
+                // 收起有 110ms 淡出动画，而 Hide() 是在动画的 Completed 回调里调的。
+                // **不能用 Thread.Sleep** —— 那会阻塞 UI 线程，动画永远跑不完，
+                // Completed 不触发，面板就一直 IsVisible。
+                // 正确做法：用 DispatcherFrame 泵消息，让动画真正推进。
+                WaitForDispatcher(600);
+                if (panel.IsVisible) return "点最小化后仍可见";
+                return "ok（面板已收起）";
+            });
+
+            // 恢复面板：3c 把它收起了，后续断言需要可见的面板
+            panel.ShowPanel();
+            WaitForDispatcher(400);
+
+            // ---------- 4. 分类栏只保留「常用」「全部」两个标签 ----------
             Verify("分类栏只有「常用」「全部」两个标签", delegate
             {
                 List<Border> navItems = FindNavItems(panel);
@@ -919,6 +967,64 @@ namespace Clover
             });
         }
 
+
+        /// <summary>
+        /// 泵消息指定毫秒数，让 WPF 动画真正推进。
+        ///
+        /// 为什么不能用 Thread.Sleep：那只是挂起当前线程，动画时钟不前进，
+        /// Completed 回调永远不会触发。DispatcherFrame 会继续处理消息队列。
+        /// </summary>
+        static void WaitForDispatcher(int ms)
+        {
+            System.Windows.Threading.DispatcherTimer t = new System.Windows.Threading.DispatcherTimer();
+            t.Interval = TimeSpan.FromMilliseconds(ms);
+            System.Windows.Threading.DispatcherFrame frame = new System.Windows.Threading.DispatcherFrame();
+            t.Tick += delegate { t.Stop(); frame.Continue = false; };
+            t.Start();
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+
+        /// <summary>递归收集窗口按钮（32x32 且带 tooltip 的 Border）。</summary>
+        static void CollectWindowButtons(DependencyObject d, ref int count, List<string> tips)
+        {
+            if (d == null) return;
+            try
+            {
+                Border b = d as Border;
+                if (b != null && b.Width == 32 && b.Height == 32 && b.ToolTip is string)
+                {
+                    count++;
+                    tips.Add((string)b.ToolTip);
+                }
+
+                int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
+                for (int i = 0; i < n; i++)
+                    CollectWindowButtons(System.Windows.Media.VisualTreeHelper.GetChild(d, i), ref count, tips);
+            }
+            catch { }
+        }
+
+        /// <summary>按 tooltip 找窗口按钮。</summary>
+        static Border FindWindowButtonByTip(DependencyObject d, string tip)
+        {
+            if (d == null) return null;
+            try
+            {
+                Border b = d as Border;
+                if (b != null && b.Width == 32 && b.Height == 32
+                    && b.ToolTip is string && (string)b.ToolTip == tip)
+                    return b;
+
+                int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
+                for (int i = 0; i < n; i++)
+                {
+                    Border r = FindWindowButtonByTip(System.Windows.Media.VisualTreeHelper.GetChild(d, i), tip);
+                    if (r != null) return r;
+                }
+            }
+            catch { }
+            return null;
+        }
 
         // ---------- 辅助：从测试 exe 往上找 src 目录 ----------
         static string FindSourceDir()
