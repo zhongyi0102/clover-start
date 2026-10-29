@@ -131,7 +131,7 @@ namespace Clover
         {
             catalog = Catalog.Load(baseDir);
             if (usage != null) catalog.ApplyUsage(usage);
-            hiddenCats = settings.HiddenCategories;
+            hiddenCats = new List<string>();   // 分类系统已下线，不再从 settings 读
             catalog.HideCategories(hiddenCats);
         }
 
@@ -563,8 +563,32 @@ namespace Clover
                 if (string.IsNullOrEmpty(orderJson)) return;
                 Dictionary<string, object> d = ser.Deserialize<Dictionary<string, object>>(orderJson);
                 if (d == null) return;
+
+                // ---- 分类系统下线：只接受「常用」和「全部(__all__)」两个键 ----
+                //
+                // 老 order.json 里可能还有「办公」「开发」这类分类键。它们已经没有
+                // 对应的界面标签，继续读进来只会白占内存、并在下次存盘时被写回去。
+                //
+                // **安全顺序**（用户明确要求）：
+                //   ① 先解析成功（走到这里说明 JSON 是好的）
+                //   ② 只保留两个已知键，其余**跳过不读**
+                //   ③ 若发现旧键 → 先备份原文件（order.json.bak-cleanup）
+                //   ④ 备份成功后才写回清理后的版本
+                //   ⑤ 任何一步失败 → 保留原文件不动，只记日志
+                //
+                // 注意：跳过旧键**不等于删除数据** —— 在备份成功之前，
+                // 原文件（含「办公」的 13 条排序）始终留在磁盘上。
+                List<string> droppedKeys = new List<string>();
                 foreach (KeyValuePair<string, object> kv in d)
                 {
+                    // 已知键：__all__（= 全部）和 常用
+                    bool known = kv.Key == AllKey || kv.Key == "常用";
+                    if (!known)
+                    {
+                        droppedKeys.Add(kv.Key);
+                        continue;
+                    }
+
                     List<string> list = new List<string>();
                     object[] arr = kv.Value as object[];
                     if (arr != null)
@@ -575,13 +599,45 @@ namespace Clover
                     {
                         foreach (object o in (System.Collections.IEnumerable)kv.Value) list.Add(Convert.ToString(o));
                     }
-                    // 「全部」分类内部标识是空串，但落到文件里写的是 AllKey
-                    // （空串做 JSON 键会让 PowerShell ConvertFrom-Json 之类的工具报错）。
-                    // 两种写法都接受，老文件照常能读。
                     customOrders[RestoreCatKey(kv.Key)] = list;
                 }
+
+                // ---- 发现旧键 → 备份后清理 ----
+                if (droppedKeys.Count > 0)
+                {
+                    string backupPath = orderPath + ".bak-cleanup";
+                    bool backedUp = false;
+                    try
+                    {
+                        File.Copy(orderPath, backupPath, true);
+                        backedUp = File.Exists(backupPath)
+                            && new FileInfo(backupPath).Length > 0;
+                    }
+                    catch (Exception bex)
+                    {
+                        Ui.LogError(bex, "order.json 备份");
+                    }
+
+                    if (!backedUp)
+                    {
+                        // 备份失败 → 不写回，保留原文件（下次启动再试）
+                        Ui.Log("order.json 有 " + droppedKeys.Count
+                            + " 个废弃分类键，但备份失败，已保留原文件不清理");
+                    }
+                    else
+                    {
+                        // 只写两个已知键
+                        SaveCustomOrders();
+                        Ui.Log("order.json 已清理 " + droppedKeys.Count
+                            + " 个废弃分类键（" + string.Join(", ", droppedKeys.ToArray())
+                            + "），原文件备份到 order.json.bak-cleanup");
+                    }
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "读 order.json");
+            }
         }
 
         /// <summary>

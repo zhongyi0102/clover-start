@@ -123,13 +123,23 @@ namespace Clover
                 }
 
                 // ---- 2. 旧 hiddenCategories 有内容吗？----
-                List<string> hiddenCats = new List<string>();
-                if (settings != null && settings.HiddenCategories != null)
+                //
+                // **直接读原始 settings.json**，不经 Settings 类：
+                // 本阶段删除了 Settings.HiddenCategories 字段，
+                // 但老用户磁盘上的 settings.json 里可能还有这个键，
+                // 迁移必须能读到它 —— 否则迁移永远「无事可做」，
+                // 用户之前隐藏的整类应用会全部重新冒出来。
+                // 读失败（ok=false）→ **不写标记**，下次启动重试。
+                // 读成功但为空（ok=true, Count=0）→ 终态，写标记。
+                bool cfgOk;
+                List<string> hiddenCats = ReadHiddenCategoriesRaw(baseDir, out cfgOk);
+                if (!cfgOk)
                 {
-                    foreach (string c in settings.HiddenCategories)
-                    {
-                        if (!string.IsNullOrWhiteSpace(c)) hiddenCats.Add(c.Trim());
-                    }
+                    // settings.json 还没就绪 / 损坏 / 字段类型错。
+                    // 这时判定终态会让用户**永久失去迁移机会**，所以不写标记。
+                    r.SkipReason = "settings.json 读不出（未就绪或损坏，下次重试）";
+                    r.ShouldWriteMarker = false;
+                    return r;
                 }
                 if (hiddenCats.Count == 0)
                 {
@@ -228,6 +238,93 @@ namespace Clover
                 r.ShouldWriteMarker = false;   // 异常是临时的，下次重试
                 return r;
             }
+        }
+
+        /// <summary>
+        /// <summary>
+        /// 从**原始 settings.json** 读旧 hiddenCategories 数组。
+        ///
+        /// 为什么不走 Settings 类：本阶段删掉了 Settings.HiddenCategories 字段，
+        /// 但老用户磁盘上的 JSON 里可能还有这个键。迁移必须能读到它，
+        /// 否则「隐藏整类」的历史数据就再也迁不出来。
+        ///
+        /// **必须区分「读到空」和「读不到」**（ok 参数）：
+        ///
+        ///   ok = false（读不到 → 本次**不写标记**，下次重试）
+        ///     · settings.json 不存在（程序可能还没生成它）
+        ///     · 文件读取失败 / IO 异常
+        ///     · JSON 损坏 / 解析异常 / 根不是对象
+        ///     · hiddenCategories 存在但类型不是数组
+        ///
+        ///   ok = true（读成功 → 可据此判定终态）
+        ///     · 没有 hiddenCategories 键      → 列表为空
+        ///     · hiddenCategories 是空数组      → 列表为空
+        ///     · hiddenCategories 是非空数组    → 列表有值
+        ///
+        /// **为什么这个区分是必须的**：如果读失败也返回空列表，调用方会把它
+        /// 当成「这个用户没有旧数据」→ 写标记 → 用户修复配置后再也不会迁移，
+        /// 原本隐藏的整类应用全部重新冒出来。
+        /// </summary>
+        static List<string> ReadHiddenCategoriesRaw(string baseDir, out bool ok)
+        {
+            List<string> list = new List<string>();
+            ok = false;
+            try
+            {
+                string path = Path.Combine(baseDir, "config", "settings.json");
+
+                // 文件不存在：可能是首次运行（还没生成），也可能被用户删了。
+                // 两种情况都不该判定为「终态」—— 下次启动再看。
+                if (!File.Exists(path)) return list;
+
+                string json = JsonIO.Read(path);
+                if (string.IsNullOrEmpty(json)) return list;   // 读失败
+
+                System.Web.Script.Serialization.JavaScriptSerializer ser =
+                    new System.Web.Script.Serialization.JavaScriptSerializer();
+                ser.MaxJsonLength = int.MaxValue;
+                Dictionary<string, object> d = ser.Deserialize<Dictionary<string, object>>(json);
+                if (d == null) return list;                    // 根不是对象
+
+                // 到这里 JSON 本体是好的 —— 无论有没有这个键，都算「读成功」
+                ok = true;
+
+                object arr;
+                if (!d.TryGetValue("hiddenCategories", out arr)) return list;   // 没有键 → 空
+                if (arr == null) return list;                                   // 值为 null → 空
+
+                // 类型检查：必须是**数组**，否则视为读失败。
+                //
+                // JavaScriptSerializer 的实际行为（实测）：
+                //   {"x":[]}        → System.Collections.ArrayList（空）
+                //   {"x":["a"]}     → System.Collections.ArrayList
+                //   {"x":"str"}     → System.String       ← 不是数组
+                //   {"x":null}      → null                 ← 上面已处理
+                //
+                // 所以判断条件是「ArrayList 或 object[]」，**不能**用 `is IEnumerable`
+                // —— string 也实现了 IEnumerable<char>，会把类型错误误判成合法。
+                if (!(arr is System.Collections.ArrayList) && !(arr is object[]))
+                {
+                    ok = false;
+                    Log.Warn("迁移: settings.hiddenCategories 不是数组（类型 "
+                        + arr.GetType().Name + "），本次不判定终态");
+                    return list;
+                }
+
+                foreach (object o in JsonIO.AsArray(arr))
+                {
+                    string c = o as string;
+                    if (string.IsNullOrWhiteSpace(c)) continue;
+                    list.Add(c.Trim());
+                }
+            }
+            catch (Exception ex)
+            {
+                // 解析异常 → 读失败（ok 保持 false）
+                ok = false;
+                Log.Warn("迁移: 读原始 settings.json 的 hiddenCategories 失败: " + ex.Message);
+            }
+            return list;
         }
 
         /// <summary>

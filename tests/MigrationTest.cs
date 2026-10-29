@@ -35,6 +35,9 @@ namespace Clover
             TestIdempotent();
             TestNoCategoryField();
             TestEmptyHiddenCategories();
+            TestSettingsFileMissing();
+            TestSettingsFileCorrupt();
+            TestHiddenCategoriesWrongType();
             TestPreservesExistingHidden();
             TestCorruptHiddenFileNotOverwritten();
             TestMissingAppsFile();
@@ -147,6 +150,130 @@ namespace Clover
 
                 HiddenApps h = HiddenApps.Load(root);
                 Check(h.Count == 0, "没有隐藏任何应用", "实际 " + h.Count);
+            }
+            finally { Clean(root); }
+            Console.WriteLine();
+        }
+
+        // ---------- 4b. settings.json 不存在 → 不写标记 ----------
+        static void TestSettingsFileMissing()
+        {
+            Console.WriteLine("--- 4b. settings.json 不存在 → 不写标记 ---");
+
+            string root = NewRoot();
+            try
+            {
+                // 不写 settings.json（模拟首次运行 / 用户删了配置）
+                WriteApps(root,
+                    new string[] { "cmd", @"C:\Windows\cmd.exe", "系统工具" });
+
+                Migration.Result r = Migration.Run(root, Settings.Load(root));
+
+                Check(!r.Performed, "不执行迁移", r.SkipReason ?? "");
+                Check(!r.ShouldWriteMarker, "★ShouldWriteMarker = false", Convert.ToString(r.ShouldWriteMarker));
+                Check(!File.Exists(Migration.MarkerPath(root)),
+                    "★标记文件**未**写入（下次启动可重试）");
+
+                // 现在补上 settings.json（模拟用户后来有了配置）→ 应能迁移
+                WriteSettings(root, new string[] { "系统工具" });
+                Migration.Result r2 = Migration.Run(root, Settings.Load(root));
+                Check(r2.Performed, "★补上配置后能正常迁移", r2.SkipReason ?? "");
+                Check(File.Exists(Migration.MarkerPath(root)), "★迁移成功后写了标记");
+            }
+            finally { Clean(root); }
+            Console.WriteLine();
+        }
+
+        // ---------- 4c. settings.json 损坏 → 不写标记，修复后能迁移 ----------
+        static void TestSettingsFileCorrupt()
+        {
+            Console.WriteLine("--- 4c. settings.json 损坏 → 不写标记，修复后能迁移 ---");
+
+            string root = NewRoot();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "config", "settings.json"),
+                    "{ 这不是 JSON", new UTF8Encoding(false));
+                WriteApps(root,
+                    new string[] { "cmd", @"C:\Windows\cmd.exe", "系统工具" });
+
+                Migration.Result r = Migration.Run(root, Settings.Load(root));
+
+                Check(!r.Performed, "不执行迁移", r.SkipReason ?? "");
+                Check(!r.ShouldWriteMarker, "★ShouldWriteMarker = false", Convert.ToString(r.ShouldWriteMarker));
+                Check(!File.Exists(Migration.MarkerPath(root)),
+                    "★标记文件**未**写入（损坏不该判定终态）");
+
+                // 关键：修复配置后必须能迁移（这是本次修复的核心目标）
+                WriteSettings(root, new string[] { "系统工具" });
+                Migration.Result r2 = Migration.Run(root, Settings.Load(root));
+
+                Check(r2.Performed, "★修复配置后能正常迁移", r2.SkipReason ?? "");
+                Check(r2.NewlyHidden >= 1, "★确实隐藏了条目", Convert.ToString(r2.NewlyHidden));
+                Check(File.Exists(Migration.MarkerPath(root)), "★迁移成功后写了标记");
+
+                HiddenApps h = HiddenApps.Load(root);
+                Check(h.Count >= 1, "★hidden-apps.json 真的有条目", Convert.ToString(h.Count));
+            }
+            finally { Clean(root); }
+            Console.WriteLine();
+        }
+
+        // ---------- 4d. hiddenCategories 类型错误 → 不写标记 ----------
+        static void TestHiddenCategoriesWrongType()
+        {
+            Console.WriteLine("--- 4d. hiddenCategories 类型错误 → 不写标记 ---");
+
+            // 4d-1：字符串而不是数组
+            string root = NewRoot();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "config", "settings.json"),
+                    "{\"hiddenCategories\":\"系统工具\"}", new UTF8Encoding(false));
+                WriteApps(root,
+                    new string[] { "cmd", @"C:\Windows\cmd.exe", "系统工具" });
+
+                Migration.Result r = Migration.Run(root, Settings.Load(root));
+
+                Check(!r.Performed, "字符串类型：不执行迁移", r.SkipReason ?? "");
+                Check(!r.ShouldWriteMarker, "★字符串类型：ShouldWriteMarker = false",
+                    Convert.ToString(r.ShouldWriteMarker));
+                Check(!File.Exists(Migration.MarkerPath(root)),
+                    "★字符串类型：标记文件**未**写入");
+            }
+            finally { Clean(root); }
+
+            // 4d-2：数字而不是数组
+            root = NewRoot();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "config", "settings.json"),
+                    "{\"hiddenCategories\":123}", new UTF8Encoding(false));
+                WriteApps(root,
+                    new string[] { "cmd", @"C:\Windows\cmd.exe", "系统工具" });
+
+                Migration.Result r = Migration.Run(root, Settings.Load(root));
+                Check(!r.ShouldWriteMarker, "★数字类型：ShouldWriteMarker = false",
+                    Convert.ToString(r.ShouldWriteMarker));
+                Check(!File.Exists(Migration.MarkerPath(root)),
+                    "★数字类型：标记文件**未**写入");
+            }
+            finally { Clean(root); }
+
+            // 4d-3：对象而不是数组
+            root = NewRoot();
+            try
+            {
+                File.WriteAllText(Path.Combine(root, "config", "settings.json"),
+                    "{\"hiddenCategories\":{\"a\":1}}", new UTF8Encoding(false));
+                WriteApps(root,
+                    new string[] { "cmd", @"C:\Windows\cmd.exe", "系统工具" });
+
+                Migration.Result r = Migration.Run(root, Settings.Load(root));
+                Check(!r.ShouldWriteMarker, "★对象类型：ShouldWriteMarker = false",
+                    Convert.ToString(r.ShouldWriteMarker));
+                Check(!File.Exists(Migration.MarkerPath(root)),
+                    "★对象类型：标记文件**未**写入");
             }
             finally { Clean(root); }
             Console.WriteLine();

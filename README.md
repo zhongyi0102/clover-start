@@ -222,7 +222,7 @@ outerLayer（圆角裁剪）
 - 不在任何分类里显示，底部计数也不含它们
 - **搜索时仍能找到**（主动搜名字说明就是要找它）
 - 恢复：右键四叶草 →「隐藏用不到的 ▸」→「查看隐藏的项目」弹出列表，点哪个恢复哪个
-- 与「隐藏分类」（`settings.json` 的 `hiddenCategories`）可以叠加：一个是藏整类，一个是藏单条
+- 与「隐藏分类」的叠加已不存在：`hiddenCategories` 字段随分类系统下线移除，现在只有「逐条隐藏」一种方式
 
 ### 配置开关（config\settings.json）
 
@@ -236,7 +236,6 @@ outerLayer（圆角裁剪）
 | `hoverReveal` | `true` | 悬停唤出（全屏时鼠标移到按钮位置临时显示） |
 | `fullscreenDetect` | `true` | 全屏检测（全屏时自动隐藏悬浮按钮） |
 | `safeMode` | `false` | 强制安全模式 |
-| `hiddenCategories` | `[]` | 隐藏的分类 |
 | `navCollapsed` | `false` | 侧栏是否收起 |
 | `theme` | `"system"` | 主题：`light` / `dark` / `system` |
 | `glassOpacity` | `0` | 毛玻璃浓度 0-100（0 = 关闭） |
@@ -249,19 +248,19 @@ outerLayer（圆角裁剪）
 | `glassAccent` | `""` | 强调色 `#RRGGBB`（空 = 主题默认） |
 | `textContrastGuard` | `true` | **文字清晰保底**：背景太亮/太暗时自动在文字区域叠极淡的压暗/提亮，让对比度达到 WCAG。只影响渲染，不写配置 |
 
-> **共 20 个键**，按用途分四组：
+> **共 19 个键**，按用途分四组：
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
 > | **功能开关** | `taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode` | 6 |
 > | **状态与标记** | `hideTaskbar` / `desktopAutoCleanNoticeShown` | 2 |
 > | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `textContrastGuard` | 11 |
-> | **数据** | `hiddenCategories` | 1 |
+> | **数据** | （无） | 0 |
 >
 > **界面入口**：
 > - 右键四叶草直接有：`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `theme`
 > - **「设置 ▸ 外观…」窗口**：`glassOpacity` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `glassMode` / `glassPreset`
-> - 需要手改文件：`safeMode`（也可用 `--safe-mode`）/ `hiddenCategories`
+> - 需要手改文件：`safeMode`（也可用 `--safe-mode`）
 >
 > **出问题可以单独关掉对应功能，不用卸载。**
 >
@@ -635,7 +634,6 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\CatalogTest.cs` | 分类规则 / JsonIO / 每日备份 |
 | `tests\CategoryRulesTest.cs` | 外置规则表：优先级 / 匹配模式 / 归一化 / 热加载 / 坏文件回退 |
 | `tests\HiddenAppsTest.cs` | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
-| `tests\CategoriesTest.cs` | 分类顺序与重命名：只改显示名 / 不动内部名 |
 | `tests\ScanChainTest.cs` | 扫描链：便携条目保留 / 淘汰死条目 / 不累积重复 |
 | `tests\CategoryOverrideTest.cs` | 分类覆盖表：优先级 / 重扫保持 / 损坏回退 |
 | `tests\PinyinTest.cs` | 拼音匹配 |
@@ -1020,7 +1018,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `CatalogTest` | 76 | 分类规则、大小写、优先级、`ContainsName/Path`、`JsonIO` 往返、`.bak` 回退、每日备份与裁剪 |
 | `CategoryOverrideTest` | 30 | 分类覆盖表：优先级、重新加载后保持、路径大小写不敏感、文件损坏回退 |
 | `CategoryRulesTest` | 61 | 外置规则表：三层优先级、四种匹配模式、全角折叠、中文子串、热加载 |
-| `CategoriesTest` | 63 | 重命名只改显示名、顺序只重排已存在分类、上移下移边界、坏文件回退 |
 | `PinyinTest` | 37 | 单字拼音、首字母、全拼、中英混合、边界值、真实应用名覆盖率、性能 |
 | `SettingsTest` | 59 | 19 个键的默认值、老配置显式值不被覆盖、未知字段保留、损坏 JSON 回退、已删键原样保留 |
 | `WatcherTest` | 5 | 事件风暴下监听链路、Error 处理器已挂、`Dispose` 后无泄漏回调 |

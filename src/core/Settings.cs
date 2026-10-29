@@ -42,9 +42,9 @@ namespace Clover
         /// <summary>强制安全模式：不隐藏任务栏、不启用迷你任务栏、不移动桌面快捷方式、不做全屏钩子。</summary>
         public bool SafeMode = false;
 
-        /// <summary>要隐藏的分类（「系统工具」默认隐藏）。</summary>
-        public List<string> HiddenCategories = new List<string>();
-
+        // 注：`hiddenCategories` 字段已移除（分类系统下线）。
+        // 老 settings.json 里若还有这个键，会作为**未知字段原样保留**
+        // （Settings.Save 的保留逻辑），迁移代码直接读原始 JSON。
         /// <summary>
         /// 侧栏是否已收起。默认 false（展开）。
         ///
@@ -251,12 +251,6 @@ namespace Clover
                     try { s.TextContrastGuard = Convert.ToBoolean(v); }
                     catch { Log.Warn("settings.textContrastGuard 不是布尔值，已用默认 true"); }
                 }
-                // 旧配置没有这个键时保持字段默认值 false（不回退报错）
-                if (d.TryGetValue("hiddenCategories", out v) && v != null)
-                {
-                    // 循环变量名不能叫 s —— 它是外层的 Settings 对象
-                    foreach (string cat in JsonIO.AsStringArray(v)) s.HiddenCategories.Add(cat);
-                }
             }
             catch (Exception ex)
             {
@@ -303,7 +297,6 @@ namespace Clover
                 d["glassBrightness"] = GlassBrightness;
                 d["glassAccent"] = GlassAccent;
                 d["textContrastGuard"] = TextContrastGuard;
-                d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 JsonIO.WriteAtomic(path, ser.Serialize(d));

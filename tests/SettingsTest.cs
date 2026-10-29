@@ -35,7 +35,7 @@ namespace Clover
             Check(s1.TaskbarHiding == true, "默认允许隐藏任务栏");
             Check(s1.DesktopAutoClean == false, "默认**不**自动移走桌面快捷方式（本轮改为 false）");
             Check(s1.DesktopAutoCleanNoticeShown == false, "默认未展示过自动移走确认说明");
-            Check(s1.HiddenCategories.Count == 0, "默认没有隐藏分类");
+            // hiddenCategories 字段已删除（分类系统下线）—— 见下方「已删键作为未知字段保留」
             Check(s1.NavCollapsed == false, "默认侧栏展开（不收起）");
             Check(s1.Theme == "system", "默认主题跟随系统");
             Check(Settings.SafeModeActive == false, "默认不在安全模式");
@@ -131,7 +131,7 @@ namespace Clover
             s1.MiniTaskbar = false;
             s1.TaskbarHiding = false;
             s1.DesktopAutoClean = true;
-            s1.HiddenCategories.Add("系统工具");
+            // hiddenCategories 字段已删除，不再写入（老文件里的键会原样保留）
             s1.NavCollapsed = true;
             s1.Theme = "dark";
             s1.Save();
@@ -141,7 +141,11 @@ namespace Clover
             Check(s2.MiniTaskbar == false, "miniTaskbar 往返");
             Check(s2.TaskbarHiding == false, "taskbarHiding 往返");
             Check(s2.DesktopAutoClean == true, "desktopAutoClean 往返");
-            Check(s2.HiddenCategories.Count == 1 && s2.HiddenCategories[0] == "系统工具", "hiddenCategories 往返");
+            {
+                string rawCfg = File.ReadAllText(Path.Combine(r1, "config", "settings.json"), Encoding.UTF8);
+                Check(rawCfg.IndexOf("hiddenCategories", StringComparison.Ordinal) < 0,
+                    "★hiddenCategories 不再写入（字段已删）");
+            }
             Check(s2.NavCollapsed == true, "navCollapsed 往返（侧栏收起状态持久化）");
             Check(s2.Theme == "dark", "theme 往返（主题持久化）");
 

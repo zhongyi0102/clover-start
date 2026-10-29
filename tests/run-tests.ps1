@@ -76,7 +76,6 @@ $catalogDeps = @(
     (Join-Path $coreDir 'PinyinData.cs'),
     (Join-Path $coreDir 'CategoryOverrides.cs'),
     (Join-Path $coreDir 'CategoryRules.cs'),
-    (Join-Path $coreDir 'Categories.cs'),
     (Join-Path $coreDir 'HiddenApps.cs'),
     (Join-Path $coreDir 'NameMatch.cs'),
     (Join-Path $coreDir 'JsonIO.cs'),
@@ -104,8 +103,7 @@ $dedupDeps = @(
     (Join-Path $coreDir 'PortableScanner.cs'),
     (Join-Path $coreDir 'NativeScanner.cs'),
     (Join-Path $coreDir 'CategoryOverrides.cs'),
-    (Join-Path $coreDir 'CategoryRules.cs'),
-    (Join-Path $coreDir 'Categories.cs')
+    (Join-Path $coreDir 'CategoryRules.cs')
 )
 
 # 去重：多来源合并、路径匹配、AUMID、同名不同程序、空值、确定性
@@ -132,8 +130,6 @@ Invoke-Suite 'HiddenAppsTest' ($baseRefs + $webRef) `
       ($catalogDeps + @((Join-Path $testDir 'MigrationTest.cs')))
 
 # 分类顺序与重命名：只改显示名、不动内部名
-Invoke-Suite 'CategoriesTest' ($baseRefs + $webRef) `
-    ($catalogDeps + @((Join-Path $testDir 'CategoriesTest.cs')))
 
 # 扫描链：便携条目每轮不能被 NativeScanner 抹掉（真实 bug 回归）
 Invoke-Suite 'ScanChainTest' ($baseRefs + $webRef) `
@@ -215,7 +211,7 @@ Invoke-Suite 'FullscreenTest' $wpfRefs `
 
 # 搜索合并：主（MatchCatalog）+ 补充（Instant）的去重/排序/上限
 Invoke-Suite 'SearchMergeTest' $baseRefs `
-    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'Categories.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
+    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
 
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))

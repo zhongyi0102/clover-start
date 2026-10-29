@@ -157,15 +157,9 @@ namespace Clover
 
             foreach (AppItem a in c.Apps) EnsureOrder(c, a.Category);
 
-            // 应用用户自定义的分类顺序（config\categories.json）。
-            // 放在最后：此时 Order 里已经收齐了所有实际存在的分类，
-            // 重排才有意义。只改内部名的先后，不改分类归属。
-            try
-            {
-                Categories cats = Categories.Load(baseDir);
-                cats.ApplyOrder(c.Order);
-            }
-            catch { }
+            // 用户自定义分类顺序（config\categories.json）已不再应用：
+            // 界面只剩「常用」「全部」两个虚拟标签，Order 只用于内部排序，
+            // 用户改的顺序没有可展示的位置。Categories 类已删除。
 
             return c;
         }

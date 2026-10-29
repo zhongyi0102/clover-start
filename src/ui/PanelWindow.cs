@@ -134,7 +134,7 @@ namespace Clover
         HiddenApps hiddenApps;
 
         /// <summary>分类的顺序与显示名（右键分类「重命名 / 上移下移」写入）。</summary>
-        Categories categories;
+        // Categories categories 字段已删除（分类系统下线，无调用方）
 
         /// <summary>
         /// 「隐藏的项目」虚拟分类的标识。
@@ -190,9 +190,11 @@ namespace Clover
             this.settings = settings ?? Settings.Load(baseDir);
             this.overrides = CategoryOverrides.Load(baseDir);
             this.hiddenApps = HiddenApps.Load(baseDir);
-            this.categories = Categories.Load(baseDir);
             catalog = Catalog.Load(baseDir);            usage = UsageStore.Load(baseDir);
-            hiddenCats = this.settings.HiddenCategories;
+            // 分类系统已下线：settings 里不再有 hiddenCategories，
+            // 逐条隐藏走 hiddenApps（HiddenApps.Load 已在上面加载）。
+            // HideCategories 仍保留（通用 API + 有测试），但传空列表 = 不过滤。
+            hiddenCats = new List<string>();
             catalog.ApplyUsage(usage);
             catalog.HideCategories(hiddenCats);
             layoutPath = Path.Combine(baseDir, "config", "layout.json");
