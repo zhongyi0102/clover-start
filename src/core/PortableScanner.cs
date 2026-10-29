@@ -362,6 +362,59 @@ namespace Clover
             return false;
         }
 
+        /// <summary>
+        /// 判定是不是「**卸载入口**」（只拦卸载，不拦安装器/更新器）。
+        ///
+        /// 与 IsJunk 的区别（用户明确要求分开）：
+        ///   · IsJunk 是给**便携目录扫描**用的，按文件名关键词拦一切
+        ///     unins/setup/install/update —— 那套规则对开始菜单 .lnk 太激进，
+        ///     Windows Update、Visual Studio Installer、GeForce Experience
+        ///     这类**用户要用的入口**会被误拦
+        ///   · 本方法只拦两类，都不碰「名字里含 install/setup/update」的正常软件：
+        ///
+        ///     ① 目标 exe 文件名以 unins / uninst / uninstall 开头
+        ///        （如 Uninstall-Anaconda3.exe、uninstall.exe）
+        ///     ② 快捷方式/显示名以「卸载」或 Uninstall 开头
+        ///        （如「卸载微信」）
+        ///
+        /// 明确**不拦**（实测这些是正常入口）：
+        ///   Visual Studio Installer / MySQL Installer - Community /
+        ///   Windows Update / GeForce Experience Update /
+        ///   Geek Uninstaller（文件名 geek.exe，且名字不以「卸载/Uninstall」开头）
+        /// </summary>
+        /// <param name="displayName">显示名（快捷方式名 / DisplayName），可为 null</param>
+        /// <param name="exePath">目标 exe 完整路径，可为 null（只有名字时传 null）</param>
+        public static bool IsUninstallEntry(string displayName, string exePath)
+        {
+            try
+            {
+                // ---- ① 目标 exe 文件名以 unins / uninst / uninstall 开头 ----
+                if (!string.IsNullOrWhiteSpace(exePath))
+                {
+                    string fn = "";
+                    try { fn = Path.GetFileNameWithoutExtension(exePath); } catch { }
+                    if (!string.IsNullOrEmpty(fn))
+                    {
+                        string f = fn.ToLowerInvariant();
+                        if (f.StartsWith("unins")) return true;
+                        if (f.StartsWith("uninst")) return true;
+                        if (f.StartsWith("uninstall")) return true;
+                    }
+                }
+
+                // ---- ② 显示名以「卸载」或 Uninstall 开头 ----
+                if (!string.IsNullOrWhiteSpace(displayName))
+                {
+                    string n = displayName.Trim();
+                    if (n.StartsWith("卸载", StringComparison.Ordinal)) return true;
+                    if (n.StartsWith("Uninstall", StringComparison.OrdinalIgnoreCase)) return true;
+                    if (n.StartsWith("Uninstall ", StringComparison.OrdinalIgnoreCase)) return true;
+                }
+
+                return false;
+            }
+            catch { return false; }
+        }
         static bool Matches(string text, string[] parts)
         {
             if (string.IsNullOrEmpty(text)) return false;

@@ -107,6 +107,10 @@ namespace Clover
                         {
                             string name = Path.GetFileNameWithoutExtension(file);
                             if (IsExcluded(name)) continue;
+                            // 卸载入口（名字以「卸载」/Uninstall 开头，或目标 exe 以 unins* 开头）
+                            // 只拦卸载，不拦名字含 install/setup/update 的正常入口
+                            // （Visual Studio Installer / Windows Update 等要能用）
+                            if (PortableScanner.IsUninstallEntry(name, null)) continue;
                             if (!seenPaths.Add(file)) continue;
                             if (!seenNames.Add(name.ToLowerInvariant())) continue;
                             if (!IsLiveLnk(file)) continue;

@@ -23,6 +23,16 @@ namespace Clover
         public const string SourceStartMenu = "StartMenu";
         public const string SourceRegistry = "Registry";
         public const string SourceStore = "Store";
+        /// <summary>
+        /// 出现在 shell:AppsFolder 里、但**不是** MSIX/UWP 包的传统软件。
+        ///
+        /// 例子：Chrome（AUMID 就是字面量 "Chrome"）、
+        /// Microsoft.Office.EXCEL.EXE.15、Microsoft.Windows.ControlPanel。
+        ///
+        /// 为什么单独一个来源值：它们不加 ·商店 后缀（不是商店应用），
+        /// 但启动方式仍是 explorer.exe shell:AppsFolder\&lt;AUMID&gt;。
+        /// </summary>
+        public const string SourceAppsFolder = "AppsFolder";
         public const string SourcePortable = "Portable";
 
         /// <summary>商店应用路径的前缀。</summary>

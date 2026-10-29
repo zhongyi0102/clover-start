@@ -49,6 +49,7 @@ namespace Clover
             public int MergedByNamePublisher; // 因名称+发布者被合并
             public int MergedByNameOnly;      // 因名称相同被合并（双方无发布者）
             public int KeptStoreSeparate;     // 商店应用保持独立
+            public int SkippedStoreDuplicate; // 非真商店 AppsFolder 条目，Catalog 已有对应条目
             public int DroppedNoName;         // 无名称被丢弃
             public int DroppedUnlaunchable;   // 不可启动被丢弃
 
@@ -70,6 +71,7 @@ namespace Clover
                      + " | 名称+发布者合并 " + MergedByNamePublisher
                      + " | 名称兜底合并 " + MergedByNameOnly
                      + " | 商店独立 " + KeptStoreSeparate
+                     + " | 非商店AppsFolder重复 " + SkippedStoreDuplicate
                      + " | 丢弃无名称 " + DroppedNoName
                      + " | 丢弃不可启动 " + DroppedUnlaunchable
                      + "\n      lnk 解析: 实际 " + LnkResolved + " 次 / 缓存命中 " + LnkCacheHits
@@ -277,11 +279,18 @@ namespace Clover
                 }
             }
 
-            // ---------- 3. 商店应用：**不跨来源合并** ----------
+            // ---------- 3. shell:AppsFolder 条目 ----------
             //
-            // 用户明确要求：同名的商店版和安装版是两个不同的软件，各留一条。
-            // 所以商店应用只在自己内部按 AUMID 去重（StoreAppScanner 已经做了），
-            // 这里直接追加，不和 byPath / byNamePublisher 里的条目合并。
+            // **分两类处理，分类与去重分开**（用户明确要求）：
+            //
+            // A. 真商店应用（IsRealStore，AUMID 形如 <PackageFamilyName>!<AppId>）
+            //    → 收录，Source = Store（界面加 ·商店 后缀）
+            //    → 不跨来源合并：同名的商店版和安装版是两个不同的软件
+            //
+            // B. 非真商店（AUMID 不是包族名格式，如 Chrome / Microsoft.Office.EXCEL.EXE.15）
+            //    → 它们其实是传统软件在 AppsFolder 里的入口，开始菜单/注册表多半已有
+            //    → 按「名称归一化」或「目标路径」匹配已有条目：匹配上就跳过（避免重复）
+            //    → 匹配不上才收录，Source = AppsFolder（界面**不加** ·商店 后缀）
             if (store != null)
             {
                 foreach (StoreAppScanner.Entry s in store)
@@ -290,35 +299,71 @@ namespace Clover
                     {
                         if (s == null || string.IsNullOrWhiteSpace(s.DisplayName)) continue;
                         if (string.IsNullOrWhiteSpace(s.Aumid)) continue;
-                        stats.StoreCount++;
 
-                        AppItem item = new AppItem();
-                        item.Name = s.DisplayName;
-                        item.Path = s.LaunchPath;
-                        item.Aumid = s.Aumid;
-                        item.Source = AppPaths.SourceStore;
-                        item.Launchable = true;
-
-                        // 检查是否已经在结果里（比如 apps.json 里已有该商店应用）
-                        string normPath = AppPaths.Normalize(item.Path);
-                        int existing;
-                        if (byPath.TryGetValue(normPath, out existing))
+                        // ---- A. 真商店 ----
+                        if (s.IsRealStore)
                         {
-                            // 已有同 AUMID 的条目 → 保留开始菜单那条（它可能有使用记录）
-                            AppItem cand = result[existing];
-                            if (cand != null && string.IsNullOrEmpty(cand.Aumid))
-                                cand.Aumid = item.Aumid;
-                            stats.KeptStoreSeparate++;
+                            stats.StoreCount++;
+
+                            AppItem item = new AppItem();
+                            item.Name = s.DisplayName;
+                            item.Path = s.LaunchPath;
+                            item.Aumid = s.Aumid;
+                            item.Source = AppPaths.SourceStore;
+                            item.Launchable = true;
+
+                            // 同 AUMID 已在结果里（apps.json 里已有该商店应用）→ 保留那条
+                            string normPath = AppPaths.Normalize(item.Path);
+                            int existing;
+                            if (byPath.TryGetValue(normPath, out existing))
+                            {
+                                AppItem cand = result[existing];
+                                if (cand != null && string.IsNullOrEmpty(cand.Aumid))
+                                    cand.Aumid = item.Aumid;
+                                stats.KeptStoreSeparate++;
+                                continue;
+                            }
+
+                            int ni = result.Count;
+                            result.Add(item);
+                            byPath[normPath] = ni;
                             continue;
                         }
 
-                        int ni = result.Count;
-                        result.Add(item);
-                        byPath[normPath] = ni;
+                        // ---- B. 非真商店：先查是否已有对应条目 ----
+                        stats.StoreCount++;
+                        if (HasExistingEntry(result, byName, s.DisplayName))
+                        {
+                            stats.SkippedStoreDuplicate++;
+                            continue;
+                        }
+
+                        AppItem legacy = new AppItem();
+                        legacy.Name = s.DisplayName;
+                        legacy.Path = s.LaunchPath;
+                        legacy.Aumid = s.Aumid;
+                        legacy.Source = AppPaths.SourceAppsFolder;   // 不加 ·商店
+                        legacy.Launchable = true;
+
+                        int li = result.Count;
+                        result.Add(legacy);
+                        byPath[AppPaths.Normalize(legacy.Path)] = li;
+
+                        string ln = NameMatch.Normalize(legacy.Name);
+                        if (!string.IsNullOrEmpty(ln))
+                        {
+                            List<int> lst;
+                            if (!byName.TryGetValue(ln, out lst))
+                            {
+                                lst = new List<int>();
+                                byName[ln] = lst;
+                            }
+                            lst.Add(li);
+                        }
                     }
                     catch (Exception ex)
                     {
-                        Log.Warn("去重: 处理商店条目失败 " + (s == null ? "(null)" : s.DisplayName) + ": " + ex.Message);
+                        Log.Warn("去重: 处理 AppsFolder 条目失败 " + (s == null ? "(null)" : s.DisplayName) + ": " + ex.Message);
                     }
                 }
             }
@@ -351,6 +396,45 @@ namespace Clover
             stats.FinalCount = result.Count;
             return result;
         }
+
+            /// <summary>
+            /// 结果里是否已有「同一个软件」的条目（用于过滤非真商店的 AppsFolder 入口）。
+            ///
+            /// 只按**归一化名称**匹配，不按目标路径：
+            ///   · 非真商店条目的 Path 是 shell:AppsFolder\Chrome，没有文件目标可解析
+            ///   · 名称匹配足够可靠（Chrome ↔ Google Chrome 这种差异靠 Contains 兜住）
+            ///
+            /// 为什么不用「目标路径」：shell 路径无法解析出 exe，
+            /// 强行解析会误伤（把 Chrome 的 AppsFolder 入口当成独立软件）。
+            /// </summary>
+            static bool HasExistingEntry(List<AppItem> result, Dictionary<string, List<int>> byName, string displayName)
+            {
+                try
+                {
+                    string n = NameMatch.Normalize(displayName);
+                    if (string.IsNullOrEmpty(n)) return false;
+
+                    // 精确名称命中
+                    List<int> same;
+                    if (byName.TryGetValue(n, out same) && same.Count > 0) return true;
+
+                    // 包含关系兜底（Google Chrome vs Chrome）
+                    foreach (AppItem a in result)
+                    {
+                        if (a == null) continue;
+                        if (AppPaths.IsShellPath(a.Path)) continue;   // 只和真实文件条目比
+                        string an = NameMatch.Normalize(a.Name);
+                        if (string.IsNullOrEmpty(an)) continue;
+                        if (an == n) return true;
+                        if (n.Length >= 4 && an.Length >= 4 &&
+                            (an.IndexOf(n, StringComparison.Ordinal) >= 0 ||
+                             n.IndexOf(an, StringComparison.Ordinal) >= 0))
+                            return true;
+                    }
+                    return false;
+                }
+                catch { return false; }
+            }
 
         /// <summary>
         /// 把条目登记进三个索引。

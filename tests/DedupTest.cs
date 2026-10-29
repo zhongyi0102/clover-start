@@ -45,6 +45,9 @@ namespace Clover
             TestNameFallbackBothNoPublisher();
             TestLnkResolveFailureKeepsEntry();
             TestShortcutResolverCache();
+            TestUninstallEntry();
+            TestInstallerPath();
+            TestSameSourceNotMerged();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -122,32 +125,93 @@ namespace Clover
         // ---------- 4. 商店应用不跨来源合并 ----------
         static void TestStoreSeparate()
         {
-            Console.WriteLine("--- 4. 商店应用独立 ---");
+            Console.WriteLine("--- 4. shell:AppsFolder 条目分两类处理 ---");
 
-            List<AppItem> start = new List<AppItem>();
-            start.Add(Make("计算器", @"C:\Windows\System32\calc.exe", AppPaths.SourceStartMenu));
-
-            List<StoreAppScanner.Entry> store = new List<StoreAppScanner.Entry>();
-            StoreAppScanner.Entry s = new StoreAppScanner.Entry();
-            s.DisplayName = "计算器";
-            s.Aumid = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
-            s.LaunchPath = AppPaths.FromAumid(s.Aumid);
-            store.Add(s);
-
-            AppDedup.Stats st = new AppDedup.Stats();
-            List<AppItem> result = AppDedup.Merge(start, null, store, st);
-
-            Check(result.Count == 2, "商店版与传统版各留一条", "实际 " + result.Count);
-            Check(st.StoreCount == 1, "统计: 商店 1 条", "实际 " + st.StoreCount);
-
-            // 检查两条的来源不同
-            bool hasStore = false, hasMenu = false;
-            foreach (AppItem x in result)
+            // A. 真商店应用：不跨来源合并，各留一条
             {
-                if (x.Source == AppPaths.SourceStore) hasStore = true;
-                if (x.Source == AppPaths.SourceStartMenu) hasMenu = true;
+                List<AppItem> start = new List<AppItem>();
+                start.Add(Make("计算器", @"C:\Windows\System32\calc.exe", AppPaths.SourceStartMenu));
+
+                List<StoreAppScanner.Entry> store = new List<StoreAppScanner.Entry>();
+                StoreAppScanner.Entry s = new StoreAppScanner.Entry();
+                s.DisplayName = "计算器";
+                s.Aumid = "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App";
+                s.LaunchPath = AppPaths.FromAumid(s.Aumid);
+                s.IsRealStore = true;
+                store.Add(s);
+
+                AppDedup.Stats st = new AppDedup.Stats();
+                List<AppItem> result = AppDedup.Merge(start, null, store, st);
+
+                Check(result.Count == 2, "真商店：与传统版各留一条", "实际 " + result.Count);
+                bool hasStore = false, hasMenu = false;
+                foreach (AppItem x in result)
+                {
+                    if (x.Source == AppPaths.SourceStore) hasStore = true;
+                    if (x.Source == AppPaths.SourceStartMenu) hasMenu = true;
+                }
+                Check(hasStore && hasMenu, "真商店：来源是 Store + StartMenu");
             }
-            Check(hasStore && hasMenu, "两条来源分别是 Store 和 StartMenu");
+
+            // B. 非真商店（如 Chrome，AUMID 是字面量）：Catalog 已有同名条目 → 跳过
+            {
+                List<AppItem> start = new List<AppItem>();
+                start.Add(Make("Google Chrome", @"C:\Program Files\Chrome\chrome.exe", AppPaths.SourceStartMenu));
+
+                List<StoreAppScanner.Entry> store = new List<StoreAppScanner.Entry>();
+                StoreAppScanner.Entry s = new StoreAppScanner.Entry();
+                s.DisplayName = "Google Chrome";
+                s.Aumid = "Chrome";                       // 字面量，不是包族名
+                s.LaunchPath = AppPaths.FromAumid(s.Aumid);
+                s.IsRealStore = false;
+                store.Add(s);
+
+                AppDedup.Stats st = new AppDedup.Stats();
+                List<AppItem> result = AppDedup.Merge(start, null, store, st);
+
+                Check(result.Count == 1, "★非商店 AUMID + 已有同名条目 → 跳过", "实际 " + result.Count);
+                Check(st.SkippedStoreDuplicate == 1, "统计: 非商店重复 1", "实际 " + st.SkippedStoreDuplicate);
+                Check(result[0].Source == AppPaths.SourceStartMenu, "保留的是开始菜单那条", result[0].Source);
+            }
+
+            // C. 非真商店 + Catalog 没有对应条目 → 收，但不加 ·商店
+            {
+                List<StoreAppScanner.Entry> store = new List<StoreAppScanner.Entry>();
+                StoreAppScanner.Entry s = new StoreAppScanner.Entry();
+                s.DisplayName = "运行";
+                s.Aumid = "Microsoft.Windows.Shell.RunDialog";
+                s.LaunchPath = AppPaths.FromAumid(s.Aumid);
+                s.IsRealStore = false;
+                store.Add(s);
+
+                AppDedup.Stats st = new AppDedup.Stats();
+                List<AppItem> result = AppDedup.Merge(null, null, store, st);
+
+                Check(result.Count == 1, "非商店 AUMID + 无对应条目 → 收录", "实际 " + result.Count);
+                if (result.Count == 1)
+                {
+                    Check(result[0].Source == AppPaths.SourceAppsFolder,
+                        "★来源是 AppsFolder（不是 Store，界面不加 ·商店）", result[0].Source);
+                    Check(result[0].Source != AppPaths.SourceStore, "★不会被标成商店应用");
+                }
+            }
+
+            // D. LooksLikePackageAumid 判定
+            {
+                Check(StoreAppScanner.LooksLikePackageAumid("Claude_pzs8sxrjxfjjc!Claude"),
+                    "Claude_pzs8sxrjxfjjc!Claude → 真商店");
+                Check(StoreAppScanner.LooksLikePackageAumid("MSTeams_8wekyb3d8bbwe!MSTeams"),
+                    "MSTeams_8wekyb3d8bbwe!MSTeams → 真商店");
+                Check(StoreAppScanner.LooksLikePackageAumid("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
+                    "计算器 → 真商店");
+                Check(!StoreAppScanner.LooksLikePackageAumid("Chrome"), "★Chrome → 不是真商店");
+                Check(!StoreAppScanner.LooksLikePackageAumid("Microsoft.Office.EXCEL.EXE.15"),
+                    "★Microsoft.Office.EXCEL.EXE.15 → 不是真商店");
+                Check(!StoreAppScanner.LooksLikePackageAumid("Microsoft.Windows.ControlPanel"),
+                    "★控制面板 → 不是真商店");
+                Check(!StoreAppScanner.LooksLikePackageAumid(""), "空串 → 不是");
+                Check(!StoreAppScanner.LooksLikePackageAumid(null), "null → 不是");
+            }
             Console.WriteLine();
         }
 
@@ -411,6 +475,91 @@ namespace Clover
                 Check(ShortcutResolver.CacheHits >= 1, "缓存命中计数增加");
             }
             finally { CleanDir(dir); }
+            Console.WriteLine();
+        }
+
+        // ---------- 10. 卸载入口判定（IsUninstallEntry）----------
+        //
+        // 用户明确要求：只拦「卸载」，不拦「安装器/更新器」。
+        // Windows Update / Visual Studio Installer 这类用户要用的入口不能被误拦。
+        static void TestUninstallEntry()
+        {
+            Console.WriteLine("--- 10. 卸载入口判定 ---");
+
+            // 应该被拦
+            Check(PortableScanner.IsUninstallEntry("卸载微信", null), "★「卸载微信」被拦");
+            Check(PortableScanner.IsUninstallEntry("Uninstall Mineradio", null), "★「Uninstall xxx」被拦");
+            Check(PortableScanner.IsUninstallEntry("Steam", @"D:\Program Files\steam\uninstall.exe"),
+                "★目标 uninstall.exe 被拦（Steam 的注册表条目）");
+            Check(PortableScanner.IsUninstallEntry("Anaconda3", @"D:\ProgramData\anaconda3\Uninstall-Anaconda3.exe"),
+                "★Uninstall-Anaconda3.exe 被拦");
+            Check(PortableScanner.IsUninstallEntry("x", @"C:\a\unins000.exe"), "unins000.exe 被拦");
+            Check(PortableScanner.IsUninstallEntry("x", @"C:\a\uninst.exe"), "uninst.exe 被拦");
+
+            // 不该被拦（用户要用的入口）
+            Check(!PortableScanner.IsUninstallEntry("Visual Studio Installer", @"C:\VS\vs_installer.exe"),
+                "★Visual Studio Installer 不被拦");
+            Check(!PortableScanner.IsUninstallEntry("Windows Update", null),
+                "★Windows Update 不被拦");
+            Check(!PortableScanner.IsUninstallEntry("Geek Uninstaller", @"D:\geek\geek.exe"),
+                "★Geek Uninstaller 不被拦（文件名 geek.exe，名字不以「卸载/Uninstall」开头）");
+            Check(!PortableScanner.IsUninstallEntry("MySQL Installer - Community",
+                @"C:\Program Files (x86)\MySQL\MySQL Installer for Windows\MySQLInstaller.exe"),
+                "★MySQL Installer 不被拦（名字不以「卸载」开头，exe 不以 unins 开头）");
+            Check(!PortableScanner.IsUninstallEntry("Windows PowerShell", @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+                "普通程序不被拦");
+            Check(!PortableScanner.IsUninstallEntry(null, null), "null 不拦");
+            Check(!PortableScanner.IsUninstallEntry("", ""), "空串不拦");
+            Console.WriteLine();
+        }
+
+        // ---------- 11. RegistryScanner 安装包路径排除（B2）----------
+        static void TestInstallerPath()
+        {
+            Console.WriteLine("--- 11. 安装包路径排除 ---");
+
+            // 应该被排除
+            Check(RegistryScanner.IsInstallerPath(
+                @"C:\Users\32532\AppData\Local\Package Cache\{1da2e09b-199c-4def-9a99-93a8c1b8ddf2}\python-3.11.9-amd64.exe"),
+                "★Package Cache 里的 python-3.11.9-amd64.exe 被排除");
+            Check(RegistryScanner.IsInstallerPath(@"C:\Windows\Installer\{GUID}\setup.exe"),
+                "Windows\\Installer 下的被排除");
+            Check(RegistryScanner.IsInstallerPath(@"D:\a\app-x64.exe"), "*-x64.exe 被排除");
+            Check(RegistryScanner.IsInstallerPath(@"D:\a\app-amd64.exe"), "*-amd64.exe 被排除");
+            Check(RegistryScanner.IsInstallerPath(@"D:\a\setup.exe"), "setup.exe 被排除");
+            Check(RegistryScanner.IsInstallerPath(@"D:\a\uninstall.exe"), "uninstall.exe 被排除");
+            Check(RegistryScanner.IsInstallerPath(@"D:\a\Uninstall-Anaconda3.exe"), "Uninstall-Anaconda3.exe 被排除");
+
+            // 不该被排除
+            Check(!RegistryScanner.IsInstallerPath(@"D:\Program Files\Microsoft VS Code\Code.exe"),
+                "★正常的 Code.exe 不排除");
+            Check(!RegistryScanner.IsInstallerPath(@"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+                "★正常的 chrome.exe 不排除");
+            Check(!RegistryScanner.IsInstallerPath(@"D:\Program Files\7-Zip\7zFM.exe"),
+                "正常的 7zFM.exe 不排除");
+            Check(!RegistryScanner.IsInstallerPath(null), "null 不排除");
+            Console.WriteLine();
+        }
+
+        // ---------- 12. 同来源多入口不被合并（固化核对结论）----------
+        static void TestSameSourceNotMerged()
+        {
+            Console.WriteLine("--- 12. 同来源多入口不被合并 ---");
+
+            // 实测场景：Anaconda Prompt / Command Prompt / Node.js command prompt
+            // 三个 .lnk 都指向 cmd.exe，但它们必须各自保留（不同用途的入口）。
+            string cmd = @"C:\Windows\System32\cmd.exe";
+            List<AppItem> start = new List<AppItem>();
+            start.Add(Make("Anaconda Prompt", cmd, AppPaths.SourceStartMenu));
+            start.Add(Make("Command Prompt", cmd, AppPaths.SourceStartMenu));
+            start.Add(Make("Node.js command prompt", cmd, AppPaths.SourceStartMenu));
+
+            AppDedup.Stats st = new AppDedup.Stats();
+            List<AppItem> result = AppDedup.Merge(start, null, null, st);
+
+            Check(result.Count == 3, "★同来源 3 个入口指向同一 exe → 全部保留",
+                "实际 " + result.Count);
+            Check(st.MergedByPath == 0, "统计: 同来源不按路径合并", "实际 " + st.MergedByPath);
             Console.WriteLine();
         }
 

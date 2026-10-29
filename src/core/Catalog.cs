@@ -252,6 +252,14 @@ namespace Clover
                     if (string.IsNullOrEmpty(e.LaunchPath))
                         e.LaunchPath = AppPaths.FromAumid(e.Aumid);
 
+                    // isRealStore：老文件没有这个键时按 AUMID 格式推断（向后兼容）
+                    e.PackageFamilyName = GetStr(m, "packageFamilyName");
+                    object rv;
+                    if (m.TryGetValue("isRealStore", out rv) && rv != null)
+                        e.IsRealStore = Convert.ToBoolean(rv);
+                    else
+                        e.IsRealStore = StoreAppScanner.LooksLikePackageAumid(e.Aumid);
+
                     list.Add(e);
                 }
             }

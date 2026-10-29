@@ -236,12 +236,19 @@ namespace Clover
                     return e;   // 仍然返回（写进 json，标记 Launchable=false）
                 }
 
-                // ---- 过滤 5：解析出的 exe 是卸载器/安装器/更新器 ----
-                // 复用 PortableScanner 的规则，不另写一套
-                if (PortableScanner.IsJunk(Path.GetFileName(exe), exe))
+                // ---- 过滤 5：卸载入口 ----
+                //
+                // 只拦「卸载」，不拦「安装器/更新器」（用户明确要求）：
+                //   · 目标 exe 以 unins / uninst / uninstall 开头
+                //   · DisplayName 以「卸载」或 Uninstall 开头
+                //
+                // 为什么不用 PortableScanner.IsJunk：那套规则是给便携目录设计的，
+                // 按文件名关键词拦一切 install/setup/update —— 对注册表条目太激进，
+                // Visual Studio Installer、Windows Update 这类用户要用的入口会被误拦。
+                if (PortableScanner.IsUninstallEntry(e.DisplayName, exe))
                 {
                     e.Launchable = false;
-                    e.SkipReason = "exe 是卸载器/安装器";
+                    e.SkipReason = "卸载入口";
                     stats.SkippedJunkExe++;
                     return e;
                 }
@@ -263,19 +270,100 @@ namespace Clover
         /// </summary>
         static string ResolveLaunchPath(Entry e)
         {
+            // 三个候选按顺序尝试；每个都要过「安装包过滤」，
+            // 被排除就用下一个候选。
+            //
+            // 为什么必须过滤：实测 Python 3.11.9 的 DisplayIcon 指向
+            //   C:\Users\...\Package Cache\{1da2e09b-...}\python-3.11.9-amd64.exe
+            // 那是**安装包**，不是已安装的解释器。点下去会重新运行安装程序。
+            // 同理 Steam 的注册表条目指向 uninstall.exe —— 点「Steam」会卸载 Steam。
+
             // ---- 方式 1：DisplayIcon ----
             string fromIcon = CleanIconPath(e.DisplayIcon);
-            if (fromIcon != null && File.Exists(fromIcon)) return fromIcon;
+            if (fromIcon != null && File.Exists(fromIcon) && !IsInstallerPath(fromIcon))
+                return fromIcon;
 
             // ---- 方式 2：InstallLocation 下与名称最匹配的 exe ----
             string fromLoc = FindExeInInstallLocation(e.InstallLocation, e.DisplayName);
-            if (fromLoc != null) return fromLoc;
+            if (fromLoc != null && !IsInstallerPath(fromLoc)) return fromLoc;
 
             // ---- 方式 3：App Paths 注册表 ----
             string fromAppPaths = FindInAppPaths(e.DisplayName);
-            if (fromAppPaths != null) return fromAppPaths;
+            if (fromAppPaths != null && !IsInstallerPath(fromAppPaths)) return fromAppPaths;
 
             return null;
+        }
+
+        /// <summary>
+        /// 这个路径是不是「安装包 / 卸载器」（不该当启动路径）。
+        ///
+        /// 两类判断：
+        ///   A. **所在目录**是安装缓存：Package Cache / Windows\Installer /
+        ///      任何含 {GUID} 的目录 —— 这些目录里放的是 MSI 缓存和安装包
+        ///   B. **文件名**是安装包：*-amd64.exe / *-x64.exe / *setup*.exe /
+        ///      *install*.exe / uninstall*.exe / unins*.exe
+        ///
+        /// 实测要拦住的：
+        ///   ...\Package Cache\{1da2e09b-...}\python-3.11.9-amd64.exe   ← A+B
+        ///   D:\Program Files\steam\uninstall.exe                        ← B
+        ///   D:\ProgramData\anaconda3\Uninstall-Anaconda3.exe            ← B
+        ///
+        /// 不能误伤的：
+        ///   C:\Program Files\MySQL\MySQL Installer for Windows\MySQLInstaller.exe
+        ///     —— 这个确实含 install，但它是 MySQL 的**管理入口**，用户要能用。
+        ///     不过它是注册表条目吗？实测 MySQL Installer 走的是开始菜单 .lnk，
+        ///     不经过这里；即使经过，本轮用户明确「不拦名字里含 install 的其他条目」，
+        ///     所以文件名规则只拦 unins/uninst/uninstall 开头 + *-amd64/-x64 结尾 + setup。
+        /// </summary>
+        public static bool IsInstallerPath(string path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path)) return false;
+                string p = path.Trim().Trim('"');
+
+                // ---- A. 目录判断 ----
+                string dir = "";
+                try { dir = Path.GetDirectoryName(p) ?? ""; } catch { }
+                if (dir.Length > 0)
+                {
+                    string d = dir.ToLowerInvariant();
+
+                    if (d.IndexOf("\\package cache\\") >= 0) return true;
+                    if (d.IndexOf("\\windows\\installer") >= 0) return true;
+                    if (d.IndexOf("\\installer\\") >= 0) return true;
+
+                    // 任何含 {GUID} 的目录（MSI 缓存目录的典型形态）
+                    int lb = d.IndexOf('{');
+                    if (lb >= 0 && d.IndexOf('}', lb) > lb) return true;
+                }
+
+                // ---- B. 文件名判断 ----
+                string fn = "";
+                try { fn = Path.GetFileNameWithoutExtension(p); } catch { }
+                if (string.IsNullOrEmpty(fn)) return false;
+                string f = fn.ToLowerInvariant();
+
+                // 卸载器：unins / uninst / uninstall 开头
+                if (f.StartsWith("unins")) return true;
+                if (f.StartsWith("uninst")) return true;
+                if (f.StartsWith("uninstall")) return true;
+
+                // 安装包：*-amd64 / *-x64 / *-x86 / *-arm64 结尾
+                if (f.EndsWith("-amd64")) return true;
+                if (f.EndsWith("-x64")) return true;
+                if (f.EndsWith("-x86")) return true;
+                if (f.EndsWith("-arm64")) return true;
+
+                // setup / installer 结尾（精确结尾，不拦名字中间含这些词的）
+                if (f.EndsWith("setup")) return true;
+                if (f.EndsWith("_setup")) return true;
+                if (f.EndsWith("-setup")) return true;
+                if (f.EndsWith("installer")) return true;
+
+                return false;
+            }
+            catch { return false; }
         }
 
         /// <summary>
