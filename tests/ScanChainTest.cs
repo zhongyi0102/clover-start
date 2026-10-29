@@ -185,6 +185,28 @@ namespace Clover
                 finally { try { Directory.Delete(root, true); } catch { } }
             }
 
+            // ================= 3b. 死链清理不误删商店应用 =================
+            //
+            // shell:AppsFolder\<AUMID> 不是文件路径，File.Exists 永远 false。
+            // 如果不特殊处理，FilterDeadLinks 会把所有商店应用当死链清掉。
+            {
+                string root = NewRoot();
+                try
+                {
+                    string alive = MakeExe(root, @"ext\Portable\E\e.exe");
+                    string shell = AppPaths.FromAumid("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+                    WriteApps(root,
+                        new string[] { "Alive", alive, "其他", PortableScanner.FolderMarker },
+                        new string[] { "计算器", shell, "其他", "Store" });
+
+                    NativeScanner.Scan(root);
+
+                    Check(HasName(root, "Alive"), "普通条目保留");
+                    Check(HasName(root, "计算器"), "★商店应用不被死链清理误删");
+                }
+                finally { try { Directory.Delete(root, true); } catch { } }
+            }
+
             // ================= 4. 不会重复添加 =================
             {
                 string root = NewRoot();

@@ -67,6 +67,23 @@ namespace Clover
                 ok = PanelWindow.TryBuildExplorerArgs(null, out args, out err);
                 Check(!ok, "null 路径返回 false");
 
+                // ---------- 4b. 商店应用（shell 路径）→ false + 专门提示 ----------
+                //
+                // shell:AppsFolder\<AUMID> 是 Shell 命名空间路径，
+                // 不对应任何文件/目录。必须返回 false 并给出"商店应用没有文件位置"
+                // 的提示，而不是让 Path.GetDirectoryName 拼出非法参数。
+                string shellPath = AppPaths.FromAumid("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+                ok = PanelWindow.TryBuildExplorerArgs(shellPath, out args, out err);
+                Check(!ok, "商店应用路径返回 false");
+                Check(args == null, "商店应用不给 explorer 参数");
+                Check(!string.IsNullOrEmpty(err) && err.IndexOf("商店应用", StringComparison.Ordinal) >= 0,
+                    "提示里说明是商店应用", err ?? "null");
+
+                ok = PanelWindow.TryBuildExplorerArgs(@"shell:AppsFolder\SomeApp", out args, out err);
+                Check(!ok, "裸 shell: 路径也返回 false");
+                Check(!string.IsNullOrEmpty(err), "裸 shell: 路径有提示");
+
+
                 // ---------- 5. 大小写不敏感识别 .lnk ----------
                 // 注意：伪造的 .lnk 本身是"存在的文件"，解析目标失败后会退回定位 .lnk 自身，
                 // 所以走 /select 分支（这是正确行为：文件存在就选中它）。

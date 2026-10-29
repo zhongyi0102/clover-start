@@ -77,6 +77,15 @@ namespace Clover
         public Func<List<AppItem>> CatalogProvider;
 
         /// <summary>
+        /// 是否启用磁盘文件搜索（默认 **false**）。
+        ///
+        /// 由 settings.DiskSearchEnabled 注入。关掉时只搜
+        /// 「已安装应用（带拼音）+ 开始菜单 + 注册表」，结果全是可启动的程序。
+        /// 磁盘搜索的代码（SystemSearch.Deep）保留，打开开关即可恢复。
+        /// </summary>
+        public bool EnableDiskSearch = false;
+
+        /// <summary>
         /// 在已扫描的应用清单里匹配（支持中文/英文/全拼/首字母）。
         ///
         /// 与 SystemSearch 的分工：
@@ -156,6 +165,20 @@ namespace Clover
                 }
 
                 // ---- 第二级：Deep（后台流式）----
+                //
+                // 受 EnableDiskSearch 开关控制（由 settings.DiskSearchEnabled 注入）。
+                // 关掉时整段跳过 —— 不发起线程、不遍历磁盘、结果里只有可启动的程序。
+                //
+                // 为什么要有这个开关：磁盘遍历即使有 900ms 时间预算，也会让
+                // 搜索结果混进大量文件名（"报告.docx"、"报告.pdf"…），
+                // 而用户打开启动面板通常是想**启动程序**，不是找文件。
+                // 找文件用资源管理器更合适。
+                if (!EnableDiskSearch)
+                {
+                    cts = null;
+                    return;
+                }
+
                 cts = new CancellationTokenSource();
                 CancellationToken token = cts.Token;
                 string q = query;

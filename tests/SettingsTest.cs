@@ -40,6 +40,14 @@ namespace Clover
             Check(s1.Theme == "system", "默认主题跟随系统");
             Check(Settings.SafeModeActive == false, "默认不在安全模式");
 
+            // 本阶段新增：磁盘搜索默认关闭（只显示可启动的程序）
+            Check(s1.DiskSearchEnabled == false, "默认关闭磁盘文件搜索");
+            // 本阶段新增的其它字段默认值
+            Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
+            Check(s1.AccentFromWallpaper == true, "默认强调色跟随壁纸");
+            Check(string.IsNullOrEmpty(s1.AccentOverride), "默认没有自定义强调色");
+            Check(string.IsNullOrEmpty(s1.WallpaperFolder), "默认未设置壁纸文件夹");
+
             // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
             // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
             // 而 Save() 会写全部字段 —— 于是安全模式期间用户只要动任意一个设置，
@@ -141,6 +149,45 @@ namespace Clover
             Check(s2.HiddenCategories.Count == 1 && s2.HiddenCategories[0] == "系统工具", "hiddenCategories 往返");
             Check(s2.NavCollapsed == true, "navCollapsed 往返（侧栏收起状态持久化）");
             Check(s2.Theme == "dark", "theme 往返（主题持久化）");
+
+            // ---------- 2b. 本阶段新增字段的往返 ----------
+            s1.DiskSearchEnabled = true;
+            s1.GlassMode = "screen";
+            s1.WallpaperFolder = @"D:\wallpapers";
+            s1.AccentFromWallpaper = false;
+            s1.AccentOverride = "#4FC3D9";
+            s1.Save();
+
+            Settings s2b = Settings.Load(r1);
+            Check(s2b.DiskSearchEnabled == true, "diskSearchEnabled 往返");
+            Check(s2b.GlassMode == "screen", "glassMode 往返");
+            Check(s2b.WallpaperFolder == @"D:\wallpapers", "wallpaperFolder 往返");
+            Check(s2b.AccentFromWallpaper == false, "accentFromWallpaper 往返");
+            Check(s2b.AccentOverride == "#4FC3D9", "accentOverride 往返");
+
+            // ---------- 2c. ★旧配置缺 diskSearchEnabled 时补默认值、不报错 ----------
+            //
+            // 铁律要求：旧用户的 config\*.json 里多出的字段要原样保留，
+            // 缺少的新字段要补默认值，不能让启动崩溃。
+            string rCfgOld = NewRoot();
+            string pCfgOld = Path.Combine(rCfgOld, "config", "settings.json");
+            // 模拟一份"本阶段之前"的配置：没有 diskSearchEnabled / glassMode 等
+            File.WriteAllText(pCfgOld,
+                "{\"miniTaskbar\":false,\"theme\":\"dark\",\"legacyField\":\"keep-me\"}",
+                new UTF8Encoding(false));
+
+            Settings sCfgOld = Settings.Load(rCfgOld);
+            Check(sCfgOld.MiniTaskbar == false, "旧配置：已有字段正常读取");
+            Check(sCfgOld.Theme == "dark", "旧配置：已有字段正常读取（theme）");
+            Check(sCfgOld.DiskSearchEnabled == false, "旧配置：缺 diskSearchEnabled 时补默认 false");
+            Check(sCfgOld.GlassMode == "fixed", "旧配置：缺 glassMode 时补默认 fixed");
+            Check(sCfgOld.AccentFromWallpaper == true, "旧配置：缺 accentFromWallpaper 时补默认 true");
+
+            // 保存后旧字段仍在、新字段被写入
+            sCfgOld.Save();
+            string cfgAfter = File.ReadAllText(pCfgOld, Encoding.UTF8);
+            Check(cfgAfter.Contains("keep-me"), "旧配置：保存后保留未知字段");
+            Check(cfgAfter.Contains("diskSearchEnabled"), "旧配置：保存后写入新字段");
 
             // ---------- 3. 保留未知字段 ----------
             string r3 = NewRoot();

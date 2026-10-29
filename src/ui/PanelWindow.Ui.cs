@@ -145,8 +145,9 @@ namespace Clover
             Grid.SetColumn(winButtons, 3);
             header.Children.Add(winButtons);
 
-            minBtn = MakeHeaderButton("\uE921", delegate { HidePanel(); });
-            winButtons.Children.Add(minBtn);
+            // 「最小化」按钮已移除：它的行为和「关闭」完全一样（都是 HidePanel），
+            // 两个按钮做同一件事只会让用户犹豫点哪个。
+            // minBtn 字段也一起删了（下面第 163 行的命中测试同步更新）。
 
             maxBtn = MakeHeaderButton("\uE922", delegate { ToggleExpand(); });
             winButtons.Children.Add(maxBtn);
@@ -157,7 +158,7 @@ namespace Clover
             header.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {
                 DependencyObject d = e.OriginalSource as DependencyObject;
-                if (IsDescendantOf(d, searchBorder) || IsDescendantOf(d, closeBtn) || IsDescendantOf(d, minBtn) || IsDescendantOf(d, maxBtn)) return;
+                if (IsDescendantOf(d, searchBorder) || IsDescendantOf(d, closeBtn) || IsDescendantOf(d, maxBtn)) return;
                 try { DragMove(); } catch { }
             };
 
@@ -273,6 +274,9 @@ namespace Clover
             // 否则拼音搜索（weixin/wx）在界面上永远搜不到 —— 磁贴被隐藏了，
             // 而 SystemSearch 不包含已扫描清单。
             searchResults.CatalogProvider = delegate { return catalog == null ? null : catalog.Apps; };
+            // 磁盘文件搜索默认关闭（settings.DiskSearchEnabled = false）：
+            // 只显示可启动的程序，不再混进 "报告.docx" 这类文件名。
+            searchResults.EnableDiskSearch = settings != null && settings.DiskSearchEnabled;
 
             // 两者放进同一个 Grid，靠 Visibility 切换
             Grid contentStack = new Grid();

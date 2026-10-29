@@ -47,7 +47,6 @@ namespace Clover
         List<AppItem> renderedApps = new List<AppItem>();
         string orderPath;
         Border rootBorder;
-        Border minBtn;
         Border maxBtn;
         bool expanded;
         double edgeMargin = 16;
@@ -277,6 +276,11 @@ namespace Clover
             {
                 Ui.LogError(ex, "构建面板界面");
             }
+
+            // 校正分类：last-category.json 里可能记着已删除的标签
+            // （办公/开发/桌面/壁纸/收藏夹/隐藏的项目…），一律回退到「常用」。
+            // 必须在 BuildUi 之后（navItems 已建好）调用。
+            NormalizeCurrentCategory();
 
             // 任务栏几何从"估算"变成"精确"后，重新定位面板。
             //
@@ -827,6 +831,40 @@ namespace Clover
             Ui.Log("Launch: " + a.Name + " path=" + a.Path);
             try
             {
+                // ---- 商店应用：走 explorer.exe shell:AppsFolder\<AUMID> ----
+                //
+                // 为什么不能直接 Process.Start(shell:AppsFolder\xxx)：
+                // UseShellExecute=true 对 shell: 协议的处理不稳定
+                // （实测直接启动有时静默失败），而 explorer.exe 明确支持
+                // 用 shell 命名空间路径打开应用。
+                //
+                // 判断依据用 Aumid 字段（去重时已填好），而不是解析 Path 字符串 ——
+                // 更可靠，也不依赖路径格式。
+                if (AppPaths.IsShellPath(a.Path))
+                {
+                    string aumid = string.IsNullOrEmpty(a.Aumid)
+                        ? AppPaths.ExtractAumid(a.Path)
+                        : a.Aumid;
+
+                    if (string.IsNullOrEmpty(aumid))
+                    {
+                        MessageBox.Show("这个商店应用缺少 AppUserModelID，无法启动。\r\n" + a.Path,
+                            "四叶草面板");
+                        return;
+                    }
+
+                    ProcessStartInfo spsi = new ProcessStartInfo("explorer.exe");
+                    spsi.Arguments = AppPaths.ShellAppsPrefix + aumid;
+                    spsi.UseShellExecute = true;
+                    Process.Start(spsi);
+
+                    if (usage != null) usage.Record(a.Path);
+                    a.Usage++;
+                    a.LastUsed = DateTime.UtcNow.Ticks;
+                    HidePanel();
+                    return;
+                }
+
                 ProcessStartInfo psi = new ProcessStartInfo(a.Path);
                 psi.UseShellExecute = true;
                 Process.Start(psi);

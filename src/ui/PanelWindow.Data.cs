@@ -336,16 +336,44 @@ namespace Clover
             }
         }
 
-        /// <summary>跳到「隐藏的项目」分类（右键菜单用）。</summary>
+        /// <summary>
+        /// 查看隐藏的项目（右键菜单用）。
+        ///
+        /// 分类标签只剩「常用」「全部」后，没有「隐藏的项目」页了 ——
+        /// 改成弹一个对话框逐个恢复。
+        ///
+        /// 为什么不只留「取消隐藏全部」：用户误隐藏了一个常用软件时，
+        /// 得先全部恢复、再重新隐藏其余的，很别扭。逐个恢复才是对的。
+        /// </summary>
         public void ShowHiddenItems()
         {
             try
             {
-                current = HiddenCategory;
-                SaveLastCategory();
-                RebuildNav();
-                RenderApps();
-                ShowPanel();
+                List<AppItem> hidden = catalog.HiddenItems();
+                if (hidden == null || hidden.Count == 0) return;
+
+                HiddenItemsDialog.Show(this, hidden, delegate(string path)
+                {
+                    try
+                    {
+                        // 复用已有的 SetAppHidden（内部写 hidden-apps.json + 刷新）
+                        AppItem target = null;
+                        foreach (AppItem a in catalog.Apps)
+                        {
+                            if (a != null && string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase))
+                            { target = a; break; }
+                        }
+                        if (target == null) return false;
+
+                        SetAppHidden(target, false);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Ui.LogError(ex, "恢复隐藏项");
+                        return false;
+                    }
+                });
             }
             catch (Exception ex)
             {

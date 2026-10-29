@@ -100,6 +100,53 @@ namespace Clover
         }
 
         /// <summary>
+        /// 生成**逐字拼音排序键**（用于「全部」按名称排序）。
+        ///
+        /// 为什么需要单独一个方法，不能直接用 ToFullPinyin：
+        /// ToFullPinyin 把整串拼成 "weixin"，那样比较会得到错误顺序 ——
+        ///   "微信"(weixin) vs "微星"(weixing)
+        ///   整串比较："weixin" &lt; "weixing" ✓（碰巧对）
+        ///   但 "阿"(a) vs "阿波"(abo) 会变成 "a" vs "abo"，
+        ///   而我们要的是逐字比较（第一个字相同再看第二个字）。
+        ///
+        /// 逐字键的构造方式：每个字符取拼音后**用分隔符隔开**，
+        /// 这样 "阿波" → "a\u0001bo"，逐字符比较时第一个字优先。
+        ///
+        /// 分隔符用 \u0001（SOH，不可能出现在应用名里）：
+        ///   · 保证 "a" 排在 "abo" 前面（"a" vs "a\u0001bo"）
+        ///   · 避免 "ab" 与 "a"+"b" 混淆
+        ///
+        /// 规则：
+        ///   · 汉字 → Pinyin.Of(c)（多音字取默认读音）
+        ///   · ASCII 字母 → 小写
+        ///   · 数字 → 原样（数字比字母小，所以数字开头的排最前）
+        ///   · 其他符号 → 保留原字符
+        ///
+        /// 调用方用 StringComparison.Ordinal 比较，保证与系统区域设置无关、
+        /// 结果稳定可重现。
+        /// </summary>
+        public static string SortKey(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+
+            StringBuilder sb = new StringBuilder(text.Length * 4);
+            bool first = true;
+            foreach (char c in text)
+            {
+                if (!first) sb.Append('\u0001');
+                first = false;
+
+                // 空格不参与排序（"Visual Studio" 与 "VisualStudio" 视为同级）
+                if (c == ' ' || c == '\t') { sb.Append('\u0002'); continue; }
+
+                string py = Of(c);
+                if (py != null) sb.Append(py);                 // 汉字 → 拼音
+                else sb.Append(char.ToLowerInvariant(c));      // ASCII/符号 → 小写原样
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// 判断应用名是否匹配搜索词。任一命中即返回 true：
         ///   1. 原始名称包含（大小写不敏感）—— 保持原有的英文/中文直接搜索
         ///   2. 首字母串包含查询（"wx" -> "微信"）

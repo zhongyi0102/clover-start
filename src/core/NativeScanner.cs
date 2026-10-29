@@ -155,8 +155,15 @@ namespace Clover
                     if (seenNames.Contains(name.ToLowerInvariant())) continue;
 
                     // 目标文件已不在了（用户删了那个便携软件）：自然淘汰，不保留死条目
-                    try { if (!File.Exists(path)) continue; } catch { continue; }
-
+                    // 目标文件已不在了（用户删了那个便携软件）：自然淘汰，不保留死条目
+                    //
+                    // 例外：商店应用的 shell:AppsFolder\... 不是文件路径，
+                    // File.Exists 永远 false —— 必须跳过这个检查，
+                    // 否则重扫时商店应用会被整批淘汰。
+                    if (!AppPaths.IsShellPath(path))
+                    {
+                        try { if (!File.Exists(path)) continue; } catch { continue; }
+                    }
                     m["category"] = Catalog.GuessCategory(name);
                     apps.Add(m);
                     seenPaths.Add(path);
@@ -248,6 +255,14 @@ namespace Clover
                     if (string.IsNullOrEmpty(p)) { keep.Add(o); continue; }
 
                     bool alive;
+                    // 商店应用的 shell:AppsFolder\... 不是文件路径，
+                    // File.Exists 永远返回 false —— 必须跳过，
+                    // 否则所有商店应用都会被当死链清掉。
+                    if (AppPaths.IsShellPath(p))
+                    {
+                        keep.Add(o);
+                        continue;
+                    }
                     if (p.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) alive = IsLiveLnk(p);
                     else alive = File.Exists(p);
                     if (alive) keep.Add(o);
@@ -268,9 +283,28 @@ namespace Clover
         /// 不是"路径是否在某个目录下"——因为用户可以用 portable-roots.json
         /// 把扫描根指到任意盘符，路径特征不可靠。
         /// </summary>
+        /// <summary>
+        /// 这条旧条目是否应该在重扫时保留。
+        ///
+        /// 两种情况要保留：
+        ///   1. 便携软件（folder == PortableScanner.FolderMarker）——
+        ///      它们不在开始菜单里，重扫会丢，必须从旧数据里捞回来
+        ///   2. **商店应用（path 是 shell:AppsFolder\...）**——
+        ///      它们也不在开始菜单里，同样必须保留
+        ///      （否则每次重扫商店应用都会消失，用户会以为程序坏了）
+        /// </summary>
         static bool IsPortableEntry(Dictionary<string, object> m)
         {
             if (m == null) return false;
+
+            // 商店应用：按路径形态识别（比 folder 字段可靠）
+            object pv;
+            if (m.TryGetValue("path", out pv) && pv != null)
+            {
+                string path = Convert.ToString(pv);
+                if (AppPaths.IsShellPath(path)) return true;
+            }
+
             object f;
             if (!m.TryGetValue("folder", out f) || f == null) return false;
             return string.Equals(Convert.ToString(f), PortableScanner.FolderMarker, StringComparison.Ordinal);

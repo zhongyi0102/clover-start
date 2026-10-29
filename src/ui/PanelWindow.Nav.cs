@@ -284,53 +284,31 @@ namespace Clover
             navNames.Clear();
             navCounts.Clear();
 
+            // ★ 只保留两个标签：「常用」「全部」。
+            //
+            // 为什么砍掉其余（办公/开发/…/桌面/收藏夹/壁纸/隐藏的项目）：
+            // 分类越多，找应用时越要在标签之间来回切；而「全部」配上
+            // 拼音搜索已经能覆盖绝大多数场景。实测 119 个应用平铺后
+            // 一屏能看 40+ 个，翻两屏就到头了。
+            //
+            // 注意：Catalog / CategoryRules / CategoryOverrides / Categories
+            // 这些**类和数据都保留**（下一阶段再清理），只是界面不再展示。
+            // 收藏夹/桌面/壁纸的渲染方法（RenderPinned/RenderDesktop/RenderWallpaper）
+            // 也保留，暂无入口。
             List<string> cats = new List<string>();
             cats.Add("常用");
             cats.Add("");
-            cats.AddRange(catalog.ActiveCategories());
-
-            // 「收藏夹」只在确实有收藏项时出现（没有就不占地方）
-            int pinnedCount = pinnedFolders == null ? 0 : pinnedFolders.Count;
-            if (pinnedCount > 0) cats.Add(PinnedCategory);
-
-            // 「桌面」常驻：它是虚拟视图，与"桌面上有几个文件"无关 ——
-            // 桌面空了也该能进去看（用户会疑惑"我的桌面去哪了"）
-            cats.Add(DesktopCategory);
-
-            // 「壁纸」常驻：换了文件夹之前也要能进去（那里有引导和背景模式开关）
-            cats.Add(WallpaperCategory);
-
-            // 「隐藏的项目」只在确实有隐藏项时出现（没有就不占地方）
-            int hiddenCount = catalog.HiddenItems().Count;
-            if (hiddenCount > 0) cats.Add(HiddenCategory);
 
             foreach (string cat in cats)
             {
                 string c = cat;
-                int count = c == HiddenCategory ? hiddenCount
-                          : (c == PinnedCategory ? pinnedCount
-                          : (c == DesktopCategory ? 0
-                          : (c == WallpaperCategory ? 0
-                          : (c == "常用" ? CommonApps().Count : catalog.ByCategory(c).Count))));
-                if (c != "" && c != "常用" && c != PinnedCategory && c != DesktopCategory && c != WallpaperCategory && count == 0) continue;
+                int count = c == "常用" ? CommonApps().Count
+                          : (catalog.Apps.Count - catalog.HiddenItems().Count);
 
-                // 显示名：被改过名的分类查表，其余用内部名本身。
-                // 内部名（c）始终不变——它才是 apps.json / 规则表 / 覆盖表里的键。
-                string label;
-                if (c == "") label = "全部";
-                else if (c == HiddenCategory) label = "隐藏的项目";
-                else if (c == PinnedCategory) label = "收藏夹";
-                else if (c == DesktopCategory) label = "桌面";
-                else if (c == WallpaperCategory) label = "壁纸";
-                else label = CategoryDisplayName(c);
+                // 显示名
+                string label = c == "" ? "全部" : "常用";
 
-                // 分类项：从"竖排列表行"改成"横向胶囊按钮"
-                //
-                // 变化点：
-                //   · 高度 34 → 30（横条上要更紧凑）
-                //   · 圆角 Sm(8) → 高度一半（胶囊形，目标图的样子）
-                //   · 外边距 0,2 → 0,2,4,2（胶囊之间要横向留白）
-                //   · 内边距加左右 10px（胶囊的文字不能贴边）
+                // 分类项：横向胶囊按钮
                 Border item = new Border();
                 item.Height = 30;
                 item.CornerRadius = new CornerRadius(item.Height / 2);
@@ -338,18 +316,12 @@ namespace Clover
                 item.Padding = new Thickness(10, 0, 10, 0);
                 item.Background = Brushes.Transparent;
                 item.Cursor = Cursors.Hand;
-                // 改过名的分类，悬停时提示原本叫什么，避免以后认不出来
-                if (c != "" && c != HiddenCategory && categories != null && categories.IsRenamed(c))
-                {
-                    item.ToolTip = "原名：" + c;
-                }
 
                 Grid g = new Grid();
                 g.ColumnDefinitions.Add(new ColumnDefinition());
                 g.ColumnDefinitions.Add(new ColumnDefinition());
-                // 横条上没有"左侧竖线指示条"的位置了 —— 选中态靠背景色表达。
-                // 但仍保留这个元素（宽度设为 0），因为 navBars 列表被
-                // UpdateNav 直接索引，删掉会破坏它的下标对应关系。
+                // 左侧竖条已废弃，但保留元素（宽度 0）——
+                // navBars 列表被 UpdateNav 直接索引，删掉会破坏下标对应。
                 g.ColumnDefinitions[0].Width = new GridLength(0);
                 g.ColumnDefinitions[1].Width = GridLength.Auto;
 
@@ -377,8 +349,6 @@ namespace Clover
                 cnt.FontSize = 10.5;
                 cnt.Foreground = Ui.Sub;
                 cnt.VerticalAlignment = VerticalAlignment.Center;
-                cnt.Margin = new Thickness(Ui.S.Xs, 0, Ui.S.Sm, 0);
-                // 数字紧跟在名字右边（原来有 3 列，现在只有 2 列）
                 cnt.Margin = new Thickness(5, 0, 0, 0);
                 Grid.SetColumn(cnt, 1);
                 g.Children.Add(cnt);
@@ -396,18 +366,7 @@ namespace Clover
                     RenderApps();
                 };
 
-                // 右键分类：重命名 / 上移下移。
-                // 只对真实分类提供（「常用」「全部」「隐藏的项目」是虚拟分类，
-                // 不参与排序也不该被改名）。
-                if (c != "" && c != "常用" && c != HiddenCategory)
-                {
-                    string cc = c;
-                    item.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e)
-                    {
-                        ShowCategoryMenu(cc);
-                        e.Handled = true;
-                    };
-                }
+                // 右键分类：两个标签都是虚拟分类，不提供改名/排序菜单
 
                 navStack.Children.Add(item);
                 navCats.Add(c);
@@ -779,32 +738,11 @@ namespace Clover
 
             string q = searchBox == null ? "" : searchBox.Text.Trim();
             showingCommon = (q.Length == 0 && current == "常用");
-            bool showingHidden = (q.Length == 0 && current == HiddenCategory);
+            bool showingHidden = false;   // 「隐藏的项目」标签已移除
 
-            // ---- 收藏夹：内容不是 AppItem，走单独渲染 ----
-            //
-            // 为什么单独一条路径：PinnedItem 可能是文件夹、任意类型文件，
-            // 而 AppItem 的磁贴逻辑（Launch、运行中圆点、拖动换位）都不适用。
-            // 强行合并会让每处都长出 if (isFolder) 分支，不如分开。
-            if (q.Length == 0 && current == PinnedCategory)
-            {
-                RenderPinned();
-                return;
-            }
-
-            // ---- 虚拟桌面：只读真实桌面，不动任何文件 ----
-            if (q.Length == 0 && current == DesktopCategory)
-            {
-                RenderDesktop();
-                return;
-            }
-
-            // ---- 壁纸：缩略图网格，点一下换桌面壁纸 ----
-            if (q.Length == 0 && current == WallpaperCategory)
-            {
-                RenderWallpaper();
-                return;
-            }
+            // 收藏夹 / 桌面 / 壁纸三个视图的标签已移除，暂无入口。
+            // 渲染方法（RenderPinned / RenderDesktop / RenderWallpaper）保留，
+            // 下一阶段再决定删还是改。
 
             List<AppItem> list;
 
@@ -852,14 +790,29 @@ namespace Clover
             else if (current == "常用")
             {
                 list = CommonApps();
-            }
-            else if (current == HiddenCategory)
-            {
-                list = catalog.HiddenItems();
+
+                // 「常用」为空（没有使用记录）时自动切到「全部」。
+                //
+                // 为什么要这样做：新用户或刚清过 usage.json 的人打开面板，
+                // 看到一个空白的「常用」页会以为程序坏了 ——
+                // 而实际上 119 个应用都在「全部」里。
+                //
+                // 切过去而不是只显示提示：用户想要的是"看到应用"，
+                // 不是"读一句解释"。切完再顺手写回 last-category，
+                // 免得下次又回到空的「常用」。
+                if (list.Count == 0)
+                {
+                    current = "";
+                    SaveLastCategory();
+                    list = AllAppsSorted();
+                    // 更新标签选中态（此时 RebuildNav 已完成，navItems 已就绪）
+                    UpdateNav();
+                }
             }
             else
             {
-                list = catalog.ByCategory(current);
+                // 「全部」：所有可见应用，按名称排序（逐字拼音）
+                list = AllAppsSorted();
             }
 
             ApplyCustomOrder(list);
@@ -899,20 +852,16 @@ namespace Clover
                 }
                 else if (current == "常用")
                 {
+                    // 这个分支实际上到不了（「常用」为空时上面已自动切到「全部」），
+                    // 但保留它作为防御：万一将来逻辑变化，也不会显示空白页。
                     glyph = "\uE735";                                   // 星标
                     tip = "还没有常用应用";
                     sub = "从面板启动几次，常用的会自动出现在这里";
                 }
-                else if (current == HiddenCategory)
-                {
-                    glyph = "\uE7B3";                                   // 眼睛
-                    tip = "没有隐藏的应用";
-                    sub = "右键应用磁贴 →「从面板隐藏」可以把用不到的藏起来";
-                }
                 else
                 {
                     glyph = "\uE7C3";                                   // 页面
-                    tip = "这个分类里没有应用";
+                    tip = "没有可显示的应用";
                     sub = "右键四叶草 →「重新扫描应用」可以重新识别";
                 }
 
@@ -1605,6 +1554,67 @@ namespace Clover
         public Action promptFolderCallback;
 
         /// <summary>
+        /// 「全部」的列表：所有可见应用，按名称排序。
+        ///
+        /// 排序用 Pinyin.SortKey（逐字拼音键）+ StringComparison.Ordinal：
+        ///   · 中文按拼音逐字比较（阿 &lt; 波 &lt; 次）
+        ///   · 英文转小写后比较（大小写不敏感）
+        ///   · 数字/符号开头的排最前
+        ///   · Ordinal 保证与系统区域设置无关，结果稳定可重现
+        ///
+        /// 为什么不用 RenderCompare（按使用次数）：
+        /// 「常用」已经承担了"按使用频率"的角色，「全部」应该是
+        /// 可预测的字典序 —— 用户找某个应用时能按名字直接定位。
+        /// </summary>
+        List<AppItem> AllAppsSorted()
+        {
+            List<AppItem> list = new List<AppItem>();
+            try
+            {
+                foreach (AppItem a in catalog.Apps)
+                {
+                    if (a == null || a.Hidden) continue;
+                    list.Add(a);
+                }
+
+                list.Sort(delegate(AppItem x, AppItem y)
+                {
+                    int c = string.Compare(
+                        Pinyin.SortKey(x.Name), Pinyin.SortKey(y.Name), StringComparison.Ordinal);
+                    if (c != 0) return c;
+                    // 排序键完全相同时用路径兜底，保证顺序稳定（不会每次刷新都跳）
+                    return string.Compare(x.Path, y.Path, StringComparison.OrdinalIgnoreCase);
+                });
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "排序全部应用");
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// 启动时校正分类：last-category.json 里可能记着已被删除的标签
+        /// （办公 / 开发 / 桌面 / 壁纸 / 收藏夹 / 隐藏的项目 等）。
+        ///
+        /// 遇到不存在的分类一律回退到「常用」，不能报错也不能显示空白。
+        /// 在 BuildUi 之后、首次渲染之前调用。
+        /// </summary>
+        void NormalizeCurrentCategory()
+        {
+            try
+            {
+                // 只有「常用」和「全部」是合法值
+                if (current == "常用" || current == "") return;
+
+                Ui.Log("分类「" + current + "」已不存在，回退到常用");
+                current = "常用";
+                SaveLastCategory();
+            }
+            catch { }
+        }
+
+        /// <summary>
         /// 渲染「收藏夹」视图。
         ///
         /// 用磁贴形态（与普通应用一致）而不是列表：
@@ -1864,6 +1874,33 @@ namespace Clover
             return string.Compare(a.Name, b.Name, System.Globalization.CultureInfo.GetCultureInfo("zh-CN"), System.Globalization.CompareOptions.None);
         }
 
+        /// <summary>
+        /// 磁贴上显示的名字。
+        ///
+        /// **商店应用加 `·商店` 后缀**，用来区分同名的桌面版和商店版
+        /// （实测有 28 组同名并存，如 `Google Chrome` 桌面版 + 商店版）。
+        ///
+        /// 为什么只改显示名、不改 AppItem.Name：
+        ///   · Name 参与去重（名称+发布者匹配）、usage.json 记录、搜索匹配
+        ///   · 改了会破坏已有数据的一致性（用户明确要求"不修改原始 Name"）
+        ///   · 显示是纯视觉层的事，隔离在这里最安全
+        ///
+        /// 后缀用中点 `·` 而不是括号：中点在视觉上更轻，
+        /// 且不会让磁贴名字变得太长（磁贴宽度只有 88px）。
+        /// </summary>
+        static string DisplayNameOf(AppItem a)
+        {
+            try
+            {
+                if (a == null) return "";
+                string name = a.Name ?? "";
+                if (a.Source == AppPaths.SourceStore && !string.IsNullOrEmpty(name))
+                    return name + " ·商店";
+                return name;
+            }
+            catch { return a == null ? "" : (a.Name ?? ""); }
+        }
+
         Border MakeTile(AppItem a)
         {
             Border b = new Border();
@@ -1873,7 +1910,7 @@ namespace Clover
             b.Margin = new Thickness(2);
             b.Background = Brushes.Transparent;
             b.Cursor = Cursors.Hand;
-            b.ToolTip = a.Name;
+            b.ToolTip = DisplayNameOf(a);
 
             StackPanel sp = new StackPanel();
             sp.VerticalAlignment = VerticalAlignment.Center;
@@ -1948,7 +1985,7 @@ namespace Clover
             sp.Children.Add(iconBox);
 
             TextBlock name = new TextBlock();
-            name.Text = a.Name;
+            name.Text = DisplayNameOf(a);
             name.FontFamily = Ui.YaHei;
             name.FontSize = 11.5;
             name.Foreground = Ui.Fg;
@@ -2156,7 +2193,7 @@ namespace Clover
                 }
 
                 TextBlock name = new TextBlock();
-                name.Text = a.Name;
+                name.Text = DisplayNameOf(a);
                 name.FontFamily = Ui.YaHei;
                 name.FontSize = 11.5;
                 name.Foreground = Ui.Fg;
@@ -2611,39 +2648,12 @@ namespace Clover
             openDir.Click += delegate { OpenContainingFolder(a); };
             cm.Items.Add(openDir);
 
-            // ---- 移到分类 →（子菜单）----
-            // 结果存 config\category-overrides.json，优先级高于关键词规则，
-            // 重新扫描后依然保持。
-            MenuItem moveTo = new MenuItem();
-            moveTo.Header = "移到分类";
-            foreach (string cat in MovableCategories())
-            {
-                string target = cat;
-                MenuItem sub = new MenuItem();
-                sub.Header = target;
-                bool isCurrent = string.Equals(a.Category, target, StringComparison.Ordinal);
-                sub.IsChecked = isCurrent;
-                sub.IsEnabled = !isCurrent; // 已在当前分类就没必要再移
-                sub.Click += delegate { MoveAppToCategory(a, target); };
-                moveTo.Items.Add(sub);
-            }
-
-            // 已经有手工覆盖时，提供「恢复自动分类」
-            string overridden = GetOverride(a.Path);
-            if (overridden != null)
-            {
-                moveTo.Items.Add(new Separator());
-                MenuItem reset = new MenuItem();
-                reset.Header = "恢复自动分类";
-                reset.Click += delegate { MoveAppToCategory(a, null); };
-                moveTo.Items.Add(reset);
-            }
-
-            cm.Items.Add(moveTo);
-
-            // ---- 隐藏 / 取消隐藏（对所有分类都有）----
-            // 「移到分类」是"归错类了，换个位置"；「隐藏」是"完全不想看到"。
-            // 两者用途不同，所以并列提供。
+            // ---- 隐藏 / 取消隐藏 ----
+            //
+            // 「移到分类」和「恢复自动分类」已移除：分类标签只剩两个，
+            // 手工归类没有意义了。数据层（category-overrides.json）保留，
+            // 已有的覆盖记录仍然生效（Catalog 加载时照常应用），
+            // 只是界面上不再提供修改入口。
             cm.Items.Add(new Separator());
             if (a.Hidden)
             {
@@ -2846,6 +2856,19 @@ namespace Clover
             if (string.IsNullOrEmpty(path))
             {
                 error = "这个应用没有可定位的路径。";
+                return false;
+            }
+
+            // ---- 商店应用：没有文件系统位置 ----
+            //
+            // shell:AppsFolder\<AUMID> 是 Shell 命名空间路径，不对应任何文件/目录。
+            // 直接返回提示，避免 Path.GetDirectoryName 拼出非法参数、
+            // 或者 explorer 打开一个奇怪的位置。
+            if (AppPaths.IsShellPath(path))
+            {
+                error = "商店应用没有文件位置。\r\n\r\n"
+                      + "它由 Microsoft Store 管理，安装文件在受保护的 WindowsApps 目录下。\r\n"
+                      + "如需管理，请打开「设置 → 应用 → 已安装的应用」。";
                 return false;
             }
 

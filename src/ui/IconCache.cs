@@ -39,6 +39,42 @@ namespace Clover
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool DestroyIcon(IntPtr hIcon);
 
+        // ---------- 商店应用取图标用的 Shell 接口 ----------
+        //
+        // SHGetFileInfo 对 shell:AppsFolder\... 取不到图标（返回 0 句柄），
+        // 必须走 IShellItemImageFactory —— 这是 Windows 给虚拟命名空间项
+        // 提供缩略图/图标的官方接口。
+        //
+        // 为什么不用手写 IShellFolder + STRRET：
+        //   实测那套接口的 Explicit 布局极易出错，抛出的异常连 ToString 都失败。
+        //   IShellItemImageFactory 只需要一个方法，稳定得多。
+
+        [System.Runtime.InteropServices.ComImport,
+         System.Runtime.InteropServices.Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b"),
+         System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+        interface IShellItemImageFactory
+        {
+            [System.Runtime.InteropServices.PreserveSig]
+            int GetImage(SIZE size, int flags, out IntPtr phbm);
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        struct SIZE
+        {
+            public int cx;
+            public int cy;
+        }
+
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, PreserveSig = false)]
+        static extern void SHCreateItemFromParsingName(string path, IntPtr pbc, ref Guid riid,
+            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Interface)] out object ppv);
+
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")]
+        static extern bool DeleteObject(IntPtr hObject);
+
+        /// <summary>SIIGBF_ICONONLY：只取图标，不要缩略图。</summary>
+        const int SIIGBF_ICONONLY = 0x8;
+
         const uint SHGFI_ICON = 0x0100;
         const uint SHGFI_LARGEICON = 0x0000;
 
@@ -105,14 +141,31 @@ namespace Clover
             return result;
         }
 
-        /// <summary>key = 路径前缀 + 修改时间 + 大小；文件不存在时返回 null（不缓存）。</summary>
+        /// <summary>
+        /// key = 版本号 + 路径前缀 + 修改时间 + 大小；文件不存在时返回 null（不缓存）。
+        ///
+        /// **版本号在键的最前面**：改了取图标方式后旧缓存文件名全部对不上，
+        /// 自然失效（不会出现"代码对了但界面还是旧箭头图标"）。
+        /// </summary>
         static string BuildKey(string path)
         {
             try
             {
+                // ---- 商店应用：路径不是文件，用 AUMID 当键的一部分 ----
+                //
+                // shell:AppsFolder\... 不对应任何文件，File.Exists 永远 false。
+                // 用 AppUserModelID 作稳定标识（同一应用不会因重装变 key）。
+                if (AppPaths.IsShellPath(path))
+                {
+                    string aumid = AppPaths.ExtractAumid(path);
+                    if (string.IsNullOrEmpty(aumid)) return null;
+                    return ExtractVersion + "-shell-" + Hash(aumid.ToLowerInvariant());
+                }
+
                 if (!File.Exists(path)) return null;
                 FileInfo fi = new FileInfo(path);
-                return PathKeyPrefix(path) + fi.LastWriteTimeUtc.Ticks.ToString("x") + "_" + fi.Length.ToString("x");
+                return ExtractVersion + "-" + PathKeyPrefix(path)
+                     + fi.LastWriteTimeUtc.Ticks.ToString("x") + "_" + fi.Length.ToString("x");
             }
             catch
             {
@@ -199,12 +252,61 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 图标提取算法的版本号。
+        ///
+        /// **改了取图标的方式就必须递增这个值** —— 它会进缓存键，
+        /// 让所有旧缓存（比如带快捷方式箭头的）自动失效。
+        ///
+        /// 历史：
+        ///   v1 → 直接对路径调 SHGetFileInfo（.lnk 会带上系统合成的箭头）
+        ///   v2 → .lnk 先解析目标 exe，取目标图标（去掉箭头）
+        /// </summary>
+        const string ExtractVersion = "v2";
+
         static ImageSource Extract(string path)
         {
             try
             {
+                // ---- 商店应用：走 IShellItemImageFactory ----
+                //
+                // shell:AppsFolder\... 是 Shell 命名空间路径，
+                // SHGetFileInfo 对它返回 0 句柄（取不到图标），
+                // 必须用 IShellItemImageFactory.GetImage。
+                if (AppPaths.IsShellPath(path))
+                {
+                    ImageSource shellIcon = ExtractShellIcon(path);
+                    if (shellIcon != null) return shellIcon;
+                    // 取不到就返回 null，由界面显示首字占位（不抛异常）
+                    return null;
+                }
+
+                // ---- 快捷方式去箭头 ----
+                //
+                // 箭头不是我们画的，是 Windows 的图标合成机制：
+                // SHGetFileInfo 对 .lnk 返回的是"目标图标 + 左下角箭头覆盖层"。
+                // 实测 Excel.lnk 与其目标 EXCEL.EXE 的图标在左下象限有 164/256
+                // 像素不同，差异全部集中在箭头位置。
+                //
+                // 解决办法：对 .lnk 先解析出目标路径，取**目标 exe 的图标**。
+                // 目标取不到时回退到 lnk 自身（宁可带箭头，也不要没图标）。
+                string iconSource = path;
+                if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+                {
+                    string target = ShortcutResolver.Resolve(path);
+                    if (!string.IsNullOrEmpty(target) && File.Exists(target))
+                        iconSource = target;
+                }
+
                 SHFILEINFO fi = new SHFILEINFO();
-                SHGetFileInfo(path, 0, ref fi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(SHFILEINFO)), SHGFI_ICON | SHGFI_LARGEICON);
+                SHGetFileInfo(iconSource, 0, ref fi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(SHFILEINFO)), SHGFI_ICON | SHGFI_LARGEICON);
+
+                // 目标是 exe 但取不到图标（比如 lnk 指向文档）→ 回退到 lnk 自身
+                if (fi.hIcon == IntPtr.Zero && !string.Equals(iconSource, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    SHGetFileInfo(path, 0, ref fi, (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(SHFILEINFO)), SHGFI_ICON | SHGFI_LARGEICON);
+                }
+
                 if (fi.hIcon == IntPtr.Zero) return null;
                 try
                 {
@@ -221,6 +323,51 @@ namespace Clover
             {
                 ErrorLog.Warn("提取图标失败: " + path + " -> " + ex.Message);
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// 用 IShellItemImageFactory 取商店应用图标。
+        /// 取不到返回 null（不抛异常）。
+        /// </summary>
+        static ImageSource ExtractShellIcon(string shellPath)
+        {
+            IntPtr hbmp = IntPtr.Zero;
+            try
+            {
+                Guid iid = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
+                object obj;
+                SHCreateItemFromParsingName(shellPath, IntPtr.Zero, ref iid, out obj);
+                if (obj == null) return null;
+
+                IShellItemImageFactory factory = obj as IShellItemImageFactory;
+                if (factory == null) return null;
+
+                SIZE size = new SIZE();
+                size.cx = 32;
+                size.cy = 32;
+
+                int hr = factory.GetImage(size, SIIGBF_ICONONLY, out hbmp);
+                if (hr != 0 || hbmp == IntPtr.Zero) return null;
+
+                // HBITMAP → WPF ImageSource
+                BitmapSource src = Imaging.CreateBitmapSourceFromHBitmap(
+                    hbmp, IntPtr.Zero, Int32Rect.Empty,
+                    BitmapSizeOptions.FromWidthAndHeight(32, 32));
+                src.Freeze();
+                return src;
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("提取商店应用图标失败: " + shellPath + " -> " + ex.Message);
+                return null;
+            }
+            finally
+            {
+                if (hbmp != IntPtr.Zero)
+                {
+                    try { DeleteObject(hbmp); } catch { }
+                }
             }
         }
 

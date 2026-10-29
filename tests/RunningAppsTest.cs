@@ -36,6 +36,13 @@ namespace Clover
                 Check(!RunningApps.IsRunning(""), "空路径返回 false");
                 Check(!RunningApps.IsRunning("   "), "空白路径返回 false");
                 Check(!RunningApps.IsRunning(@"Z:\不存在的\路径.exe"), "不存在的路径返回 false");
+
+        // 商店应用（shell 路径）：拿不到进程路径，永远不显示"运行中"圆点
+        // 关键：返回 false 而不是抛异常，界面只是不画圆点，启动仍然正常。
+        string shellPath = AppPaths.FromAumid("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App");
+        Check(!RunningApps.IsRunningCached(shellPath), "商店应用不显示运行中圆点");
+        Check(!RunningApps.IsRunningCached(@"shell:AppsFolder\SomeApp"), "裸 shell: 路径不显示圆点");
+        Check(!RunningApps.IsRunningCached(@"shell:AppsFolder\"), "残缺 shell: 路径不崩");
                 Check(!RunningApps.IsRunning(@"Z:\不存在的\快捷方式.lnk"), "解析不出的 lnk 返回 false");
                 Check(!RunningApps.IsRunningCached(null), "IsRunningCached(null) 返回 false");
                 Check(!RunningApps.IsRunningCached(""), "IsRunningCached(\"\") 返回 false");

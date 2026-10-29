@@ -61,6 +61,16 @@ function Invoke-Suite($name, $refs, $sources) {
 # Catalog 依赖这些（覆盖表 / 规则表 / 归一化 / 隐藏清单 / 存储），分类相关套件都要带上
 $catalogDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
+    (Join-Path $coreDir 'AppPaths.cs'),
+    (Join-Path $coreDir 'AppDedup.cs'),
+    (Join-Path $coreDir 'ShortcutResolver.cs'),
+    (Join-Path $coreDir 'RegistryScanner.cs'),
+    (Join-Path $coreDir 'StoreAppScanner.cs'),
+    (Join-Path $coreDir 'PortableScanner.cs'),
+    (Join-Path $coreDir 'NativeScanner.cs'),
+    (Join-Path $coreDir 'Log.cs'),
+    (Join-Path $coreDir 'Pinyin.cs'),
+    (Join-Path $coreDir 'PinyinData.cs'),
     (Join-Path $coreDir 'CategoryOverrides.cs'),
     (Join-Path $coreDir 'CategoryRules.cs'),
     (Join-Path $coreDir 'Categories.cs'),
@@ -69,6 +79,33 @@ $catalogDeps = @(
     (Join-Path $coreDir 'JsonIO.cs'),
     (Join-Path $coreDir 'UsageStore.cs')
 )
+
+# 去重：需要扫描器 + 去重器
+$dedupDeps = @(
+    (Join-Path $coreDir 'Catalog.cs'),
+    (Join-Path $coreDir 'Settings.cs'),
+    (Join-Path $coreDir 'Log.cs'),
+    (Join-Path $coreDir 'HiddenApps.cs'),
+    (Join-Path $coreDir 'NameMatch.cs'),
+    (Join-Path $coreDir 'JsonIO.cs'),
+    (Join-Path $coreDir 'UsageStore.cs'),
+    (Join-Path $coreDir 'Pinyin.cs'),
+    (Join-Path $coreDir 'PinyinData.cs'),
+    (Join-Path $coreDir 'AppPaths.cs'),
+    (Join-Path $coreDir 'AppDedup.cs'),
+    (Join-Path $coreDir 'ShortcutResolver.cs'),
+    (Join-Path $coreDir 'RegistryScanner.cs'),
+    (Join-Path $coreDir 'StoreAppScanner.cs'),
+    (Join-Path $coreDir 'PortableScanner.cs'),
+    (Join-Path $coreDir 'NativeScanner.cs'),
+    (Join-Path $coreDir 'CategoryOverrides.cs'),
+    (Join-Path $coreDir 'CategoryRules.cs'),
+    (Join-Path $coreDir 'Categories.cs')
+)
+
+# 去重：多来源合并、路径匹配、AUMID、同名不同程序、空值、确定性
+Invoke-Suite 'DedupTest' ($baseRefs + $webRef) `
+    ($dedupDeps + @((Join-Path $testDir 'DedupTest.cs')))
 
 Invoke-Suite 'CatalogTest' ($baseRefs + $webRef) `
     ($catalogDeps + @((Join-Path $testDir 'CatalogTest.cs')))
@@ -103,6 +140,7 @@ Invoke-Suite 'ScanChainTest' ($baseRefs + $webRef) `
 Invoke-Suite 'RunningAppsTest' ($baseRefs + $webRef) `
     (@(
         (Join-Path $coreDir 'RunningApps.cs'),
+          (Join-Path $coreDir 'AppPaths.cs'),
         (Join-Path $coreDir 'JsonIO.cs'),
         (Join-Path $testDir 'RunningAppsTest.cs')
     ))
@@ -140,6 +178,10 @@ Invoke-Suite 'DesktopRestoreTest' $wpfRefs `
 Invoke-Suite 'OpenFolderTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'OpenFolderTest.cs')))
 
+
+  # 图标缓存：快捷方式去箭头、透明通道、缓存键版本化、商店应用
+  Invoke-Suite 'IconTest' $wpfRefs `
+      ($allSrc + @((Join-Path $testDir 'IconTest.cs')))
 Invoke-Suite 'FullscreenTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'FullscreenTest.cs')))
 

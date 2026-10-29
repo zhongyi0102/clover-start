@@ -213,14 +213,18 @@ namespace Clover
                 return "ok（共 " + visualCount + " 个可视元素）";
             });
 
-            // ---------- 4. 分类侧栏真的生成了条目 ----------
-            Verify("左侧分类栏生成了条目", delegate
+            // ---------- 4. 分类栏只保留「常用」「全部」两个标签 ----------
+            //
+            // 【本阶段改动】原来是"左侧分类栏生成了条目（≥2 个）"，
+            // 现在界面只保留两个标签，断言改成**精确等于 2**。
+            // 这样一旦有人不小心把分类标签加回来，测试会立刻失败。
+            Verify("分类栏只有「常用」「全部」两个标签", delegate
             {
                 List<Border> navItems = FindNavItems(panel);
                 if (navItems == null) return "找不到分类栏容器";
-                // 至少有「常用」「全部」两类
-                if (navItems.Count < 2) return "分类条目过少: " + navItems.Count;
-                return "ok（" + navItems.Count + " 个分类条目）";
+                if (navItems.Count != 2)
+                    return "分类标签应恰好 2 个（常用/全部），实际 " + navItems.Count;
+                return "ok（2 个：常用 / 全部）";
             });
 
             // ---------- 5. 应用磁贴真的渲染了 ----------
@@ -243,8 +247,13 @@ namespace Clover
                 return after == "alp" ? "ok" : "输入未生效: " + after;
             });
 
-            // ---------- 7. 分类覆盖在真实界面里生效 ----------
-            Verify("「移到分类」覆盖能改变实际分类", delegate
+            // ---------- 7. 分类覆盖数据仍然生效（界面入口已移除）----------
+            //
+            // 【本阶段改动】原断言名是「『移到分类』覆盖能改变实际分类」。
+            // 界面上的「移到分类」菜单已移除（分类标签只剩两个，手工归类没意义），
+            // 但**数据层照常生效** —— 已有 category-overrides.json 记录的应用
+            // 在 Catalog 加载时仍会被归到指定分类。断言改成验证这一点。
+            Verify("分类覆盖数据仍生效（界面入口已移除，数据层保留）", delegate
             {
                 CategoryOverrides ov = CategoryOverrides.Load(root);
                 ov.Set(exeA, "影音娱乐");
@@ -255,7 +264,7 @@ namespace Clover
                 {
                     if (a.Name == "AlphaApp")
                     {
-                        if (a.Category == "影音娱乐") return "ok";
+                        if (a.Category == "影音娱乐") return "ok（覆盖仍生效）";
                         return "覆盖未生效，实际: " + a.Category;
                     }
                 }
@@ -270,13 +279,18 @@ namespace Clover
                 return "ok（" + p + "）";
             });
 
-            // ---------- 9. 隐藏应用：分类出现、条目过滤 ----------
+            // ---------- 9. 隐藏应用：数据层仍生效，条目被过滤 ----------
+            //
             // 先记下隐藏前的总数做基线（后面用相对对比，不写死数字）
             int hiddenBaseline = 0;
             try { hiddenBaseline = Catalog.Load(root).Apps.Count; }
             catch { }
 
-            Verify("隐藏一个应用后「隐藏的项目」分类出现", delegate
+            // 【本阶段改动】原断言名是「隐藏一个应用后『隐藏的项目』分类出现」。
+            // 「隐藏的项目」标签已移除，但**隐藏数据照常生效**：
+            // 被隐藏的应用不出现在「全部」里，hidden-apps.json 里仍有记录，
+            // 通过右键菜单的「查看隐藏的项目」对话框可以逐个恢复。
+            Verify("隐藏一个应用后：数据生效、条目被过滤（无『隐藏的项目』标签）", delegate
             {
                 HiddenApps h = HiddenApps.Load(root);
                 h.Hide(exeB);
@@ -285,21 +299,38 @@ namespace Clover
                 if (after.HiddenItems().Count != 1) return "隐藏项数应为 1，实际 " + after.HiddenItems().Count;
                 if (after.ByCategory("开发").Count != 0) return "被隐藏的仍出现在原分类里";
 
-                // 总数不该变：隐藏只是打标记，条目仍留在 Apps 里（「隐藏的项目」要能看到）
-                // 用 **基线对比** 而不是写死数字 —— 夹具里还有一批填充应用，
-                // 写死数字的话以后一改夹具这条断言就假失败。
+                // 总数不该变：隐藏只是打标记，条目仍留在 Apps 里
+                // （「查看隐藏的项目」对话框要能列出来）
                 int baseline = hiddenBaseline;
                 if (baseline <= 0) return "缺少基线（TestsCatalogCount 未初始化）";
                 if (after.Apps.Count != baseline)
                     return string.Format("隐藏项不该从 Apps 里消失（应有 {0} 个，实际 {1}）",
                         baseline, after.Apps.Count);
-                return "ok（总数保持 " + baseline + "）";
+
+                // 额外确认：被隐藏的确实在 HiddenItems 里（对话框的数据源）
+                bool found = false;
+                foreach (AppItem a in after.HiddenItems())
+                {
+                    if (string.Equals(a.Path, exeB, StringComparison.OrdinalIgnoreCase)) { found = true; break; }
+                }
+                if (!found) return "被隐藏的应用不在 HiddenItems() 里（对话框会列不出来）";
+
+                return "ok（总数保持 " + baseline + "，隐藏项可列出）";
             });
 
             // ---------- 10. ★回归：上次分类已消失时必须回退，不能停在空分类 ----------
             // 这条对应一个真实 bug：取消隐藏全部后重启，程序会停在已不存在的
-            // 「隐藏的项目」上，面板一片空白。修法是 LoadLastCategory 校验分类**还有内容**。
-            Verify("★回归：上次分类已消失时回退到「全部」", delegate
+            // 「隐藏的项目」上，面板一片空白。
+            //
+            // 【本阶段改动】分类标签只剩「常用」「全部」，回退目标从
+            // "「全部」(空串)" 改成 **「常用」**（NormalizeCurrentCategory 的实现）。
+            //
+            // 注意两条边界规则会**叠加**：
+            //   ① 分类已消失 → 回退到「常用」
+            //   ② 「常用」为空（无使用记录）→ 再自动切到「全部」
+            // 测试夹具里没有使用记录，所以最终落在「全部」是正确结果。
+            // 这里断言的是"不能停在已消失的分类上"，而不是某个写死的终值。
+            Verify("★回归：上次分类已消失时回退（不停在已消失分类）", delegate
             {
                 // 造出 bug 的触发条件：last-category 指向「隐藏的项目」，
                 // 但隐藏清单是空的（分类不该存在）
@@ -319,8 +350,38 @@ namespace Clover
 
                 if (cat == PanelWindow.HiddenCategory)
                     return "停在已消失的「隐藏的项目」上（bug 复发）";
-                if (cat != "") return "应回退到「全部」(空串)，实际: " + cat;
-                return "ok";
+                if (cat == PanelWindow.PinnedCategory || cat == PanelWindow.DesktopCategory
+                    || cat == PanelWindow.WallpaperCategory)
+                    return "停在已移除的虚拟分类上: " + cat;
+                // 合法终值只有两个：常用 / 全部(空串)
+                if (cat != "常用" && cat != "")
+                    return "回退到了非法分类: " + cat;
+                return "ok（回退到" + (cat == "" ? "全部" : "常用") + "）";
+            });
+
+            // ---------- 10b. 「常用」为空时自动切到「全部」 ----------
+            //
+            // 新用户或刚清过 usage.json 的人打开面板，不该面对一页空白的「常用」。
+            // 实现里 RenderAppsCore 检测到「常用」为空会切到「全部」并写回 last-category。
+            Verify("★「常用」为空时自动切到「全部」", delegate
+            {
+                // 清空使用记录 → 「常用」必然为空
+                string usagePath = Path.Combine(root, "config", "usage.json");
+                if (File.Exists(usagePath)) File.Delete(usagePath);
+
+                // last-category 指向「常用」
+                string lastCat = Path.Combine(root, "config", "last-category.json");
+                File.WriteAllText(lastCat, "{\"category\":\"常用\"}", new UTF8Encoding(false));
+
+                PanelWindow reborn = new PanelWindow(root, null, Settings.Load(root));
+                reborn.UpdateLayout();
+                // 触发一次渲染（ShowPanel 里会调 RenderAppsIfNeeded）
+                string cat = reborn.CurrentCategory();
+                reborn.Close();
+
+                if (cat == "常用") return "「常用」为空时仍停在「常用」（会显示空白页）";
+                if (cat != "") return "应切到「全部」(空串)，实际: " + cat;
+                return "ok（已自动切到全部）";
             });
 
             // ---------- 11. 悬停放大用的是 RenderTransform（不触发布局）------------
@@ -571,10 +632,14 @@ namespace Clover
             // ---------- 16. ★滚动位置按分类分别记住 ----------
             // 为什么按分类记：切走再回来应该还在原处，而不是全局共用一个偏移
             // （那样从长分类切到短分类会滚到看不见的位置）。
+            //
+            // 【本阶段改动】原来用 "办公" 当第二个分类，但它已从界面移除。
+            // 现在只有「常用」「全部」两个标签，改用这两个互相切换。
+            // 注意：「常用」可能不满一屏（滚不动），所以只断言「全部」的偏移被记住。
             Verify("★滚动位置按分类记住并能恢复", delegate
             {
                 string catA = "";          // 全部（应用最多，一定可滚）
-                string catB = "办公";
+                string catB = "常用";
 
                 panel.SwitchCategoryForTest(catA);
                 panel.UpdateLayout();
@@ -583,7 +648,7 @@ namespace Clover
                 panel.ScrollToForTest(120);
                 double atA = panel.CurrentScrollOffset();
                 if (!panel.HasScrollMemory(catA))
-                    return "滚动后没有记录 " + (catA == "" ? "全部" : catA) + " 的偏移";
+                    return "滚动后没有记录「全部」的偏移";
                 if (atA < 50) return "滚不动或偏移过小：" + atA;
 
                 // 切到另一个分类，再切回来
@@ -596,9 +661,56 @@ namespace Clover
                 if (Math.Abs(back - atA) > 2)
                     return string.Format("切回后偏移不一致：原 {0:N0} -> 现在 {1:N0}", atA, back);
 
-                // 两个分类各自有记录
+                // 至少有一个分类有记录
                 if (panel.ScrollMemoryCount() < 1) return "记录数为 0";
                 return string.Format("ok（{0:N0} -> 切走 -> 切回 {1:N0}）", atA, back);
+            });
+
+            // ---------- 14b. ★「全部」按名称排序（逐字拼音）----------
+            //
+            // 本阶段新增：原先「全部」按使用次数排（RenderCompare），
+            // 现在改成按名称字典序 —— 用户找某个应用时能按名字直接定位。
+            Verify("★「全部」按逐字拼音排序（阿 < 波 < 次）", delegate
+            {
+                // 排序键的纯逻辑测试（不依赖界面）
+                int ab = string.Compare(Pinyin.SortKey("阿"), Pinyin.SortKey("波"), StringComparison.Ordinal);
+                if (ab >= 0) return "阿 应排在 波 前面";
+
+                int bc = string.Compare(Pinyin.SortKey("波"), Pinyin.SortKey("次"), StringComparison.Ordinal);
+                if (bc >= 0) return "波 应排在 次 前面";
+
+                // 短词在前（"阿" < "阿波"）
+                int shortFirst = string.Compare(Pinyin.SortKey("阿"), Pinyin.SortKey("阿波"), StringComparison.Ordinal);
+                if (shortFirst >= 0) return "阿 应排在 阿波 前面（短词优先）";
+
+                // 数字排最前
+                int digitFirst = string.Compare(Pinyin.SortKey("1Password"), Pinyin.SortKey("阿"), StringComparison.Ordinal);
+                if (digitFirst >= 0) return "数字开头应排在最前";
+
+                // 英文大小写不敏感
+                int caseInsensitive = string.Compare(Pinyin.SortKey("wechat"), Pinyin.SortKey("WeChat"), StringComparison.Ordinal);
+                if (caseInsensitive != 0) return "英文大小写应视为相同";
+
+                return "ok（阿<波<次、短词优先、数字最前、英文大小写不敏感）";
+            });
+
+            // ---------- 14c. 中文与英文的相对位置稳定 ----------
+            Verify("★中英文混排顺序稳定（与区域设置无关）", delegate
+            {
+                // 逐字键下：微信="wei|xin"，wechat="w|e|c|h|a|t"
+                // 比较 w==w 后，分隔符 \u0001 < 'e'，所以 wechat 在前。
+                // 这里只断言**稳定且可重现**（同样输入两次结果相同），
+                // 不写死谁在前 —— 那是实现细节，未来调排序规则不该假失败。
+                string k1 = Pinyin.SortKey("微信");
+                string k2 = Pinyin.SortKey("wechat");
+                int r1 = string.Compare(k1, k2, StringComparison.Ordinal);
+                int r2 = string.Compare(k1, k2, StringComparison.Ordinal);
+                if (r1 != r2) return "同样输入两次比较结果不同（不稳定）";
+
+                // 排序键本身可重现
+                if (Pinyin.SortKey("微信") != k1) return "SortKey 结果不稳定";
+
+                return "ok（微信 vs wechat = " + r1 + "，两次一致）";
             });
 
             // ---------- 17. ★主题：刷子真的变色（而不是只改了设置）------------

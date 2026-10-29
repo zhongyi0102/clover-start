@@ -59,6 +59,24 @@ namespace Clover
             "crash reporter", "安装包"
         };
 
+        // 目录路径里出现这些片段，说明这个 exe 是**安装器/更新器/运行时**，
+        // 不是应用本体。
+        //
+        // 为什么需要路径级判断（不只是文件名）：
+        // 实测「Microsoft Office 家庭和学生版 2021」的 DisplayIcon 指向
+        //   C:\Program Files\Microsoft Shared\ClickToRun\OfficeClickToRun.exe
+        // 文件名 "OfficeClickToRun" 里没有 unins/setup/update 这些词，
+        // 单看名字会误判成 Office 主程序 —— 但它其实是 Office 的安装/更新引擎。
+        static readonly string[] JunkPathParts = new string[]
+        {
+            "\\clicktorun\\",              // Office 安装/更新引擎
+            "\\microsoft shared\\office",  // Office 共享组件（不是主程序）
+            "\\installer\\",               // MSI 缓存目录
+            "\\common files\\installshield",
+            "\\updater\\",
+            "\\servicing\\"
+        };
+
         static readonly string[] SkipDirs = new string[]
         {
             "$recycle.bin", "system volume information", "windows", "windowsapps",
@@ -305,7 +323,18 @@ namespace Clover
             return "";
         }
 
-        static bool IsJunk(string fileName, string fullPath)
+        /// <summary>
+        /// 判定一个 exe 是不是「卸载器/安装器/更新器/运行时」（不是应用本体）。
+        ///
+        /// 三层判断：
+        ///   1. 文件名里含 junk 关键词（unins/setup/update…）
+        ///   2. 文件描述里含 junk 关键词（安装程序/卸载向导…）
+        ///   3. **所在路径**含安装器目录（ClickToRun / Installer / Updater…）
+        ///
+        /// 第 3 层是后加的：实测 Office 的 OfficeClickToRun.exe 前两层都躲过了，
+        /// 会被误当成 Office 主程序。
+        /// </summary>
+        public static bool IsJunk(string fileName, string fullPath)
         {
             string baseName = Path.GetFileNameWithoutExtension(fileName);
             if (Matches(baseName, JunkNameParts)) return true;
@@ -313,6 +342,23 @@ namespace Clover
             string desc = "";
             try { desc = Convert.ToString(FileVersionInfo.GetVersionInfo(fullPath).FileDescription); } catch { }
             if (!string.IsNullOrEmpty(desc) && Matches(desc, JunkDescParts)) return true;
+
+            // 路径级判断：把路径补上首尾分隔符，方便匹配 "\xxx\"
+            try
+            {
+                if (!string.IsNullOrEmpty(fullPath))
+                {
+                    string p = fullPath.ToLowerInvariant();
+                    if (!p.StartsWith("\\")) p = "\\" + p;
+                    if (!p.EndsWith("\\")) p = p + "\\";
+                    foreach (string part in JunkPathParts)
+                    {
+                        if (p.IndexOf(part, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    }
+                }
+            }
+            catch { }
+
             return false;
         }
 

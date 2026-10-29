@@ -22,6 +22,41 @@ namespace Clover
         /// 这样「隐藏的项目」视图能把它列出来供恢复，不必重新扫描。
         /// </summary>
         public bool Hidden;
+
+        // ---------- 以下是「多来源扫描」新增的可选字段 ----------
+        //
+        // 全部可空/空串：老 config\apps.json 没有这些键时能正常读取
+        // （反序列化时读不到就用默认值，不报错）。
+
+        /// <summary>版本号（来自注册表 DisplayVersion）。</summary>
+        public string Version;
+
+        /// <summary>发布者（来自注册表 Publisher）。</summary>
+        public string Publisher;
+
+        /// <summary>安装日期（注册表 InstallDate，格式通常是 yyyyMMdd）。</summary>
+        public string InstallDate;
+
+        /// <summary>安装目录（注册表 InstallLocation）。</summary>
+        public string InstallLocation;
+
+        /// <summary>
+        /// 来源：StartMenu / Registry / Store / Portable。
+        ///
+        /// 用于去重时决定优先级、以及界面上的「打开文件所在位置」等特殊处理
+        /// （商店应用没有文件位置）。
+        /// </summary>
+        public string Source;
+
+        /// <summary>
+        /// 商店应用的 AppUserModelID（仅 Source=Store 时有值）。
+        ///
+        /// 启动方式：explorer.exe shell:AppsFolder\&lt;AUMID&gt;
+        /// </summary>
+        public string Aumid;
+
+        /// <summary>能否启动（注册表里解析不出路径的条目为 false，界面不显示）。</summary>
+        public bool Launchable = true;
     }
 
     class Catalog
@@ -48,8 +83,40 @@ namespace Clover
             // 带修改时间检查，文件没改就跳过重复解析。
             CategoryRules.Init(baseDir);
 
+            // ---- 读三份数据源 ----
+            //
+            // apps.json / manual-apps.json：开始菜单 + 便携 + 手工添加
+            // registry-apps.json：注册表 Uninstall
+            // store-apps.json：商店应用
+            //
+            // 每份独立读，某份坏了只丢那一份（用户要求 C4：不能影响启动）。
             ReadInto(c, Path.Combine(cfg, "apps.json"));
             ReadInto(c, Path.Combine(cfg, "manual-apps.json"));
+
+            // ---- 合并三源 + 去重 ----
+            //
+            // 为什么在 Load 里做而不是扫描时做（用户要求 D1）：
+            //   · Load 每次都会跑，保证界面看到的是去重后的状态
+            //   · 用户手改任何一份 JSON 后都能立刻反映
+            //   · 结果确定性由 AppDedup 内部的稳定排序保证
+            try
+            {
+                List<RegistryScanner.Entry> reg = ReadRegistryFile(baseDir);
+                List<StoreAppScanner.Entry> store = ReadStoreFile(baseDir);
+
+                if ((reg != null && reg.Count > 0) || (store != null && store.Count > 0))
+                {
+                    AppDedup.Stats ds = new AppDedup.Stats();
+                    List<AppItem> merged = AppDedup.Merge(c.Apps, reg, store, ds);
+                    c.Apps = merged;
+                    Log.Info(ds.Report());
+                }
+            }
+            catch (Exception ex)
+            {
+                // 去重失败时保留原始 c.Apps（不去重也比没有好）
+                Log.Hook(ex, "合并去重");
+            }
 
             foreach (string d in DefaultOrder) EnsureOrder(c, d);
 
@@ -89,6 +156,98 @@ namespace Clover
             return c;
         }
 
+        /// <summary>
+        /// 读 registry-apps.json。文件不存在/损坏时返回空列表（不抛异常）。
+        /// </summary>
+        static List<RegistryScanner.Entry> ReadRegistryFile(string baseDir)
+        {
+            List<RegistryScanner.Entry> list = new List<RegistryScanner.Entry>();
+            try
+            {
+                string path = RegistryScanner.PathOf(baseDir);
+                string json = JsonIO.Read(path);
+                if (string.IsNullOrEmpty(json)) return list;
+
+                JavaScriptSerializer ser = new JavaScriptSerializer();
+                ser.MaxJsonLength = int.MaxValue;
+                Dictionary<string, object> root = ser.Deserialize<Dictionary<string, object>>(json);
+                if (root == null) return list;
+
+                object arr;
+                if (!root.TryGetValue("apps", out arr) || arr == null) return list;
+
+                foreach (object o in JsonIO.AsArray(arr))
+                {
+                    Dictionary<string, object> m = o as Dictionary<string, object>;
+                    if (m == null) continue;
+
+                    RegistryScanner.Entry e = new RegistryScanner.Entry();
+                    e.DisplayName = GetStr(m, "name");
+                    e.LaunchPath = GetStr(m, "launchPath");
+                    e.Launchable = GetBool(m, "launchable", true);
+                    e.SkipReason = GetStr(m, "skipReason");
+                    e.Version = GetStr(m, "version");
+                    e.Publisher = GetStr(m, "publisher");
+                    e.InstallDate = GetStr(m, "installDate");
+                    e.InstallLocation = GetStr(m, "installLocation");
+
+                    if (string.IsNullOrEmpty(e.DisplayName)) continue;
+                    list.Add(e);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读 registry-apps.json 失败（已忽略该来源）: " + ex.Message);
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// 读 store-apps.json。文件不存在/损坏时返回空列表（不抛异常）。
+        /// </summary>
+        static List<StoreAppScanner.Entry> ReadStoreFile(string baseDir)
+        {
+            List<StoreAppScanner.Entry> list = new List<StoreAppScanner.Entry>();
+            try
+            {
+                string path = StoreAppScanner.PathOf(baseDir);
+                string json = JsonIO.Read(path);
+                if (string.IsNullOrEmpty(json)) return list;
+
+                JavaScriptSerializer ser = new JavaScriptSerializer();
+                ser.MaxJsonLength = int.MaxValue;
+                Dictionary<string, object> root = ser.Deserialize<Dictionary<string, object>>(json);
+                if (root == null) return list;
+
+                object arr;
+                if (!root.TryGetValue("apps", out arr) || arr == null) return list;
+
+                foreach (object o in JsonIO.AsArray(arr))
+                {
+                    Dictionary<string, object> m = o as Dictionary<string, object>;
+                    if (m == null) continue;
+
+                    StoreAppScanner.Entry e = new StoreAppScanner.Entry();
+                    e.DisplayName = GetStr(m, "name");
+                    e.Aumid = GetStr(m, "aumid");
+                    e.LaunchPath = GetStr(m, "launchPath");
+
+                    if (string.IsNullOrEmpty(e.DisplayName)) continue;
+                    if (string.IsNullOrEmpty(e.Aumid)) continue;
+                    // launchPath 缺失时按 AUMID 重建（容错老文件）
+                    if (string.IsNullOrEmpty(e.LaunchPath))
+                        e.LaunchPath = AppPaths.FromAumid(e.Aumid);
+
+                    list.Add(e);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读 store-apps.json 失败（已忽略该来源）: " + ex.Message);
+            }
+            return list;
+        }
+
         static void EnsureOrder(Catalog c, string cat)
         {
             if (string.IsNullOrEmpty(cat)) return;
@@ -119,7 +278,29 @@ namespace Clover
                         a.Path = GetStr(m, "path");
                         a.Category = GetStr(m, "category");
                         if (string.IsNullOrEmpty(a.Name) || string.IsNullOrEmpty(a.Path)) continue;
-                        if (!File.Exists(a.Path)) continue;
+
+                        // 新增可选字段：老配置里没有这些键时 GetStr 返回 ""，
+                        // GetBool 返回默认值 —— 不报错、不丢条目（铁律 3）。
+                        a.Version = GetStr(m, "version");
+                        a.Publisher = GetStr(m, "publisher");
+                        a.InstallDate = GetStr(m, "installDate");
+                        a.InstallLocation = GetStr(m, "installLocation");
+                        a.Source = GetStr(m, "source");
+                        a.Aumid = GetStr(m, "aumid");
+                        a.Launchable = GetBool(m, "launchable", true);
+
+                        // 老配置没有 source 字段：按路径形态推断
+                        if (string.IsNullOrEmpty(a.Source))
+                        {
+                            a.Source = AppPaths.IsShellPath(a.Path)
+                                ? AppPaths.SourceStore
+                                : AppPaths.SourceStartMenu;
+                        }
+
+                        // 商店应用是 shell:AppsFolder\... 这种非文件路径，
+                        // 不能用 File.Exists 判断（会当成死链丢掉）。
+                        if (!AppPaths.IsShellPath(a.Path) && !File.Exists(a.Path)) continue;
+
                         if (c.ContainsPath(a.Path)) continue;
                         if (string.IsNullOrEmpty(a.Category)) a.Category = GuessCategory(a.Name);
                         if (c.ContainsName(a.Name)) continue;
@@ -136,6 +317,19 @@ namespace Clover
             if (m.TryGetValue(key, out v) && v != null)
                 return Convert.ToString(v);
             return "";
+        }
+
+        /// <summary>
+        /// 读布尔值，缺键或格式不对时返回默认值。
+        ///
+        /// 为什么不用 Convert.ToBoolean 直接调：老配置里这个键根本不存在，
+        /// 或者有人手改成 "true"/1 之类的字符串，直接转会抛异常。
+        /// </summary>
+        static bool GetBool(Dictionary<string, object> m, string key, bool def)
+        {
+            object v;
+            if (!m.TryGetValue(key, out v) || v == null) return def;
+            try { return Convert.ToBoolean(v); } catch { return def; }
         }
 
         public bool ContainsName(string name)
@@ -203,7 +397,14 @@ namespace Clover
                     m["name"] = a.Name;
                     m["path"] = a.Path;
                     m["category"] = a.Category;
-                    arr.Add(m);
+                    // 新增可选字段：只写非空的，避免老版本读到一堆空串
+                    if (!string.IsNullOrEmpty(a.Version)) m["version"] = a.Version;
+                    if (!string.IsNullOrEmpty(a.Publisher)) m["publisher"] = a.Publisher;
+                    if (!string.IsNullOrEmpty(a.InstallDate)) m["installDate"] = a.InstallDate;
+                    if (!string.IsNullOrEmpty(a.InstallLocation)) m["installLocation"] = a.InstallLocation;
+                    if (!string.IsNullOrEmpty(a.Source)) m["source"] = a.Source;
+                    if (!string.IsNullOrEmpty(a.Aumid)) m["aumid"] = a.Aumid;
+                    if (!a.Launchable) m["launchable"] = false;
                 }
                 root["apps"] = arr;
                 JavaScriptSerializer ser = new JavaScriptSerializer();

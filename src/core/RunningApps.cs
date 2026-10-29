@@ -178,6 +178,15 @@ namespace Clover
             {
                 if (string.IsNullOrEmpty(path)) return false;
 
+                // ---- 商店应用：永远不显示"运行中"圆点 ----
+                //
+                // shell:AppsFolder\<AUMID> 是 Shell 命名空间路径，
+                // 拿不到进程的可执行文件路径，无法判断"在不在运行"。
+                //
+                // 这里返回 false 而不是抛异常 —— 界面只是不画圆点，
+                // 用户仍然能正常启动应用。
+                if (AppPaths.IsShellPath(path)) return false;
+
                 string target = path;
                 if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
                 {
