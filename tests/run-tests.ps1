@@ -63,6 +63,7 @@ $catalogDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
     (Join-Path $coreDir 'Migration.cs'),
     (Join-Path $coreDir 'Settings.cs'),
+    (Join-Path $coreDir 'AppearancePresets.cs'),
     (Join-Path $coreDir 'AppPaths.cs'),
     (Join-Path $coreDir 'AppDedup.cs'),
     (Join-Path $coreDir 'ShortcutResolver.cs'),
@@ -87,6 +88,7 @@ $dedupDeps = @(
     (Join-Path $coreDir 'Catalog.cs'),
     (Join-Path $coreDir 'Migration.cs'),
     (Join-Path $coreDir 'Settings.cs'),
+    (Join-Path $coreDir 'AppearancePresets.cs'),
     (Join-Path $coreDir 'Log.cs'),
     (Join-Path $coreDir 'HiddenApps.cs'),
     (Join-Path $coreDir 'NameMatch.cs'),
@@ -156,7 +158,7 @@ Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
 
 Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
-    @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
+    @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
 Invoke-Suite 'WatcherTest' $baseRefs `
     @((Join-Path $testDir 'WatcherTest.cs'))
@@ -194,6 +196,10 @@ Invoke-Suite 'GlassBackdropTest' $wpfRefs `
 Invoke-Suite 'AppearanceTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'AppearanceTest.cs')))
 
+
+# 毛玻璃预设：参数映射、切换生效、custom 模式、保存重载、旧配置、边界
+Invoke-Suite 'AppearancePresetTest' ($baseRefs + $webRef) `
+    (@((Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'AppearancePresetTest.cs')))
   # 图标缓存：快捷方式去箭头、透明通道、缓存键版本化、商店应用
   Invoke-Suite 'IconTest' $wpfRefs `
       ($allSrc + @((Join-Path $testDir 'IconTest.cs')))

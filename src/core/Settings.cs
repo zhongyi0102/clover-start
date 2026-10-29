@@ -228,7 +228,9 @@ namespace Clover
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
                 // ---- 外观参数（越界/格式错 → 回退默认 + 写日志，不崩溃）----
-                s.GlassPreset = ReadString(d, "glassPreset", s.GlassPreset, null);
+                // glassPreset 用白名单校验：未知值（旧配置 / 手改错）回退 "custom"
+                // 白名单从 AppearancePresets 动态取，避免两处维护
+                s.GlassPreset = ReadPresetName(d, "glassPreset", s.GlassPreset);
                 s.GlassBlur = ReadDoubleClamped(d, "glassBlur", s.GlassBlur, 0.0, 30.0);
                 s.GlassTint = ReadColor(d, "glassTint", s.GlassTint);
                 s.GlassTintStrength = ReadIntClamped(d, "glassTintStrength", s.GlassTintStrength, 0, 100);
@@ -403,6 +405,35 @@ namespace Clover
             catch (Exception ex)
             {
                 Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退默认");
+                return def;
+            }
+        }
+
+        /// <summary>
+        /// 读预设名：必须是 custom 或任一内置预设，否则回退 def 并写日志。
+        ///
+        /// 为什么单独一个方法：白名单来自 AppearancePresets（集中定义），
+        /// 不在这里硬编码一份，避免两处不同步。
+        /// </summary>
+        static string ReadPresetName(Dictionary<string, object> d, string key, string def)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                string s = Convert.ToString(v);
+                if (string.IsNullOrWhiteSpace(s)) return def;
+                s = s.Trim();
+
+                if (AppearancePresets.IsValidKey(s))
+                    return AppearancePresets.Find(s).Key;   // 规范化成内部名（小写）
+
+                Log.Warn("settings." + key + " 不是已知预设（" + s + "），已回退 " + def);
+                return def;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退 " + def);
                 return def;
             }
         }
