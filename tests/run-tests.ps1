@@ -201,6 +201,10 @@ Invoke-Suite 'AppearanceTest' $wpfRefs `
 Invoke-Suite 'AppearancePresetTest' ($baseRefs + $webRef) `
     (@((Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'AppearancePresetTest.cs')))
   # 图标缓存：快捷方式去箭头、透明通道、缓存键版本化、商店应用
+
+# 文字对比度保底：4 条约束（关闭清空 / 只补偿文字区 / 达标不改像素 / 实际合成验证）
+Invoke-Suite 'ContrastTest' $baseRefs `
+    (@((Join-Path $coreDir 'ContrastGuard.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'ContrastTest.cs')))
   Invoke-Suite 'IconTest' $wpfRefs `
       ($allSrc + @((Join-Path $testDir 'IconTest.cs')))
 Invoke-Suite 'FullscreenTest' $wpfRefs `

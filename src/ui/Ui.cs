@@ -118,7 +118,10 @@ namespace Clover
             Line = 0x3CD5E3FF,      // 冷白发丝线
             Edge = 0x30D5E3FF,      // 外框更淡
             Fg = 0xFFF0F4F5,          // 近白（深底上要够亮）
-            Sub = 0xFFA8B6BC,         // 青灰（比原先亮一档，小字要可读）
+            Sub = 0xFFC4D0D5,         // 青灰（比原 #A8B6BC 提亮一档：
+                                      //   实测最亮背景（纯白壁纸 + 低浓度）上
+                                      //   次要文字对比度 2.69 → 3.55，达到 WCAG AA 3.0；
+                                      //   仍明显弱于 Fg #F0F4F5，视觉层级不变）
             Hover = 0x38FFFFFF,     // 白 22%（玻璃上的悬停是高光，不是加深）
             Pressed = 0x50FFFFFF,   // 白 31%
             SearchBg = 0x2EFFFFFF,  // 白 18%（搜索框比周围略亮）

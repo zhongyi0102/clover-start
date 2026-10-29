@@ -140,6 +140,15 @@ namespace Clover
         /// </summary>
         public string GlassAccent = "";
 
+        /// <summary>
+        /// 文字清晰保底：背景太亮/太暗导致文字读不清时，自动在**文字区域**叠一层
+        /// 极淡的压暗（深色主题）或提亮（浅色主题），让对比度达到 WCAG。
+        ///
+        /// **只影响渲染结果，不写入任何配置**。默认开。
+        /// 关掉后完全回到「不补偿」的渲染（补偿层被移除，不残留蒙层）。
+        /// </summary>
+        public bool TextContrastGuard = true;
+
 
 
         /// <summary>
@@ -236,6 +245,12 @@ namespace Clover
                 s.GlassTintStrength = ReadIntClamped(d, "glassTintStrength", s.GlassTintStrength, 0, 100);
                 s.GlassBrightness = ReadIntClamped(d, "glassBrightness", s.GlassBrightness, -50, 50);
                 s.GlassAccent = ReadColor(d, "glassAccent", s.GlassAccent);
+                // 文字清晰保底：缺键时用默认 true（老配置也享受保底）
+                if (d.TryGetValue("textContrastGuard", out v) && v != null)
+                {
+                    try { s.TextContrastGuard = Convert.ToBoolean(v); }
+                    catch { Log.Warn("settings.textContrastGuard 不是布尔值，已用默认 true"); }
+                }
                 // 旧配置没有这个键时保持字段默认值 false（不回退报错）
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
@@ -287,6 +302,7 @@ namespace Clover
                 d["glassTintStrength"] = GlassTintStrength;
                 d["glassBrightness"] = GlassBrightness;
                 d["glassAccent"] = GlassAccent;
+                d["textContrastGuard"] = TextContrastGuard;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();

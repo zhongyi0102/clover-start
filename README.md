@@ -231,14 +231,15 @@ outerLayer（圆角裁剪）
 | `glassTintStrength` | `10` | 染色强度 0-100 |
 | `glassBrightness` | `0` | 亮度 -50 ~ +50 |
 | `glassAccent` | `""` | 强调色 `#RRGGBB`（空 = 主题默认） |
+| `textContrastGuard` | `true` | **文字清晰保底**：背景太亮/太暗时自动在文字区域叠极淡的压暗/提亮，让对比度达到 WCAG。只影响渲染，不写配置 |
 
-> **共 19 个键**，按用途分四组：
+> **共 20 个键**，按用途分四组：
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
 > | **功能开关** | `taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode` | 6 |
 > | **状态与标记** | `hideTaskbar` / `desktopAutoCleanNoticeShown` | 2 |
-> | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` | 10 |
+> | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `textContrastGuard` | 11 |
 > | **数据** | `hiddenCategories` | 1 |
 >
 > **界面入口**：

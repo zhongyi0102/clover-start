@@ -375,6 +375,66 @@ namespace Clover
                 bScreen.ToolTip = "截取桌面壁纸并模糊（透出真实桌面，但亮壁纸会干扰阅读）";
                 modeRow.Children.Add(bScreen);
 
+
+                // ===== 文字清晰保底 =====
+                body.Children.Add(SectionLabel("文字清晰"));
+
+                Border guardChip = null;
+                TextBlock guardHint = null;
+                Action refreshGuard = null;
+                refreshGuard = delegate
+                {
+                    try
+                    {
+                        bool on = settings == null || settings.TextContrastGuard;
+                        if (guardChip != null)
+                        {
+                            guardChip.Background = on ? Ui.Accent : Ui.SearchBg;
+                            TextBlock t = guardChip.Child as TextBlock;
+                            if (t != null) t.Foreground = on ? Brushes.White : Ui.Fg;
+                            t.Text = on ? "已开启" : "已关闭";
+                        }
+                        // 触发时显示灰色小字（提示用户背景被自动补偿了）
+                        if (guardHint != null)
+                        {
+                            double alpha = panel == null ? 0 : panel.CurrentGuardAlpha;
+                            if (on && alpha > 0.001)
+                            {
+                                bool dark = Ui.AppliedTheme == Ui.ThemeMode.Dark;
+                                guardHint.Text = "已自动" + (dark ? "加深" : "提亮")
+                                    + "以保证文字清晰（补偿 " + (alpha * 100).ToString("F0") + "%）";
+                                guardHint.Visibility = Visibility.Visible;
+                            }
+                            else
+                            {
+                                guardHint.Visibility = Visibility.Collapsed;
+                            }
+                        }
+                    }
+                    catch { }
+                };
+
+                guardChip = MakeChip("文字清晰保底", delegate
+                {
+                    try
+                    {
+                        if (settings != null) settings.TextContrastGuard = !settings.TextContrastGuard;
+                        refreshGuard();
+                        commit();
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "切换文字保底"); }
+                });
+                guardChip.ToolTip = "背景太亮/太暗时，自动在文字区域叠一层极淡的压暗或提亮，让文字达到 WCAG 对比度";
+                guardChip.HorizontalAlignment = HorizontalAlignment.Left;
+                guardChip.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+                body.Children.Add(guardChip);
+
+                guardHint = Ui.T("", 10.5, Ui.Sub);
+                guardHint.Margin = new Thickness(0, Ui.S.Xs, 0, Ui.S.Lg);
+                guardHint.Visibility = Visibility.Collapsed;
+                body.Children.Add(guardHint);
+
+                refreshers.Add(refreshGuard);
                 refreshers.Add(refreshMode);
 
                 // ---- 统一的「从 settings 刷新全部 UI」----

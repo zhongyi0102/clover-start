@@ -184,6 +184,12 @@ namespace Clover
         /// 而截屏结果缓存在 glassBackdrop.cached 里。所以拖动滑块时
         /// 每次只花几毫秒重新合成，不是 50-150ms 重新截屏。
         /// </summary>
+        /// <summary>当前文字保底的补偿 alpha（0 = 未补偿）。供外观窗口显示提示用。</summary>
+        public double CurrentGuardAlpha
+        {
+            get { try { return glassBackdrop == null ? 0 : glassBackdrop.GuardAlpha; } catch { return 0; } }
+        }
+
         public void ApplyGlassPreview()
         {
             try
@@ -225,6 +231,7 @@ namespace Clover
                 glassBackdrop.BlurRadius = settings.GlassBlur;
                 glassBackdrop.TintStrength = settings.GlassTintStrength / 100.0;
                 glassBackdrop.Brightness = settings.GlassBrightness;
+                glassBackdrop.ContrastGuardEnabled = settings.TextContrastGuard;
 
                 // 染色色：空 = 用强调色（改动前的行为）
                 byte tr, tg, tb;

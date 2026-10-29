@@ -7,6 +7,8 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
+using Rectangle = System.Windows.Shapes.Rectangle;
 using System.Windows.Threading;
 
 namespace Clover
@@ -74,6 +76,7 @@ namespace Clover
         Border brightLayer;            // 亮度层：半透明白/黑，实现提亮/压暗
         Border grainLayer;             // 噪点层：磨砂颗粒感
         Border highlightLayer;         // 高光层：内边缘 1px 亮线，模拟玻璃厚度
+        Canvas guardLayer;              // 文字保底层：**只在文字区域**画半透明矩形
 
         ImageSource cached;
         string cacheKey = "";
@@ -140,6 +143,16 @@ namespace Clover
 
         /// <summary>亮度偏移 -50 ~ +50（作用在模糊后的底图上）。</summary>
         public int Brightness;
+
+        /// <summary>
+        /// 文字清晰保底：是否启用。关掉时 guardLayer 会被清空（不残留蒙层）。
+        /// </summary>
+        public bool ContrastGuardEnabled = true;
+
+        /// <summary>
+        /// 当前保底计算的 alpha（诊断/测试用）。0 = 未补偿。
+        /// </summary>
+        public double GuardAlpha;
 
 
         /// <summary>
@@ -398,7 +411,7 @@ namespace Clover
                 if (backgroundImage == null)
                 {
                     if (string.IsNullOrEmpty(resDir)) return null;
-                    string path = Path.Combine(resDir, BackgroundFile);
+                    string path = System.IO.Path.Combine(resDir, BackgroundFile);
                     if (!File.Exists(path)) return null;
 
                     BitmapImage bi = new BitmapImage();
@@ -491,6 +504,130 @@ namespace Clover
         }
 
         /// <summary>把背景图挂到最底层（幂等：已有就更新，没有就建）。</summary>
+        /// <summary>
+        /// 应用文字清晰保底：按区域在 guardLayer 上画半透明矩形。
+        ///
+        /// **四条硬约束**：
+        ///   1. 关掉时**彻底清空** guardLayer（不残留黑/白蒙层）
+        ///   2. **只画文字区域**，不整面板压暗/提亮（否则毁掉毛玻璃观感）
+        ///   3. 某区域已达标 → 不画（保护原有外观）
+        ///   4. 用**降采样图**算，不碰全尺寸位图（性能）
+        ///
+        /// 采样来源：把当前已合成的背景（innerLayer 的图 + 染色 + 亮度）
+        /// 用 RenderTargetBitmap 渲染到 64×40 的小图上，再交给 ContrastGuard。
+        /// </summary>
+        void AttachGuardLayer(ImageSource img)
+        {
+            try
+            {
+                if (guardLayer == null) return;
+
+                // ---- 约束 1：关掉时彻底清空 ----
+                guardLayer.Children.Clear();
+                GuardAlpha = 0;
+                if (!ContrastGuardEnabled) return;
+
+                if (host == null || img == null) return;
+                double pw = host.ActualWidth > 0 ? host.ActualWidth : owner.ActualWidth;
+                double ph = host.ActualHeight > 0 ? host.ActualHeight : owner.ActualHeight;
+                if (pw < 56 || ph < 56) return;
+
+                // ---- 约束 4：降采样采样 ----
+                //
+                // 把「底图 + 亮度层 + 染色层」按顺序画到 64×40 的小图上。
+                // 为什么不用 RenderTargetBitmap 渲染整个视觉树：那会把文字也画进去，
+                // 而且开销大。这里只关心**背景色**，所以手动复刻三层叠加。
+                byte[] samples = SampleBackground(img, pw, ph);
+                if (samples == null) return;
+
+                bool dark = Ui.AppliedTheme == Ui.ThemeMode.Dark;
+                Color fg = Ui.Fg.Color, sub = Ui.Sub.Color;
+
+                List<ContrastGuard.RegionNeed> needs = ContrastGuard.ComputeRegions(
+                    samples, ContrastGuard.SampleW, ContrastGuard.SampleH, dark,
+                    fg.R, fg.G, fg.B, sub.R, sub.G, sub.B);
+
+                if (needs == null || needs.Count == 0) return;
+
+                // ---- 约束 2 + 3：只画需要的区域 ----
+                double maxAlpha = 0;
+                foreach (ContrastGuard.RegionNeed need in needs)
+                {
+                    if (need.Alpha <= 0) continue;
+                    if (need.Alpha > maxAlpha) maxAlpha = need.Alpha;
+
+                    byte ov = (byte)(need.IsBlack ? 0 : 255);
+                    byte a = (byte)Math.Round(Math.Max(0, Math.Min(1, need.Alpha)) * 255);
+                    if (a == 0) continue;
+
+                    Rectangle r = new Rectangle();
+                    r.Fill = new SolidColorBrush(Color.FromArgb(a, ov, ov, ov));
+                    r.Width = need.Region.W * pw;
+                    r.Height = need.Region.H * ph;
+                    r.RadiusX = r.RadiusY = 4;   // 轻微圆角，避免硬边
+                    Canvas.SetLeft(r, need.Region.X * pw);
+                    Canvas.SetTop(r, need.Region.Y * ph);
+                    guardLayer.Children.Add(r);
+                }
+                GuardAlpha = maxAlpha;
+            }
+            catch (Exception ex)
+            {
+                // 异常：清空并回退（不补偿，绝不留下半成品蒙层）
+                try { if (guardLayer != null) guardLayer.Children.Clear(); } catch { }
+                GuardAlpha = 0;
+                Ui.LogError(ex, "文字清晰保底");
+            }
+        }
+
+        /// <summary>
+        /// 把当前背景合成结果采样成 ContrastGuard 需要的 BGRA 数组。
+        ///
+        /// 复刻 Attach 的叠加顺序：底图 → 亮度层 → 染色层。
+        /// 不含噪点（2.5%，影响可忽略）和高光（1px 边框，不在文字区域）。
+        /// </summary>
+        byte[] SampleBackground(ImageSource img, double pw, double ph)
+        {
+            try
+            {
+                int w = ContrastGuard.SampleW, h = ContrastGuard.SampleH;
+
+                DrawingVisual dv = new DrawingVisual();
+                using (DrawingContext dc = dv.RenderOpen())
+                {
+                    dc.DrawImage(img, new Rect(0, 0, w, h));
+
+                    // 亮度层
+                    int b = Math.Max(-50, Math.Min(50, Brightness));
+                    if (b != 0)
+                    {
+                        byte a = (byte)Math.Round(Math.Abs(b) / 50.0 * 0.5 * 255);
+                        Color c = b > 0 ? Colors.White : Colors.Black;
+                        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(a, c.R, c.G, c.B)), null,
+                            new Rect(0, 0, w, h));
+                    }
+
+                    // 染色层
+                    Color tintColor = TintColor.HasValue ? TintColor.Value : Ui.Accent.Color;
+                    byte ta = (byte)Math.Round(Math.Max(0, Math.Min(1, TintStrength)) * 255);
+                    if (ta > 0)
+                    {
+                        dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(ta, tintColor.R, tintColor.G, tintColor.B)),
+                            null, new Rect(0, 0, w, h));
+                    }
+                }
+
+                RenderTargetBitmap rtb = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+                rtb.Render(dv);
+                rtb.Freeze();
+
+                byte[] px = new byte[w * h * 4];
+                rtb.CopyPixels(px, w * 4, 0);
+                return px;
+            }
+            catch { return null; }
+        }
+
         void Attach(ImageSource img)
         {
             try
@@ -538,12 +675,18 @@ namespace Clover
                     highlightLayer = new Border();
                     highlightLayer.Tag = "glassBackdropHighlight";
 
+                    // 文字保底层：Canvas 才能按区域精确定位（Grid 会拉伸子元素）
+                    guardLayer = new Canvas();
+                    guardLayer.Tag = "glassBackdropGuard";
+                    guardLayer.IsHitTestVisible = false;
+
                     Grid stack = new Grid();
                     stack.Children.Add(innerLayer);
                     stack.Children.Add(brightLayer);   // 亮度层压在模糊图上方、染色下方
                     stack.Children.Add(tintLayer);
                     stack.Children.Add(grainLayer);
                     stack.Children.Add(highlightLayer);
+                    stack.Children.Add(guardLayer);   // 保底层压在最上面
 
                     outerLayer = new Border();
                     outerLayer.Tag = "glassBackdrop";
@@ -614,6 +757,10 @@ namespace Clover
                 catch { }
 
                 innerLayer.Background = new ImageBrush(img) { Stretch = Stretch.Fill };
+
+                // 文字清晰保底：必须放在所有层都设好之后
+                // （它要采样「底图+亮度+染色」的合成结果）
+                AttachGuardLayer(img);
                 innerLayer.CornerRadius = new CornerRadius(CornerRadius);
                 outerLayer.CornerRadius = new CornerRadius(CornerRadius);
 
