@@ -274,9 +274,6 @@ namespace Clover
             // 否则拼音搜索（weixin/wx）在界面上永远搜不到 —— 磁贴被隐藏了，
             // 而 SystemSearch 不包含已扫描清单。
             searchResults.CatalogProvider = delegate { return catalog == null ? null : catalog.Apps; };
-            // 磁盘文件搜索默认关闭（settings.DiskSearchEnabled = false）：
-            // 只显示可启动的程序，不再混进 "报告.docx" 这类文件名。
-            searchResults.EnableDiskSearch = settings != null && settings.DiskSearchEnabled;
 
             // 两者放进同一个 Grid，靠 Visibility 切换
             Grid contentStack = new Grid();

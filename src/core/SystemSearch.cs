@@ -13,7 +13,7 @@ namespace Clover
         public string Path;
         public bool IsFolder;
 
-        /// <summary>来源：开始菜单 / 注册表 / 磁盘。用于排序与图标选择。</summary>
+        /// <summary>来源：开始菜单 / 注册表。用于排序与图标选择。</summary>
         public string Source;
 
         /// <summary>扩展名（小写，含点）。文件才有。</summary>
@@ -21,26 +21,13 @@ namespace Clover
     }
 
     /// <summary>
-    /// 系统级搜索（参考 GlassBoard 的两级设计）。
+    /// 系统级搜索：开始菜单快捷方式 + 注册表（App Paths / Uninstall）。
     ///
-    /// **为什么要两级**：
-    ///   · 用户期望"输入即出结果"，但遍历磁盘不可能瞬间完成
-    ///   · 所以先给「已知的、廉价的」结果（开始菜单 + 注册表），
-    ///     再在后台慢慢补磁盘文件，结果**流式追加**
-    ///   · 用户感知是"立刻有结果，然后越来越多"
+    /// 目标 < 20 ms（实测这台机器约 8-15 ms）。
     ///
-    /// 两级：
-    ///   Instant → 开始菜单快捷方式 + 注册表 App Paths + 注册表 Uninstall
-    ///             目标 < 20 ms（实测这台机器约 8-15 ms）
-    ///   Deep    → 桌面/文档/图片/音乐/视频/下载 + 其他盘
-    ///             后台线程，分批回调，可取消
-    ///
-    /// 防卡死的四个硬约束（都来自实测教训）：
-    ///   · 总结果上限 120（再多用户也翻不到）
-    ///   · 单根目录上限 80（避免一个巨大目录吃掉全部配额）
-    ///   · 递归深度 5（够覆盖正常文件组织）
-    ///   · CancellationToken：用户继续输入时立刻中断旧搜索，
-    ///     否则多次输入会累积成多个并发遍历，把磁盘打满
+    /// 只搜「可启动的程序」—— 磁盘文件搜索（原来的 Deep 阶段）已移除，
+    /// 因为用户打开启动面板通常是想启动程序，不是找文件；
+    /// 找文件用资源管理器更合适。
     /// </summary>
     static class SystemSearch
     {
@@ -50,21 +37,6 @@ namespace Clover
         /// <summary>单个根目录上限。</summary>
         const int MaxPerRoot = 80;
 
-        /// <summary>递归深度上限。</summary>
-        const int MaxDepth = 5;
-
-        /// <summary>
-        /// 深度搜索的**时间预算**（毫秒）。
-        ///
-        /// 为什么必须有它：结果数上限挡不住慢搜索。
-        /// 实测搜"报告"时整盘只有 9 个匹配，永远达不到 MaxPerRoot=80，
-        /// 于是遍历了 D: 和 E: 的全部目录（合计 300+ GB），耗时 **8545 ms**。
-        ///
-        /// 用户的心理预期是"输入后马上有反应"，超过 1 秒就会觉得卡。
-        /// 所以按**时间**截断，而不是按结果数 —— 时间到了就停，
-        /// 已经找到的照样交给界面（部分结果比没有好）。
-        /// </summary>
-        const int DeepBudgetMs = 900;
 
         /// <summary>Instant 阶段的结果上限（开始菜单 + 注册表）。</summary>
         const int MaxInstant = 150;
@@ -113,31 +85,6 @@ namespace Clover
             return true;
         }
 
-        /// <summary>
-        /// 磁盘搜索结果里**明确排除**的扩展名。
-        ///
-        /// 为什么必须排除：实测搜 "chrome" 时，Deep 找到 60 条，
-        /// 其中 58 条是噪音 ——
-        ///   · `chrome_100_percent.pak`（Chromium 的资源包，几十个程序各带一份）
-        ///   · `chrome_elf.dll`（同名 DLL）
-        ///   · `chromehtml.dll`、`host-manifest-chrome.json`、`xl_ext_chrome.crx`
-        /// 用户搜 "chrome" 想要的是浏览器，不是这些内部文件。
-        ///
-        /// 原则：磁盘搜索只返回**用户可能想打开的东西**（程序、文档、媒体、压缩包），
-        /// 不返回程序内部资源。
-        /// </summary>
-        static readonly HashSet<string> JunkExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            // 程序内部资源
-            ".dll", ".pak", ".bin", ".dat", ".json", ".xml", ".ini", ".cfg", ".conf",
-            ".reg", ".backup", ".bak", ".tmp", ".log", ".db", ".sqlite", ".pyc",
-            ".crx", ".pdb", ".lib", ".obj", ".res", ".manifest", ".lock", ".cache",
-            ".so", ".dylib", ".a", ".h", ".hpp", ".c", ".cpp", ".cs", ".java",
-            ".js", ".map", ".css", ".scss", ".less", ".ts", ".jsx", ".tsx",
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
-            ".woff", ".woff2", ".ttf", ".otf", ".eot"
-        };
-
         static void TryAdd(List<SearchResult> list, Dictionary<string, bool> seen,
                            string name, string path, bool isFolder, string[] words, string source)
         {
@@ -148,7 +95,6 @@ namespace Clover
 
                 // 磁盘来源才做扩展名过滤；开始菜单/注册表的结果都是用户可见的程序
                 string ext = isFolder ? "" : Path.GetExtension(path).ToLowerInvariant();
-                if (source == "磁盘" && !isFolder && JunkExt.Contains(ext)) return;
 
                 string key = path.ToLowerInvariant();
                 if (seen.ContainsKey(key)) return;
@@ -339,185 +285,10 @@ namespace Clover
         }
 
         // ════════════════════════════════════════════════════════════
-        //  Deep：磁盘文件（后台流式）
         // ════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// 深度搜索。**必须在后台线程调用**（会遍历磁盘）。
-        ///
-        /// 分批回调：每找到一批就交给 batch，让界面能边搜边显示。
-        /// ct 被取消时立刻停止 —— 用户继续打字时旧搜索必须让路，
-        /// 否则多次输入会累积成多个并发遍历把磁盘打满。
-        /// </summary>
-        public static void Deep(string query, Action<List<SearchResult>> batch, CancellationToken ct)
-        {
-            try
-            {
-                string[] words = SplitWords(query);
-                if (words.Length == 0) return;
 
-                Dictionary<string, bool> seen = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-                List<SearchResult> pending = new List<SearchResult>();
-                int total = 0;
-                int lastFlush = Environment.TickCount;
-                int started = Environment.TickCount;
 
-                foreach (string root in DeepRoots())
-                {
-                    if (ct.IsCancellationRequested || total >= MaxTotal) break;
-                    if (Environment.TickCount - started > DeepBudgetMs) break;
-                    if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root)) continue;
-
-                    int rootCount = 0;
-                    Stack<KeyValuePair<string, int>> stack = new Stack<KeyValuePair<string, int>>();
-                    stack.Push(new KeyValuePair<string, int>(root, 0));
-
-                    while (stack.Count > 0)
-                    {
-                        if (ct.IsCancellationRequested || total >= MaxTotal || rootCount >= MaxPerRoot || Environment.TickCount - started > DeepBudgetMs) break;
-
-                        KeyValuePair<string, int> cur = stack.Pop();
-                        string dir = cur.Key;
-                        int depth = cur.Value;
-                        if (depth > MaxDepth) continue;
-
-                        try
-                        {
-                            // 子目录
-                            foreach (string sub in Directory.EnumerateDirectories(dir))
-                            {
-                                if (ct.IsCancellationRequested || total >= MaxTotal || rootCount >= MaxPerRoot || Environment.TickCount - started > DeepBudgetMs) break;
-                                try
-                                {
-                                    // 跳过程序/系统内部目录：那里全是 .pak/.dll 之类，
-                                    // 遍历它们只会拖慢搜索、制造噪音（实测占 58/60 条）
-                                    if (ShouldSkipDir(sub)) continue;
-
-                                    string nm = Path.GetFileName(sub);
-                                    if (Matches(nm, sub, words))
-                                    {
-                                        int before = pending.Count;
-                                        TryAdd(pending, seen, nm, sub, true, words, "磁盘");
-                                        if (pending.Count > before) { total++; rootCount++; }
-                                    }
-                                    stack.Push(new KeyValuePair<string, int>(sub, depth + 1));
-                                }
-                                catch { }
-                            }
-
-                            // 文件
-                            foreach (string f in Directory.EnumerateFiles(dir))
-                            {
-                                if (ct.IsCancellationRequested || total >= MaxTotal || rootCount >= MaxPerRoot || Environment.TickCount - started > DeepBudgetMs) break;
-                                try
-                                {
-                                    string nm = Path.GetFileNameWithoutExtension(f);
-                                    int before = pending.Count;
-                                    TryAdd(pending, seen, nm, f, false, words, "磁盘");
-                                    if (pending.Count > before) { total++; rootCount++; }
-                                }
-                                catch { }
-                            }
-                        }
-                        catch { }
-
-                        // 攒够一批或超过 120ms 就交给界面，避免"搜完了才一起显示"
-                        int now = Environment.TickCount;
-                        if (pending.Count > 0 && (pending.Count >= 12 || now - lastFlush > 120))
-                        {
-                            lastFlush = now;
-                            try { if (batch != null) batch(pending); } catch { }
-                            pending = new List<SearchResult>();
-                        }
-                    }
-                }
-
-                // 最后一批
-                if (pending.Count > 0 && !ct.IsCancellationRequested)
-                {
-                    try { if (batch != null) batch(pending); } catch { }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Warn("深度搜索失败: " + ex.Message);
-            }
-        }
-
-        /// <summary>
-        /// 深度搜索的根目录。
-        ///
-        /// 只扫**用户自己的目录**：桌面、文档、图片、音乐、视频、下载。
-        /// 不扫 C:\Windows、Program Files 这类系统目录 ——
-        /// 那里面的东西用户几乎不会"按名字找文件"，扫了只是浪费时间。
-        /// </summary>
-        static IEnumerable<string> DeepRoots()
-        {
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-            yield return Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
-            yield return GetDownloads();
-
-            // 其他固定磁盘的根（D:\ E:\ ...）。
-            //
-            // 注意：这里不能用 try/catch 包 yield return —— C# 不允许
-            // （CS1626）。所以先把盘符收集到列表里，再逐个 yield。
-            List<string> drives = new List<string>();
-            try
-            {
-                foreach (DriveInfo d in DriveInfo.GetDrives())
-                {
-                    if (d.DriveType != DriveType.Fixed || !d.IsReady) continue;
-                    string root = d.RootDirectory.FullName;
-                    // C 盘太杂（系统 + 程序 + 用户数据混在一起），跳过
-                    if (root.StartsWith("C:", StringComparison.OrdinalIgnoreCase)) continue;
-                    drives.Add(root);
-                }
-            }
-            catch { }
-
-            foreach (string d in drives) yield return d;
-        }
-
-        /// <summary>
-        /// 递归时**跳过**的目录名（小写比较）。
-        ///
-        /// 为什么需要：实测 Deep 搜 "chrome" 时，命中的绝大部分来自
-        /// `Program Files\...\chrome_100_percent.pak` 这类程序内部资源。
-        /// 那些目录用户根本不会"按名字找文件"，遍历它们纯属浪费
-        /// 时间和制造噪音。
-        ///
-        /// 注意只跳过**目录名**，不跳过用户自己建的普通文件夹 ——
-        /// 名单里都是明确的"程序/系统内部"目录。
-        /// </summary>
-        static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "program files", "program files (x86)", "programdata", "windows",
-            "appdata", "node_modules", ".git", ".vs", ".vscode", ".idea",
-            "bin", "obj", "packages", "cache", "temp", "tmp", "logs",
-            "dist", "build", "target", "debug", "release", "lib", "libs",
-            "resources", "locales", "plugins", "extensions", "cef",
-            "$recycle.bin", "system volume information", "recovery",
-            // 各类缓存目录：实测 E:\Caches 下有几十个 Chrome/VS Code 的
-            // 缓存快照目录，名字里带 "chrome" 但完全是噪音
-            "caches", "cache", ".cache", "cacheddata", "app_cache_staged_removals",
-            "temp", "tmp", "logs", "crashpad", "gpucache", "code cache",
-            "service worker", "blob_storage", "local storage", "session storage"
-        };
-
-        static bool ShouldSkipDir(string dir)
-        {
-            try
-            {
-                string name = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                if (string.IsNullOrEmpty(name)) return false;
-                if (name.StartsWith(".")) return true;
-                return SkipDirs.Contains(name);
-            }
-            catch { return true; }
-        }
 
         static string GetDownloads()
         {

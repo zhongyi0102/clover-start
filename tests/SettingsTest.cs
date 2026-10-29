@@ -41,7 +41,6 @@ namespace Clover
             Check(Settings.SafeModeActive == false, "默认不在安全模式");
 
             // 本阶段新增：磁盘搜索默认关闭（只显示可启动的程序）
-            Check(s1.DiskSearchEnabled == false, "默认关闭磁盘文件搜索");
             // 本阶段新增的其它字段默认值
             Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
 
@@ -148,21 +147,19 @@ namespace Clover
             Check(s2.Theme == "dark", "theme 往返（主题持久化）");
 
             // ---------- 2b. 本阶段新增字段的往返 ----------
-            s1.DiskSearchEnabled = true;
             s1.GlassMode = "screen";
             s1.Save();
 
             Settings s2b = Settings.Load(r1);
-            Check(s2b.DiskSearchEnabled == true, "diskSearchEnabled 往返");
             Check(s2b.GlassMode == "screen", "glassMode 往返");
 
-            // ---------- 2c. ★旧配置缺 diskSearchEnabled 时补默认值、不报错 ----------
+            // ---------- 2c. ★旧配置缺新字段时补默认值、不报错 ----------
             //
             // 铁律要求：旧用户的 config\*.json 里多出的字段要原样保留，
             // 缺少的新字段要补默认值，不能让启动崩溃。
             string rCfgOld = NewRoot();
             string pCfgOld = Path.Combine(rCfgOld, "config", "settings.json");
-            // 模拟一份"本阶段之前"的配置：没有 diskSearchEnabled / glassMode 等
+            // 模拟一份"本阶段之前"的配置：没有 glassMode 等新字段
             File.WriteAllText(pCfgOld,
                 "{\"miniTaskbar\":false,\"theme\":\"dark\",\"legacyField\":\"keep-me\"}",
                 new UTF8Encoding(false));
@@ -170,14 +167,13 @@ namespace Clover
             Settings sCfgOld = Settings.Load(rCfgOld);
             Check(sCfgOld.MiniTaskbar == false, "旧配置：已有字段正常读取");
             Check(sCfgOld.Theme == "dark", "旧配置：已有字段正常读取（theme）");
-            Check(sCfgOld.DiskSearchEnabled == false, "旧配置：缺 diskSearchEnabled 时补默认 false");
             Check(sCfgOld.GlassMode == "fixed", "旧配置：缺 glassMode 时补默认 fixed");
 
             // 保存后旧字段仍在、新字段被写入
             sCfgOld.Save();
             string cfgAfter = File.ReadAllText(pCfgOld, Encoding.UTF8);
             Check(cfgAfter.Contains("keep-me"), "旧配置：保存后保留未知字段");
-            Check(cfgAfter.Contains("diskSearchEnabled"), "旧配置：保存后写入新字段");
+            Check(cfgAfter.Contains("glassMode"), "旧配置：保存后写入新字段");
 
             // ---------- 3. 保留未知字段 ----------
             string r3 = NewRoot();
@@ -192,7 +188,8 @@ namespace Clover
 
             // ---------- 3b. ★已删除的设置键：旧值作为未知字段保留 ----------
             //
-            // 本阶段删除了 wallpaperFolder / diskSearchEnabled / hiddenCategories 三个键。
+            // 本阶段删除了 wallpaperFolder / diskSearchEnabled / hiddenCategories /
+            // accentFromWallpaper / accentOverride 五个键。
             // 老 settings.json 里如果还有它们，必须原样保留（不能被「清理」掉），
             // 否则用户降级回旧版本时会丢失配置。
             {
@@ -213,6 +210,7 @@ namespace Clover
                 Check(afterDel.Contains("wallpaperFolder"), "★已删除的 wallpaperFolder 作为未知字段保留");
                 Check(afterDel.Contains("D:\\\\wp"), "★wallpaperFolder 的值原样保留");
                 Check(afterDel.Contains("myOwnKey"), "用户自定义字段保留");
+                Check(afterDel.Contains("diskSearchEnabled"), "★已删的 diskSearchEnabled 作为未知字段保留");
                 Check(afterDel.Contains("accentFromWallpaper"), "★已删的 accentFromWallpaper 作为未知字段保留");
                 Check(afterDel.Contains("accentOverride"), "★已删的 accentOverride 作为未知字段保留");
                 Check(afterDel.Contains("#FF8800"), "★accentOverride 的值原样保留");

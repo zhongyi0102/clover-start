@@ -21,17 +21,17 @@ namespace Clover
     ///
     /// 两级加载（参考 GlassBoard）：
     ///   1. Instant：同步、&lt; 40ms，立刻显示
-    ///   2. Deep：后台线程，分批追加到同一列表
+    ///   （磁盘文件搜索已移除，只保留 Instant 一级）
     ///
-    /// 取消机制：每次输入新词就取消上一次的 Deep，
-    /// 否则连续打字会累积成多个并发磁盘遍历。
+    /// 取消机制：每次输入新词就取消上一次的搜索，
+    /// 避免连续打字累积成多个并发搜索。
     /// </summary>
     class SearchResultList
     {
         readonly StackPanel host;
 
         /// <summary>当前这次搜索的取消源。</summary>
-        CancellationTokenSource cts;
+    
 
         /// <summary>已显示的结果（用于去重与计数）。</summary>
         readonly HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -39,7 +39,7 @@ namespace Clover
         /// <summary>
         /// 当前已显示的结果条数（底部计数栏用）。
         ///
-        /// Deep 是流式追加的，计数会随时间增长 —— 这正是期望行为：
+        /// 计数随结果追加而增长 —— 这正是期望行为：
         /// 用户看到"找到 N 条结果"在慢慢变大，知道搜索还在进行。
         /// </summary>
         public int ShownCount
@@ -55,12 +55,11 @@ namespace Clover
             this.host = host;
         }
 
-        /// <summary>清空并取消正在进行的 Deep。</summary>
+        /// <summary>清空并取消正在进行的搜索。</summary>
         public void Clear()
         {
             try
             {
-                if (cts != null) { cts.Cancel(); cts = null; }
                 shown.Clear();
                 if (host != null) host.Children.Clear();
             }
@@ -75,15 +74,6 @@ namespace Clover
         /// 不能每次都读盘。PanelWindow 已经持有内存中的 catalog，传进来即可。
         /// </summary>
         public Func<List<AppItem>> CatalogProvider;
-
-        /// <summary>
-        /// 是否启用磁盘文件搜索（默认 **false**）。
-        ///
-        /// 由 settings.DiskSearchEnabled 注入。关掉时只搜
-        /// 「已安装应用（带拼音）+ 开始菜单 + 注册表」，结果全是可启动的程序。
-        /// 磁盘搜索的代码（SystemSearch.Deep）保留，打开开关即可恢复。
-        /// </summary>
-        public bool EnableDiskSearch = false;
 
         /// <summary>
         /// 在已扫描的应用清单里匹配（支持中文/英文/全拼/首字母）。
@@ -130,7 +120,7 @@ namespace Clover
         }
 
         /// <summary>
-        /// 执行一次完整搜索（Instant 立即显示 + Deep 后台追加）。
+        /// 执行一次完整搜索（Instant 一级：已安装应用 + 开始菜单 + 注册表）。
         /// 必须在界面线程调用。
         /// </summary>
         public void Search(string query)
@@ -145,7 +135,7 @@ namespace Clover
                 //
                 // ★ 这一步是必须的，不是优化：
                 // 搜索时面板会把 tilePanel 设成 Collapsed（让位给搜索结果），
-                // 而 SystemSearch.Instant 只搜"开始菜单 + 注册表 + 磁盘"，
+                // 而 SystemSearch.Instant 只搜"开始菜单 + 注册表"，
                 // **不包含 catalog.Apps 里那 119 个已扫描应用**。
                 // 结果是：拼音搜索（weixin / wx）在界面上永远搜不到微信 ——
                 // 应用清单匹配到了，但磁贴被隐藏，搜索结果里又没有它。
@@ -158,58 +148,8 @@ namespace Clover
                 List<SearchResult> instant = SystemSearch.Instant(query);
                 AppendBatch(instant, true);
 
-                if (shown.Count == 0)
-                {
-                    // 三档都没结果时给个提示，避免用户以为"没反应"
-                    AddStatusLine("正在搜索更多位置…");
-                }
-
-                // ---- 第二级：Deep（后台流式）----
-                //
-                // 受 EnableDiskSearch 开关控制（由 settings.DiskSearchEnabled 注入）。
-                // 关掉时整段跳过 —— 不发起线程、不遍历磁盘、结果里只有可启动的程序。
-                //
-                // 为什么要有这个开关：磁盘遍历即使有 900ms 时间预算，也会让
-                // 搜索结果混进大量文件名（"报告.docx"、"报告.pdf"…），
-                // 而用户打开启动面板通常是想**启动程序**，不是找文件。
-                // 找文件用资源管理器更合适。
-                if (!EnableDiskSearch)
-                {
-                    cts = null;
-                    return;
-                }
-
-                cts = new CancellationTokenSource();
-                CancellationToken token = cts.Token;
-                string q = query;
-
-                System.Threading.ThreadPool.QueueUserWorkItem(delegate(object state)
-                {
-                    try
-                    {
-                        SystemSearch.Deep(q, delegate(List<SearchResult> batch)
-                        {
-                            // 回调在后台线程 → 必须切回界面线程再碰控件
-                            try
-                            {
-                                if (token.IsCancellationRequested) return;
-                                host.Dispatcher.BeginInvoke(DispatcherPriority.Background,
-                                    new Action(delegate
-                                    {
-                                        try
-                                        {
-                                            if (token.IsCancellationRequested) return;
-                                            AppendBatch(batch, false);
-                                        }
-                                        catch { }
-                                    }));
-                            }
-                            catch { }
-                        }, token);
-                    }
-                    catch { }
-                });
             }
+
             catch (Exception ex)
             {
                 Ui.LogError(ex, "搜索");
@@ -220,9 +160,9 @@ namespace Clover
         /// 追加一批结果（去重、限量），并在来源变化时插入分组标题。
         ///
         /// 为什么分组：实测搜 "chrome" 时三种来源混在一起 ——
-        /// 磁贴级的"Google Chrome"和磁盘上的"chrome_100_percent.pak"
+        /// 磁贴级的"Google Chrome"和开始菜单里的同名快捷方式
         /// 看起来权重相同，用户分不清哪条是"程序"哪条是"文件"。
-        /// 按来源加小标题（应用 / 系统 / 磁盘）后一眼可辨。
+        /// 按来源加小标题（开始菜单 / 注册表）后一眼可辨。
         /// </summary>
         void AppendBatch(List<SearchResult> batch, bool isInstant)
         {
@@ -246,13 +186,13 @@ namespace Clover
                     host.Children.Add(MakeRow(r));
                 }
 
-                // Instant 阶段没有结果时，先不显示"无结果"——Deep 可能还有
+                // 没有结果时先不显示"无结果"——等全部来源都返回完再判断
                 if (isInstant && shown.Count == 0) return;
             }
             catch { }
         }
 
-        /// <summary>分组小标题（如「应用」「磁盘文件」）。</summary>
+        /// <summary>分组小标题（如「应用（开始菜单）」「应用（注册表）」）。</summary>
         void AddGroupHeader(string source)
         {
             try
@@ -263,7 +203,6 @@ namespace Clover
                     case "已安装": label = "应用（已安装）"; break;
                     case "开始菜单": label = "应用（开始菜单）"; break;
                     case "注册表": label = "应用（注册表）"; break;
-                    case "磁盘": label = "磁盘文件"; break;
                     default: label = source; break;
                 }
 

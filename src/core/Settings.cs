@@ -83,19 +83,6 @@ namespace Clover
         public string GlassMode = "fixed";
 
 
-        /// <summary>
-        /// 是否启用磁盘文件搜索（默认 **false**）。
-        ///
-        /// 为什么默认关：磁盘遍历即使有 900ms 时间预算，也会让搜索结果里
-        /// 混进大量文件名（"报告.docx"、"报告.pdf"…），而用户打开启动面板
-        /// 通常是想**启动程序**，不是找文件。找文件用资源管理器更合适。
-        ///
-        /// 关掉时：只搜「已安装应用（带拼音）+ 开始菜单 + 注册表」，
-        /// 结果全是可启动的程序，不再有"这是程序还是文件"的歧义。
-        ///
-        /// 代码保留（SystemSearch.Deep 未删），打开这个开关即可恢复。
-        /// </summary>
-        public bool DiskSearchEnabled = false;
 
         /// <summary>
         /// 本次运行是否处于安全模式。
@@ -183,7 +170,6 @@ namespace Clover
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
                 // 旧配置没有这个键时保持字段默认值 false（不回退报错）
-                if (d.TryGetValue("diskSearchEnabled", out v) && v != null) s.DiskSearchEnabled = Convert.ToBoolean(v);
                 if (d.TryGetValue("hiddenCategories", out v) && v != null)
                 {
                     // 循环变量名不能叫 s —— 它是外层的 Settings 对象
@@ -228,7 +214,6 @@ namespace Clover
                 d["theme"] = Theme;
                 d["glassOpacity"] = GlassOpacity;
                 d["glassMode"] = GlassMode;
-                d["diskSearchEnabled"] = DiskSearchEnabled;
                 d["hiddenCategories"] = HiddenCategories;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
