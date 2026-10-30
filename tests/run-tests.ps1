@@ -156,6 +156,10 @@ Invoke-Suite 'PinyinTest' $baseRefs `
 Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
     @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
+
+# 「文件」标签：自定义文件夹清单（路径校验 / 去重 / 上限 / 重命名 / 容错）
+Invoke-Suite 'FileFoldersTest' $baseRefs `
+    (@((Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileFoldersTest.cs')))
 Invoke-Suite 'WatcherTest' $baseRefs `
     @((Join-Path $testDir 'WatcherTest.cs'))
 
