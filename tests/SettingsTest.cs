@@ -42,6 +42,11 @@ namespace Clover
             // 本阶段新增的其它字段默认值
             Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
 
+            // 「文件」标签 3 个新键（2-3）
+            Check(s1.ShowFilesTab == true, "★默认显示「文件」标签");
+            Check(s1.FilesSource == "", "★默认 filesSource 为空（用第一个来源）", s1.FilesSource ?? "null");
+            Check(s1.FilesSort == "modified", "★默认 filesSort = modified", s1.FilesSort);
+
             // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
             // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
             // 而 Save() 会写全部字段 —— 于是安全模式期间用户只要动任意一个设置，
@@ -189,7 +194,38 @@ namespace Clover
             string after = File.ReadAllText(p3, Encoding.UTF8);
             Check(after.Contains("keep-me"), "保存时保留未知字段", after);
 
-            // ---------- 3b. ★已删除的设置键：旧值作为未知字段保留 ----------
+            // ---------- 3c. 「文件」标签 3 键的往返与非法值回退 ----------
+            {
+                string rF = NewRoot();
+                string pF = Path.Combine(rF, "config", "settings.json");
+                File.WriteAllText(pF,
+                    "{\"showFilesTab\":false,\"filesSource\":\"D:\\\\Projects\",\"filesSort\":\"size\"}",
+                    new UTF8Encoding(false));
+
+                Settings sF = Settings.Load(rF);
+                Check(sF.ShowFilesTab == false, "showFilesTab=false 往返");
+                Check(sF.FilesSource == @"D:\Projects", "filesSource 往返", sF.FilesSource);
+                Check(sF.FilesSort == "size", "filesSort=size 往返", sF.FilesSort);
+
+                // 非法 filesSort → 回退 modified
+                File.WriteAllText(pF, "{\"filesSort\":\"bogus\"}", new UTF8Encoding(false));
+                Settings sBad = Settings.Load(rF);
+                Check(sBad.FilesSort == "modified", "★filesSort 非法值回退 modified", sBad.FilesSort);
+
+                // showFilesTab 类型错 → 回退 true
+                File.WriteAllText(pF, "{\"showFilesTab\":\"yes\"}", new UTF8Encoding(false));
+                Settings sBad2 = Settings.Load(rF);
+                Check(sBad2.ShowFilesTab == true, "★showFilesTab 类型错回退 true",
+                    Convert.ToString(sBad2.ShowFilesTab));
+
+                // 缺键 → 默认值
+                File.WriteAllText(pF, "{}", new UTF8Encoding(false));
+                Settings sMissing2 = Settings.Load(rF);
+                Check(sMissing2.ShowFilesTab == true, "缺键 showFilesTab 默认 true");
+                Check(sMissing2.FilesSort == "modified", "缺键 filesSort 默认 modified");
+            }
+
+            // ---------- 3b. ★已删除的设置键
             //
             // 本阶段删除了 wallpaperFolder / diskSearchEnabled / hiddenCategories /
             // accentFromWallpaper / accentOverride 五个键。

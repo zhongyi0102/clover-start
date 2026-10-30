@@ -265,17 +265,152 @@ namespace Clover
             panel.ShowPanel();
             WaitForDispatcher(400);
 
-            // ---------- 4. 分类栏只保留「常用」「全部」两个标签 ----------
-            Verify("分类栏只有「常用」「全部」两个标签", delegate
+            // ---------- 4. 分类栏：默认三个标签（常用/全部/文件）----------
+            //
+            // 2-3 加了第三个「文件」标签。showFilesTab=false 时回到两个。
+            Verify("★分类栏默认三个标签（常用/全部/文件）", delegate
             {
                 List<Border> navItems = FindNavItems(panel);
                 if (navItems == null) return "找不到分类栏容器";
-                if (navItems.Count != 2)
-                    return "分类标签应恰好 2 个（常用/全部），实际 " + navItems.Count;
-                return "ok（2 个：常用 / 全部）";
+                if (navItems.Count != 3)
+                    return "分类标签应恰好 3 个，实际 " + navItems.Count;
+                return "ok（3 个）";
             });
 
-            // ---------- 5. 应用磁贴真的渲染了 ----------
+            // ---------- 4b. showFilesTab=false → 只有两个标签 ----------
+            Verify("★showFilesTab=false 时只有两个标签", delegate
+            {
+                try
+                {
+                    // 直接改 settings 对象并重建标签栏
+                    panel.TestSetShowFilesTab(false);
+                    List<Border> navItems = FindNavItems(panel);
+                    if (navItems == null) return "找不到分类栏容器";
+                    if (navItems.Count != 2)
+                        return "应恰好 2 个，实际 " + navItems.Count;
+                    return "ok（2 个）";
+                }
+                finally
+                {
+                    panel.TestSetShowFilesTab(true);   // 恢复，别影响后续断言
+                }
+            });
+
+            // ---------- 4c. 切到「文件」可渲染（不抛异常） ----------
+            Verify("★切到「文件」标签可渲染", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(200);
+                    panel.TestSwitchCategory("常用");   // 切回
+                    return "ok";
+                }
+                catch (Exception ex)
+                {
+                    return "切到文件标签抛异常: " + ex.Message;
+                }
+            });
+
+            // ---------- 4d. last-category 记着未知标签 → 回退常用 ----------
+            Verify("★last-category 未知标签回退常用", delegate
+            {
+                try
+                {
+                    // 写一个不存在的分类名，然后让面板重新读一次
+                    panel.TestSetLastCategory("不存在的分类XYZ");
+                    panel.TestReloadLastCategory();
+                    string cur = panel.TestCurrentCategory();
+                    if (cur != "常用") return "应回退常用，实际 " + cur;
+                    return "ok（回退到常用）";
+                }
+                catch (Exception ex)
+                {
+                    return "抛异常: " + ex.Message;
+                }
+            });
+
+            // ---------- 4e. 空状态：没有任何来源时显示「点 + 添加」 ----------
+            Verify("★文件标签空状态提示", delegate
+            {
+                try
+                {
+                    panel.TestClearFileFolders();
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(300);
+                    string notice = panel.TestFilesNotice();
+                    panel.TestSwitchCategory("常用");
+                    if (string.IsNullOrEmpty(notice)) return "空状态下没有提示";
+                    if (notice.IndexOf("+") < 0) return "提示里没提到 +：" + notice;
+                    return "ok（" + notice + "）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 4f. 添加来源后出现胶囊并列出文件 ----------
+            Verify("★添加来源后列出文件", delegate
+            {
+                try
+                {
+                    string tmp = Path.Combine(Path.GetTempPath(),
+                        "acc-files-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+                    Directory.CreateDirectory(tmp);
+                    File.WriteAllText(Path.Combine(tmp, "aaa.txt"), "x", new UTF8Encoding(false));
+                    File.WriteAllText(Path.Combine(tmp, "bbb.txt"), "x", new UTF8Encoding(false));
+                    Directory.CreateDirectory(Path.Combine(tmp, "sub"));
+
+                    panel.TestAddFileFolder(tmp);
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(600);
+
+                    int rows = panel.TestFilesRowCount();
+                    int chips = panel.TestFilesChipCount();
+                    panel.TestSwitchCategory("常用");
+
+                    if (chips < 2) return "胶囊数应为 1 + 1(+)，实际 " + chips;
+                    if (rows < 3) return "应列出至少 3 项，实际 " + rows;
+                    return "ok（胶囊 " + chips + "，列表 " + rows + " 行）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 4g. filesSource 指向失效路径 → 回退第一个 ----------
+            Verify("★filesSource 失效回退第一个来源", delegate
+            {
+                try
+                {
+                    string got = panel.TestNormalizeFilesSource(@"Z:\nonexistent-xyz");
+                    if (string.IsNullOrEmpty(got)) return "回退后仍为空";
+                    if (got.IndexOf("nonexistent", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return "没有回退，仍是失效路径：" + got;
+                    return "ok";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 4h. 文件标签下搜索不弹全局应用搜索结果 ----------
+            Verify("★文件标签下搜索不弹应用搜索结果", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("文件");
+                    panel.TestSetSearchText("zzz");
+                    WaitForDispatcher(300);
+
+                    bool searchVisible = panel.TestSearchResultVisible();
+                    bool tilesVisible = panel.TestTilePanelVisible();
+
+                    panel.TestSetSearchText("");
+                    panel.TestSwitchCategory("常用");
+                    WaitForDispatcher(200);
+
+                    if (searchVisible) return "文件标签下弹出了全局搜索结果";
+                    if (tilesVisible) return "文件标签下磁贴区仍可见（应与文件面板互斥）";
+                    return "ok";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+            // ---------- 5. 应用磁贴真的渲染了
             int tileCount = 0;
             Verify("应用磁贴已渲染", delegate
             {

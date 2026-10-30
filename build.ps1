@@ -72,7 +72,8 @@ function Resolve-Refs($names) {
 $coreRefNames = @('System', 'System.Core', 'System.Web.Extensions')
 # 全量引用：ui 层需要 WPF
 $allRefNames = @('System', 'System.Core', 'PresentationFramework', 'PresentationCore', 'WindowsBase',
-    'System.Xaml', 'System.Web.Extensions', 'UIAutomationClient', 'UIAutomationTypes')
+    'System.Xaml', 'System.Web.Extensions', 'UIAutomationClient', 'UIAutomationTypes',
+    'System.Windows.Forms')   # FolderBrowserDialog（选目录对话框，.NET Framework 自带）
 
 $coreRefs = Resolve-Refs $coreRefNames
 $allRefs = Resolve-Refs $allRefNames

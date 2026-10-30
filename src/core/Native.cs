@@ -124,5 +124,33 @@ namespace Clover
             d.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
             return SHAppBarMessage(0x04, ref d).ToInt32(); // ABM_GETSTATE
         }
+        /// <summary>
+        /// 显示系统的「文件属性」对话框（与资源管理器右键 → 属性一致）。
+        ///
+        /// 为什么用 SHObjectProperties 而不是 ShellExecuteEx(verb=properties)：
+        ///   · SHObjectProperties 是专为此设计的 API，直接给 hwnd 让对话框
+        ///     挂在面板上（否则会飘到桌面左上角）
+        ///   · ShellExecuteEx 需要 SEE_MASK_INVOKEIDLIST + lpVerb，
+        ///     而且返回值要手动释放
+        ///
+        /// 只读：只显示信息，不修改任何文件。
+        /// </summary>
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        static extern bool SHObjectProperties(IntPtr hwnd, uint shopObjectType,
+            string pszObjectName, string pszPropertyPage);
+
+        /// <summary>SHOP_FILEPATH：pszObjectName 是完整路径。</summary>
+        const uint SHOP_FILEPATH = 0x2;
+
+        /// <summary>显示属性对话框。失败时静默（不影响主流程）。</summary>
+        public static void ShowFileProperties(string path, IntPtr ownerHwnd)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path)) return;
+                SHObjectProperties(ownerHwnd, SHOP_FILEPATH, path, null);
+            }
+            catch { }
+        }
     }
 }

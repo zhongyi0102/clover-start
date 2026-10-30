@@ -292,6 +292,44 @@ namespace Clover
             contentStack.Children.Add(tilePanel);
             contentStack.Children.Add(searchResultPanel);
 
+            // ---- 「文件」标签面板（与磁贴区、搜索结果三者互斥显示）----
+            //
+            // 结构：来源胶囊行 + 排序行 + 提示行 + 文件列表
+            // 全部在 StackPanel 里竖排，外面套 ScrollViewer（contentScroll 已有）。
+            filesPanel = new StackPanel();
+            filesPanel.Orientation = Orientation.Vertical;
+            filesPanel.Visibility = Visibility.Collapsed;
+
+            // 来源胶囊行（横向，可滚动）
+            ScrollViewer chipScroll = new ScrollViewer();
+            chipScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            chipScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            chipScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesChipRow = new StackPanel();
+            filesChipRow.Orientation = Orientation.Horizontal;
+            chipScroll.Content = filesChipRow;
+            filesPanel.Children.Add(chipScroll);
+
+            // 排序行（横向）
+            filesSortRow = new StackPanel();
+            filesSortRow.Orientation = Orientation.Horizontal;
+            filesSortRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesPanel.Children.Add(filesSortRow);
+
+            // 提示行（错误 / 截断 / 空目录）
+            filesNotice = Ui.T("", 11, Ui.Sub);
+            filesNotice.Margin = new Thickness(2, 0, 0, Ui.S.Sm);
+            filesNotice.TextWrapping = TextWrapping.Wrap;
+            filesNotice.Visibility = Visibility.Collapsed;
+            filesPanel.Children.Add(filesNotice);
+
+            // 文件列表（纵向）
+            filesListPanel = new StackPanel();
+            filesListPanel.Orientation = Orientation.Vertical;
+            filesPanel.Children.Add(filesListPanel);
+
+            contentStack.Children.Add(filesPanel);
+
             // ---- 拖拽插入标记（参考 GlassBoard 的 insertMarker）----
             //
             // 拖动磁贴时，在"将要插入的位置"画一根竖条，

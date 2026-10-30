@@ -32,6 +32,9 @@ $webRef = ('/r:' + (Join-Path $refDir 'System.Web.Extensions.dll'))
 
 # 集成测试要链接 src 下完整代码，需要 WPF + UIAutomation
 $wpfRefs = $baseRefs + @(
+    # System.Windows.Forms：FilesTabView 用 FolderBrowserDialog 选目录
+    # （.NET Framework 自带，不是第三方库）
+    ('/r:' + (Join-Path $refDir 'System.Windows.Forms.dll')),
     ('/r:' + (Join-Path $refDir 'System.Xaml.dll')),
     $webRef
 )

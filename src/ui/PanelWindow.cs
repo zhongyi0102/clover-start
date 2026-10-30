@@ -56,6 +56,14 @@ namespace Clover
 
         StackPanel navStack;
         WrapPanel tilePanel;
+
+        // ---- 「文件」标签（2-3）----
+        StackPanel filesPanel;         // 整个文件标签的容器
+        StackPanel filesChipRow;       // 来源胶囊行
+        StackPanel filesSortRow;       // 排序按钮行
+        TextBlock filesNotice;         // 提示行
+        StackPanel filesListPanel;     // 文件列表
+        FilesTabView filesView;        // 逻辑
         TextBox searchBox;
         TextBlock searchHint;
         TextBlock footerCount;

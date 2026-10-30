@@ -610,6 +610,13 @@ namespace Clover
         /// </summary>
         const string AllKey = "__all__";
 
+        /// <summary>
+        /// 「文件」标签的内部名。**用常量而不是字面量**：
+        /// RebuildNav / RenderAppsCore / NormalizeCurrentCategory /
+        /// LoadLastCategory 都要判它，散落字面量迟早写错一个。
+        /// </summary>
+        public const string FilesCategory = "文件";
+
         /// <summary>存盘时把内部标识转成文件里的键名。</summary>
         public static string FileCatKey(string internalKey)
         {

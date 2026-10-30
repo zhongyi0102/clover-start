@@ -141,6 +141,22 @@ namespace Clover
         /// </summary>
         public bool TextContrastGuard = true;
 
+        // ---------- 「文件」标签（2-3 新增）----------
+
+        /// <summary>是否显示第三个标签「文件」。关掉后只有「常用」「全部」。</summary>
+        public bool ShowFilesTab = true;
+
+        /// <summary>
+        /// 「文件」标签当前选中的来源（FileFolders 里某个 path）。
+        /// 空串 = 没选（用第一个）；指向失效路径时回退第一个。
+        /// </summary>
+        public string FilesSource = "";
+
+        /// <summary>
+        /// 「文件」列表排序：modified / name / size / type。非法值回退 modified。
+        /// </summary>
+        public string FilesSort = "modified";
+
 
 
         /// <summary>
@@ -230,6 +246,14 @@ namespace Clover
                 s.GlassTintStrength = ReadIntClamped(d, "glassTintStrength", s.GlassTintStrength, 0, 100);
                 s.GlassBrightness = ReadIntClamped(d, "glassBrightness", s.GlassBrightness, -50, 50);
                 s.GlassAccent = ReadColor(d, "glassAccent", s.GlassAccent);
+                // ---- 「文件」标签（缺键用默认值，非法值回退）----
+                if (d.TryGetValue("showFilesTab", out v) && v != null)
+                {
+                    try { s.ShowFilesTab = Convert.ToBoolean(v); }
+                    catch { Log.Warn("settings.showFilesTab 不是布尔值，已用默认 true"); }
+                }
+                s.FilesSource = ReadString(d, "filesSource", s.FilesSource, null);
+                s.FilesSort = ReadFilesSort(d, "filesSort", s.FilesSort);
                 // 文字清晰保底：缺键时用默认 true（老配置也享受保底）
                 if (d.TryGetValue("textContrastGuard", out v) && v != null)
                 {
@@ -280,6 +304,9 @@ namespace Clover
                 d["glassBrightness"] = GlassBrightness;
                 d["glassAccent"] = GlassAccent;
                 d["textContrastGuard"] = TextContrastGuard;
+                d["showFilesTab"] = ShowFilesTab;
+                d["filesSource"] = FilesSource;
+                d["filesSort"] = FilesSort;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 JsonIO.WriteAtomic(path, ser.Serialize(d));
@@ -407,6 +434,31 @@ namespace Clover
         /// 为什么单独一个方法：白名单来自 AppearancePresets（集中定义），
         /// 不在这里硬编码一份，避免两处不同步。
         /// </summary>
+        /// <summary>
+        /// 读 filesSort：只接受 modified / name / size / type，其余回退 def。
+        /// </summary>
+        static string ReadFilesSort(Dictionary<string, object> d, string key, string def)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                string s = Convert.ToString(v);
+                if (string.IsNullOrWhiteSpace(s)) return def;
+                s = s.Trim().ToLowerInvariant();
+
+                if (s == "modified" || s == "name" || s == "size" || s == "type") return s;
+
+                Log.Warn("settings." + key + " 值非法（" + s + "），已回退 " + def);
+                return def;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退 " + def);
+                return def;
+            }
+        }
+
         static string ReadPresetName(Dictionary<string, object> d, string key, string def)
         {
             try

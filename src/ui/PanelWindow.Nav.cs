@@ -297,14 +297,23 @@ namespace Clover
             cats.Add("常用");
             cats.Add("");
 
+            // 第三个标签「文件」（showFilesTab 关闭时不加）
+            //
+            // **这里不算数量**：文件数要读磁盘，而 RebuildNav 每次切换分类
+            // 都会跑。算数量会让每次点标签都卡一下 —— 所以文件标签不显示计数。
+            bool hasFilesTab = settings == null || settings.ShowFilesTab;
+            if (hasFilesTab) cats.Add(FilesCategory);
+
             foreach (string cat in cats)
             {
                 string c = cat;
-                int count = c == "常用" ? CommonApps().Count
-                          : (catalog.Apps.Count - catalog.HiddenItems().Count);
+                // 文件标签不算数量（见上面的注释）
+                int count = c == FilesCategory ? -1
+                          : (c == "常用" ? CommonApps().Count
+                          : (catalog.Apps.Count - catalog.HiddenItems().Count));
 
                 // 显示名
-                string label = c == "" ? "全部" : "常用";
+                string label = c == "" ? "全部" : c;   // 空串 → 全部，其余用内部名
 
                 // 分类项：横向胶囊按钮
                 Border item = new Border();
@@ -342,7 +351,8 @@ namespace Clover
                 g.Children.Add(name);
 
                 TextBlock cnt = new TextBlock();
-                cnt.Text = count.ToString();
+                cnt.Text = count < 0 ? "" : count.ToString();
+                cnt.Visibility = count < 0 ? Visibility.Collapsed : Visibility.Visible;
                 cnt.FontFamily = Ui.YaHei;
                 cnt.FontSize = 10.5;
                 cnt.Foreground = Ui.Sub;
@@ -604,8 +614,57 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 渲染「文件」标签：隐藏磁贴与搜索结果，显示 filesPanel。
+        ///
+        /// **搜索隔离**：文件标签下搜索框只过滤当前来源的文件名，
+        /// 不调 searchResults.Search（那是全局应用搜索，会弹出一堆应用）。
+        /// </summary>
+        void RenderFilesTab()
+        {
+            try
+            {
+                // 三者互斥：磁贴 / 搜索结果 / 文件面板
+                if (tilePanel != null) tilePanel.Visibility = Visibility.Collapsed;
+                if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Collapsed;
+                if (filesPanel != null) filesPanel.Visibility = Visibility.Visible;
+                if (searchResults != null) searchResults.Clear();
+
+                // 首次创建 FilesTabView
+                if (filesView == null && filesPanel != null)
+                {
+                    filesView = new FilesTabView(this, settings, baseDir,
+                        filesChipRow, filesListPanel, filesNotice, filesSortRow);
+                }
+
+                if (filesView != null)
+                {
+                    // 搜索词只传给文件视图做本地过滤
+                    string q = searchBox == null ? "" : searchBox.Text.Trim();
+                    filesView.ApplyFilter(q);
+                    filesView.Refresh(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "渲染文件标签");
+            }
+        }
+
         void RenderAppsCore()
         {
+            // ---- 「文件」标签：走完全独立的渲染路径 ----
+            //
+            // 文件标签与应用磁贴是两套东西：
+            //   · 磁贴：AppItem、可拖动排序、有运行中圆点
+            //   · 文件：FileScanner.Entry、只读浏览、点击打开
+            // 混在一条渲染路径里会让"拖动换位"试图去拖一个文件。
+            if (current == FilesCategory)
+            {
+                RenderFilesTab();
+                return;
+            }
+
             tilePanel.Children.Clear();
             // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
             // 否则 RefreshRunningDots 会去改已经不存在的控件
@@ -835,12 +894,197 @@ namespace Clover
         /// 遇到不存在的分类一律回退到「常用」，不能报错也不能显示空白。
         /// 在 BuildUi 之后、首次渲染之前调用。
         /// </summary>
+        // ========== 测试辅助（生产代码不调）==========
+        //
+        // AcceptanceTest 要验证标签行为，但 RebuildNav / current / LoadLastCategory
+        // 都是 private。加这几个 internal 方法让测试能驱动它们，
+        // 比反射稳（反射遇到重命名就静默失效）。
+
+        /// <summary>测试用：临时开关「文件」标签并重建标签栏。</summary>
+        internal void TestSetShowFilesTab(bool on)
+        {
+            try
+            {
+                if (settings != null) settings.ShowFilesTab = on;
+                RebuildNav();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：设置 showFilesTab"); }
+        }
+
+        /// <summary>测试用：切到某个分类。</summary>
+        internal void TestSwitchCategory(string cat)
+        {
+            try
+            {
+                current = cat ?? "";
+                UpdateNav();
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：切换分类"); }
+        }
+
+        /// <summary>测试用：写入 last-category.json 并重读。</summary>
+        internal void TestSetLastCategory(string cat)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(lastCatPath)) return;
+                Dictionary<string, object> d = new Dictionary<string, object>();
+                d["category"] = cat ?? "";
+                System.Web.Script.Serialization.JavaScriptSerializer ser =
+                    new System.Web.Script.Serialization.JavaScriptSerializer();
+                JsonIO.WriteAtomic(lastCatPath, ser.Serialize(d));
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：写 last-category"); }
+        }
+
+        /// <summary>测试用：重读 last-category.json 并校正分类。</summary>
+        internal void TestReloadLastCategory()
+        {
+            try
+            {
+                // 模拟「last-category.json 记着一个已不存在的标签」：
+                // 直接把 current 设成那个值，再走 NormalizeCurrentCategory。
+                // （不去调 LoadLastCategory —— 它遇到未知分类是「什么都不做」，
+                //   current 保持调用前的值，那样测不出回退。）
+                current = "不存在的分类XYZ";
+                NormalizeCurrentCategory();
+                UpdateNav();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：重读 last-category"); }
+        }
+
+
+        /// <summary>测试用：读当前分类。</summary>
+        /// <summary>测试用：清空 file-folders.json（模拟"没有任何来源"）。</summary>
+        internal void TestClearFileFolders()
+        {
+            try
+            {
+                string p = FileFolders.PathOf(baseDir);
+                if (File.Exists(p)) File.Delete(p);
+                if (File.Exists(p + ".bak")) File.Delete(p + ".bak");
+                if (filesView != null) filesView.ReloadFolders();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：清空 file-folders"); }
+        }
+
+        /// <summary>测试用：添加一个来源目录。</summary>
+        internal void TestAddFileFolder(string path)
+        {
+            try
+            {
+                FileFolders f = FileFolders.Load(baseDir);
+                f.Add(path);
+                if (filesView != null) filesView.ReloadFolders();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：添加来源"); }
+        }
+
+        /// <summary>测试用：读文件标签的提示文字。</summary>
+        internal string TestFilesNotice()
+        {
+            try { return filesNotice == null ? "" : (filesNotice.Text ?? ""); }
+            catch { return ""; }
+        }
+
+        /// <summary>测试用：文件列表行数。</summary>
+        internal int TestFilesRowCount()
+        {
+            try { return filesListPanel == null ? 0 : filesListPanel.Children.Count; }
+            catch { return 0; }
+        }
+
+        /// <summary>测试用：来源胶囊数。</summary>
+        internal int TestFilesChipCount()
+        {
+            try { return filesChipRow == null ? 0 : filesChipRow.Children.Count; }
+            catch { return 0; }
+        }
+
+        /// <summary>测试用：把 filesSource 设成一个失效路径，返回修正后的值。</summary>
+        internal string TestNormalizeFilesSource(string bogusPath)
+        {
+            try
+            {
+                if (filesView == null)
+                {
+                    // 还没创建视图 → 先切到文件标签让它建出来
+                    string old = current;
+                    current = FilesCategory;
+                    RenderApps();
+                    current = old;
+                }
+                if (filesView == null) return "";
+
+                if (settings != null) settings.FilesSource = bogusPath;
+                filesView.ReloadFolders();
+                filesView.Refresh(true);
+                return filesView.CurrentSourcePath();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "测试：修正 filesSource");
+                return "";
+            }
+        }
+
+        /// <summary>测试用：设置搜索框文字（不触发渲染）。</summary>
+        internal void TestSetSearchText(string text)
+        {
+            try
+            {
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：设置搜索文字"); }
+        }
+
+        /// <summary>测试用：全局搜索结果面板是否可见。</summary>
+        internal bool TestSearchResultVisible()
+        {
+            try
+            {
+                return searchResultPanel != null
+                    && searchResultPanel.Visibility == Visibility.Visible;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：磁贴区是否可见。</summary>
+        internal bool TestTilePanelVisible()
+        {
+            try
+            {
+                return tilePanel != null && tilePanel.Visibility == Visibility.Visible;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：读当前分类。</summary>
+        internal string TestCurrentCategory()
+        {
+            try { return current ?? ""; }
+            catch { return ""; }
+        }
+
         void NormalizeCurrentCategory()
         {
             try
             {
                 // 只有「常用」和「全部」是合法值
+                // 合法值：常用 / 全部(空串) / 文件（且 showFilesTab 开着）
                 if (current == "常用" || current == "") return;
+
+                if (current == FilesCategory)
+                {
+                    // showFilesTab 被关掉时，「文件」不再是合法标签 → 回退常用
+                    if (settings != null && !settings.ShowFilesTab)
+                    {
+                        Ui.Log("「文件」标签已关闭，回退到常用");
+                        current = "常用";
+                        SaveLastCategory();
+                    }
+                    return;
+                }
 
                 Ui.Log("分类「" + current + "」已不存在，回退到常用");
                 current = "常用";
