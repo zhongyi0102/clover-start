@@ -21,17 +21,9 @@ namespace Clover
         /// <summary>是否允许“隐藏系统任务栏”这个功能。默认 true。</summary>
         public bool TaskbarHiding = true;
 
-        /// <summary>
-        /// 是否自动把桌面快捷方式移到 desktop-backup。
-        /// **默认 false**（不主动动用户桌面）；老配置里显式写了 true 的保持 true。
-        /// </summary>
-        public bool DesktopAutoClean = false;
-
-        /// <summary>
-        /// 是否已经给用户看过「自动移走桌面快捷方式」的确认说明。
-        /// 首次勾选时弹一次，之后不再重复弹。
-        /// </summary>
-        public bool DesktopAutoCleanNoticeShown = false;
+        // 注：`desktopAutoClean` / `desktopAutoCleanNoticeShown` 字段已移除
+        // （桌面快捷方式自动移走功能下线）。老 settings.json 里若还有这两个键，
+        // 会作为**未知字段原样保留**（Settings.Save 的保留逻辑），但不再有任何代码读它们。
 
         /// <summary>是否启用悬停唤出（全屏时鼠标移到按钮位置临时显示）。默认 true。</summary>
         public bool HoverReveal = true;
@@ -188,11 +180,6 @@ namespace Clover
             get { return TaskbarHiding && HideTaskbar && !SafeModeActive; }
         }
 
-        public bool EffectiveDesktopAutoClean
-        {
-            get { return DesktopAutoClean && !SafeModeActive; }
-        }
-
         public bool EffectiveFullscreenDetect
         {
             get { return FullscreenDetect && !SafeModeActive; }
@@ -227,8 +214,6 @@ namespace Clover
                 if (d.TryGetValue("hideTaskbar", out v) && v != null) s.HideTaskbar = Convert.ToBoolean(v);
                 if (d.TryGetValue("miniTaskbar", out v) && v != null) s.MiniTaskbar = Convert.ToBoolean(v);
                 if (d.TryGetValue("taskbarHiding", out v) && v != null) s.TaskbarHiding = Convert.ToBoolean(v);
-                if (d.TryGetValue("desktopAutoClean", out v) && v != null) s.DesktopAutoClean = Convert.ToBoolean(v);
-                if (d.TryGetValue("desktopAutoCleanNoticeShown", out v) && v != null) s.DesktopAutoCleanNoticeShown = Convert.ToBoolean(v);
                 if (d.TryGetValue("hoverReveal", out v) && v != null) s.HoverReveal = Convert.ToBoolean(v);
                 if (d.TryGetValue("fullscreenDetect", out v) && v != null) s.FullscreenDetect = Convert.ToBoolean(v);
                 if (d.TryGetValue("safeMode", out v) && v != null) s.SafeMode = Convert.ToBoolean(v);
@@ -281,8 +266,6 @@ namespace Clover
                 d["hideTaskbar"] = HideTaskbar;
                 d["miniTaskbar"] = MiniTaskbar;
                 d["taskbarHiding"] = TaskbarHiding;
-                d["desktopAutoClean"] = DesktopAutoClean;
-                d["desktopAutoCleanNoticeShown"] = DesktopAutoCleanNoticeShown;
                 d["hoverReveal"] = HoverReveal;
                 d["fullscreenDetect"] = FullscreenDetect;
                 d["safeMode"] = SafeMode;

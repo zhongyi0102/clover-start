@@ -197,9 +197,7 @@ outerLayer（圆角裁剪）
 | 打开面板 | 同点击按钮 |
 | 重新扫描应用 | 后台重新扫描开始菜单与便携软件 |
 | **收藏文件夹…** | 选目录加入「收藏夹」（支持多选） |
-| **还原桌面快捷方式** | 把 `desktop-backup\` 里的 `.lnk` 放回桌面。重名时加「-还原N」后缀，**绝不覆盖**；成功的从备份移除，失败的只记 `cleanup.log` 不重试 |
 | **启用迷你任务栏** | 勾选项，默认开。关掉后左下角不再显示窗口按钮，`显示在任务栏` 菜单也失效 |
-| **自动移走桌面快捷方式** | 勾选项，**默认关**。首次勾选会弹一次说明确认，点取消则不勾选。关掉后不再自动移动桌面 `.lnk` |
 | **允许隐藏系统任务栏** | 勾选项，默认开。关掉会立即恢复任务栏，并禁用下面一项 |
 | 隐藏系统任务栏 | 勾选项，默认关。勾上后整条系统任务栏隐藏，左下角只留「开始」+ 四叶草 |
 | **隐藏用不到的** | 子菜单：一键隐藏整类（如「系统工具」「工具/命令行」共 60+ 个从没用过的条目）、查看隐藏的项目、取消隐藏全部。见下方「减少噪音」 |
@@ -231,8 +229,6 @@ outerLayer（圆角裁剪）
 | `hideTaskbar` | `false` | 隐藏系统任务栏（当前状态） |
 | `taskbarHiding` | `true` | 是否**允许**隐藏系统任务栏这个功能 |
 | `miniTaskbar` | `true` | 迷你任务栏 |
-| `desktopAutoClean` | **`false`** | 自动移走桌面快捷方式 |
-| `desktopAutoCleanNoticeShown` | `false` | 是否已展示过首次开启确认 |
 | `hoverReveal` | `true` | 悬停唤出（全屏时鼠标移到按钮位置临时显示） |
 | `fullscreenDetect` | `true` | 全屏检测（全屏时自动隐藏悬浮按钮） |
 | `safeMode` | `false` | 强制安全模式 |
@@ -248,24 +244,25 @@ outerLayer（圆角裁剪）
 | `glassAccent` | `""` | 强调色 `#RRGGBB`（空 = 主题默认） |
 | `textContrastGuard` | `true` | **文字清晰保底**：背景太亮/太暗时自动在文字区域叠极淡的压暗/提亮，让对比度达到 WCAG。只影响渲染，不写配置 |
 
-> **共 19 个键**，按用途分四组：
+> **共 17 个键**，按用途分四组：
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
-> | **功能开关** | `taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `safeMode` | 6 |
-> | **状态与标记** | `hideTaskbar` / `desktopAutoCleanNoticeShown` | 2 |
+> | **功能开关** | `taskbarHiding` / `miniTaskbar` / `hoverReveal` / `fullscreenDetect` / `safeMode` | 5 |
+> | **状态与标记** | `hideTaskbar` | 1 |
 > | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `textContrastGuard` | 11 |
 > | **数据** | （无） | 0 |
 >
 > **界面入口**：
-> - 右键四叶草直接有：`taskbarHiding` / `miniTaskbar` / `desktopAutoClean` / `hoverReveal` / `fullscreenDetect` / `theme`
+> - 右键四叶草直接有：`taskbarHiding` / `miniTaskbar` / `hoverReveal` / `fullscreenDetect` / `theme`
 > - **「设置 ▸ 外观…」窗口**：`glassOpacity` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `glassMode` / `glassPreset`
 > - 需要手改文件：`safeMode`（也可用 `--safe-mode`）
 >
 > **出问题可以单独关掉对应功能，不用卸载。**
 >
 > **兼容性**：
-> - 老配置里如果显式写了 `"desktopAutoClean": true`，升级后**仍保持 `true`**。
+> - 老配置里如果显式写了 `"desktopAutoClean": true` / `"desktopAutoCleanNoticeShown": true`，
+>   升级后**原样保留**（作为未知字段），但这两个键**不再有任何行为** —— 桌面快捷方式自动移走功能已下线。
 > - 配置里**多出的未知字段会原样保留**，不会因为本程序不认识就丢掉。
 > - **非法值（越界 / 颜色格式错 / 类型错）一律回退默认并写 `config\error.log`**，不会崩溃。
 > - `glassOpacity` 映射：`alpha = 1.0 - (g/100)*0.50`，下限 **0.40**。80 → 0.60（与改动前一致），100 → 0.50。
@@ -374,8 +371,8 @@ outerLayer（圆角裁剪）
 - **扫描在后台线程跑**：开始菜单遍历和便携软件目录递归都不占界面线程；同一时刻只会有一个扫描在跑。
 - **图标磁盘缓存**：提取过的图标存进 `config\iconcache\`（PNG），缓存键 = **算法版本号** + 路径 + 文件修改时间 + 大小，下次启动直接读盘；程序升级或换图标后缓存自动失效。超过 90 天未用或数量超过 800 个时自动清理旧的。详见 [图标提取](#图标提取)。
 - **绿色/便携软件也能识别**：除开始菜单快捷方式外，还扫描各磁盘的软件目录（`Software` / `Portable` / `Programs` / `Apps` / `Tools` / `绿色软件` / `软件` / `应用`，最多 5 层），把解压即用的软件也收进面板（名字优先取 exe 的"文件说明"）。安装包、卸载器、更新器、日志/缓存目录自动排除。想额外扫描别的目录，新建 `config\portable-roots.json`：`{ "roots": ["D:\\Software\\Portable", "E:\\Tools"] }`（写这个文件后就不再自动推断目录）。
-- **桌面不留快捷方式（默认关闭）**：默认**不**动桌面。用户手动勾选「自动移走桌面快捷方式」后（首次会弹一次说明确认），桌面（含公共桌面）上出现的 `.lnk` 会被移到 `desktop-backup\`（按时间命名）；被移走的快捷方式若指向面板里没有的程序，会自动登记到 `config\manual-apps.json`，仍能启动。
-  - **一键还原**：右键菜单「还原桌面快捷方式」把备份放回桌面，重名自动加「-还原N」后缀，绝不覆盖
+- **不动桌面**：程序**从不**移动、删除或重命名桌面上的任何文件（旧版本的「自动移走桌面快捷方式」已下线）
+- **旧备份仍可手动取回**：见下方「取回 desktop-backup 里的快捷方式」
   - **备份永不自动删除**：超过 200 个只在 `error.log` 写一条 WARN（同一次运行只写一次），不删任何文件
 
 ## 分类规则
@@ -474,7 +471,7 @@ clover-start\
   app\CloverStart.exe        主程序（.NET Framework 4.8 WPF，免安装）
   app\clover.log             运行日志（面板开关、启动应用等）
   config\apps.json           扫描生成的软件清单（含分类）
-  config\manual-apps.json    手动补充 / 来自桌面快捷方式的软件
+config\manual-apps.json    只读历史数据（旧版本「手动添加应用」留下的；要隐藏某条请用「从面板隐藏」）
   config\settings.json       开关与隐藏分类
   config\usage.json          启动次数与最近使用时间
   config\order.json          手动拖拽排序
@@ -492,7 +489,7 @@ clover-start\
   build.ps1                  编译（csc.exe，无需 MSBuild）
   dev-run.ps1                改完即跑：停进程 → 编译 → 重启 → 弹面板
   install.ps1                创建开机自启并启动
-  desktop-backup\            被移走的桌面快捷方式（可恢复）
+desktop-backup\            旧版本移走的桌面快捷方式（程序不再读写它，可手动取回或删除）
 ```
 
 > **`src\core\Version.cs` 由 `build.ps1` 自动生成，不入库。**
@@ -576,7 +573,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `PinyinData.cs` | 汉字拼音表（自动生成，勿手改） |
 | `SystemState.cs` | `system-state.json` 的读写（崩溃后能靠它还原） |
 | `TaskbarVisibility.cs` | 系统状态改动的唯一入口 + `RestoreSystemState()` |
-| `ResetAll.cs` | 一键回滚：撤销全部系统改动（8 个步骤，逐项报告） |
+| `ResetAll.cs` | 一键回滚：撤销全部系统改动（7 个步骤，逐项报告） |
 | `CrashGuard.cs` | 崩溃计数、安全模式判定、稳定清除 |
 | `Guard.cs` | 看门狗（`--guard` 模式） |
 | `HeartbeatFile.cs` | 心跳文件读写（看门狗据此判卡死） |
@@ -640,7 +637,6 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\SettingsTest.cs` | 设置读写与开关联动 |
 | `tests\CrashGuardTest.cs` | 崩溃计数与安全模式判定 |
 | `tests\WatcherTest.cs` | 文件监听溢出兜底 / Dispose 泄漏 |
-| `tests\DesktopRestoreTest.cs` | 桌面快捷方式还原（重名不覆盖） |
 | `tests\OpenFolderTest.cs` | 「打开文件所在位置」路径解析 |
 | `tests\FullscreenTest.cs` | 全屏检测（真建无边框全屏窗口） |
 | `tests\TaskbarCreatedTest.cs` | TaskbarCreated 消息注册与接收 |
@@ -756,7 +752,7 @@ CloverStart.exe --reset-all --keep-config   只撤销对系统的影响，保留
 | `--restore-system` | 只撤销**系统级状态**（任务栏可见性/透明样式） | 紧急恢复，任务栏不见了 |
 | `--reset-all` | 系统状态 + 开机自启 + 看门狗进程 + 崩溃守卫 + 图标缓存 + 桌面备份 | 彻底卸载、准备移除程序 |
 
-**回滚的 8 个步骤**（每步独立 try/catch，单步失败不影响后续）：
+**回滚的 7 个步骤**（每步独立 try/catch，单步失败不影响后续）：
 
 1. 恢复系统任务栏（可见性 + 撤掉 `WS_EX_LAYERED`）
 2. 清除 `system-state.json`
@@ -765,13 +761,12 @@ CloverStart.exe --reset-all --keep-config   只撤销对系统的影响，保留
 5. 停止看门狗进程（**排除自身 PID**，只杀无窗口的 guard 进程）
 6. 清除 `crash-guard.json`（注意顺序：先 `ClearSafeMode()` 再删文件，否则会被写回来）
 7. 清理图标缓存（`--keep-config` 时跳过）
-8. 清理桌面快捷方式备份（`--keep-config` 时跳过）
 
 退出码：**0 = 全部成功**，非 0 = 有失败项（详见 `config\error.log`）。逐项结果同时写入日志。
 
 > **`--reset-all` 不会删除 `config\` 下的任何 `.json` 数据文件**
 >
-> 只清 `config\iconcache\`（图标缓存目录）和 `desktop-backup\`（桌面快捷方式备份）。
+> 只清 `config\iconcache\`（图标缓存目录）。**不碰 `desktop-backup\`** —— 那是用户的历史备份。
 >
 > 以下文件**都会保留**，即使不带 `--keep-config`：
 > `apps.json` / `manual-apps.json` / `registry-apps.json` / `store-apps.json` /
@@ -799,7 +794,7 @@ CloverStart.exe --reset-all --keep-config   只撤销对系统的影响，保留
 记录每次异常退出到 `config\crash-guard.json`：
 
 - **2 分钟内连续异常退出 3 次** → 下次启动进入安全模式
-- 安全模式下**临时停用**：隐藏系统任务栏、迷你任务栏、自动移走桌面快捷方式、全屏检测、悬停唤出
+- 安全模式下**临时停用**：隐藏系统任务栏、迷你任务栏、全屏检测、悬停唤出
 - 只保留面板和按钮，弹一次提示 + 写 `error.log`
 - **稳定运行 5 分钟**后自动清除计数、解除安全模式
 - 也可以在**右键四叶草 → 诊断 → 运行状态**里手动退出安全模式
@@ -880,8 +875,6 @@ CloverStart.exe --restore-system   只还原系统状态然后退出
 
 - **只移动 `.lnk`**，不动其他类型
 - 重名时加时间后缀（`时间戳-N_原名`），**绝不覆盖**
-- 失败（权限不足、文件被占用）只记日志到 `desktop-backup\cleanup.log`，**不重试**（避免死循环）
-- `desktop-backup` 上限 **200 个**，超出时删最旧的
 - 公共桌面无权限时跳过该目录并记日志
 - 所有写文件失败都不会抛到界面线程；磁盘满/只读时降级为只读运行（配置写失败只记 WARN）
 
@@ -1112,7 +1105,6 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 | A | **看门狗卡死检测** | 1. 勾选「隐藏系统任务栏」<br>2. 用调试器或 `Debugger.Break` 让主进程界面线程卡住 15 秒以上<br>3. 观察任务栏 | 10 秒后任务栏自动恢复；`error.log` 出现「主进程连续 10 秒无响应」；主进程**不被结束** |
 | B | **卡死后恢复重隐藏** | 承接 A，解除卡死后观察 | 任务栏可以再次隐藏，但同一次运行最多自动重隐藏 1 次 |
 | C | **真实强杀不算/算异常退出** | 1. 正常启动并稳定 6 分钟（清计数）<br>2. 任务管理器强杀主进程<br>3. 重新启动，看 `crash-guard.json` | 强杀后 `running` 残留 → 重启时补记 1 次异常退出 |
-| D | **首次勾选确认框** | 右键四叶草 → 勾选「自动移走桌面快捷方式」 | 弹说明框；点取消则不勾选、下次还会弹；点确定后 `desktopAutoCleanNoticeShown` 变 `true`，以后不再弹 |
 | E | **外观窗口拖动实时预览** | 1. 右键四叶草 → 设置 ▸ → 外观…<br>2. 拖「浓度」滑块，不松手<br>3. 观察面板背景 | 面板背景**跟着变**（不用松手）；松手后 `settings.json` 才被写入 |
 | F | **6 个预设是否一眼可辨** | 在外观窗口里逐个点预设 | 每次切换背景色调/明暗**明显不同**；「经典毛玻璃」= 改动前的观感 |
 
@@ -1128,7 +1120,7 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 - **打包发布**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1`（生成 `dist\CloverStart-v<版本>.zip` 和 `.sha256` 校验文件）
 - **改开关默认值**：编辑 `src\core\Settings.cs` 的字段初始值。
 - **取消开机自启**：删掉 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\四叶草启动器.lnk`，或右键四叶草把“开机自启”取消勾选。
-- **恢复桌面快捷方式**：把 `desktop-backup\` 里的 `.lnk` 移回桌面即可（`manual-apps.json` 里对应条目可留可删）。
+- **取回旧备份的快捷方式**：见下方「取回 desktop-backup 里的快捷方式」
 
 ## 已知限制
 
@@ -1174,7 +1166,43 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 | **`ShortcutResolver` 与 `RunningApps.targetCache` 是两份独立缓存** | 用途和生命周期不同；`AppDedup` 只在扫描时跑一次，代价可接受 |
 | **`hidden-apps.json` 缺失时可能从 `.bak` 恢复** | `JsonIO.Read` 的既有行为（有测试覆盖）。如果发现"没隐藏过却有隐藏项"，检查 `.bak` 文件 |
 
-## 故障排查
+
+## 取回 desktop-backup 里的快捷方式
+
+`desktop-backup\` 是旧版本「自动移走桌面快捷方式」功能的备份目录。
+**当前版本不再读写它** —— 不移动、不删除、不还原，只是一个普通文件夹。
+
+### 文件名格式
+
+备份文件带时间戳前缀，有两种：
+
+| 格式 | 例子 | 说明 |
+|---|---|---|
+| `yyyyMMdd-HHmmss_原名.lnk` | `20261029-225704_微信.lnk` | 常规 |
+| `yyyyMMdd-HHmmss-N_原名.lnk` | `20261029-225704-1_微信.lnk` | 同一秒内重名时加序号 `N`（从 1 开始）|
+
+### 手动取回步骤
+
+1. 打开 `desktop-backup\` 文件夹
+2. 选中需要的 `.lnk`，**复制**（不要剪切）到桌面
+3. 重命名，去掉**开头到第一个下划线（含）**的前缀
+
+```
+20261029-225704_微信.lnk       →  微信.lnk
+20261029-225704-1_微信.lnk     →  微信.lnk
+20261029-225704_7-Zip.lnk      →  7-Zip.lnk
+```
+
+> **为什么是「第一个下划线」**：原名本身可能含下划线（如 `my_app.lnk`），
+> 只去掉第一个下划线之前的部分，原名完整保留。
+
+### 其他
+
+- `cleanup.log`：旧版本记录还原失败的文件，可以直接删
+- 整个 `desktop-backup\` 目录都可以直接删 —— 程序不会重新创建它
+- `manual-apps.json` 里可能有旧版本自动添加的条目，那是**只读历史数据**，
+  仍会显示在面板里；不想要某条请用「从面板隐藏」
+
 
 - **任务栏不见了** → 见「紧急恢复」：任务管理器 →「文件」→「运行新任务」→ `explorer.exe`，或运行 `CloverStart.exe --restore-system`。
 - **面板打不开 / 反复崩溃** → 运行 `CloverStart.exe --safe-mode`，它会关掉所有会动系统状态的功能，只留面板和按钮。

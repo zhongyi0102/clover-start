@@ -400,37 +400,6 @@ namespace Clover
             catch { }
             return list;
         }
-
-        public static void SaveManual(string baseDir, List<AppItem> list)
-        {
-            try
-            {
-                Dictionary<string, object> root = new Dictionary<string, object>();
-                List<object> arr = new List<object>();
-                foreach (AppItem a in list)
-                {
-                    Dictionary<string, object> m = new Dictionary<string, object>();
-                    m["name"] = a.Name;
-                    m["path"] = a.Path;
-                    m["category"] = a.Category;
-                    // 新增可选字段：只写非空的，避免老版本读到一堆空串
-                    if (!string.IsNullOrEmpty(a.Version)) m["version"] = a.Version;
-                    if (!string.IsNullOrEmpty(a.Publisher)) m["publisher"] = a.Publisher;
-                    if (!string.IsNullOrEmpty(a.InstallDate)) m["installDate"] = a.InstallDate;
-                    if (!string.IsNullOrEmpty(a.InstallLocation)) m["installLocation"] = a.InstallLocation;
-                    if (!string.IsNullOrEmpty(a.Source)) m["source"] = a.Source;
-                    if (!string.IsNullOrEmpty(a.Aumid)) m["aumid"] = a.Aumid;
-                    if (!a.Launchable) m["launchable"] = false;
-                }
-                root["apps"] = arr;
-                JavaScriptSerializer ser = new JavaScriptSerializer();
-                ser.MaxJsonLength = int.MaxValue;
-                string json = ser.Serialize(root);
-                JsonIO.WriteAtomic(Path.Combine(baseDir, "config", "manual-apps.json"), json);
-            }
-            catch { }
-        }
-
         /// <summary>
         /// 按名称判定分类。
         ///

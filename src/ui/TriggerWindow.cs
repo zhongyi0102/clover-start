@@ -584,48 +584,6 @@ namespace Clover
             MenuItem settingsMenu = new MenuItem();
             settingsMenu.Header = "设置";
 
-            MenuItem autoCleanItem = new MenuItem();
-            autoCleanItem.Header = "自动移走桌面快捷方式";
-            autoCleanItem.IsCheckable = true;
-            autoCleanItem.IsChecked = settings.DesktopAutoClean;
-            autoCleanItem.ToolTip = "桌面上的 .lnk 自动移到 desktop-backup；关闭后不再自动移动";
-            autoCleanItem.Click += delegate
-            {
-                bool target = !settings.DesktopAutoClean;
-
-                // 首次“勾选”时弹一次说明，让用户明确知道会发生什么。
-                // 取消则不勾选，也不记录“已提示”（下次勾选还会再问一次）。
-                if (target && !settings.DesktopAutoCleanNoticeShown)
-                {
-                    System.Windows.MessageBoxResult r = MessageBox.Show(
-                        "开启后，桌面上的快捷方式（.lnk）会被自动移到：\r\n"
-                        + Path.Combine(baseDir, "desktop-backup") + "\r\n\r\n"
-                        + "· 只是移动，不会删除\r\n"
-                        + "· 随时可以用右键菜单「还原桌面快捷方式」放回桌面\r\n"
-                        + "· 这个说明只显示一次\r\n\r\n"
-                        + "确定开启吗？",
-                        "四叶草 · 自动移走桌面快捷方式",
-                        MessageBoxButton.OKCancel, MessageBoxImage.Information);
-
-                    if (r != System.Windows.MessageBoxResult.OK)
-                    {
-                        // 用户取消：保持不勾选，菜单项状态回滚
-                        autoCleanItem.IsChecked = false;
-                        Ui.Log("用户取消开启自动移走桌面快捷方式");
-                        return;
-                    }
-                    settings.DesktopAutoCleanNoticeShown = true;
-                }
-
-                settings.DesktopAutoClean = target;
-                settings.Save();
-                if (panel != null) panel.ApplyDesktopCleanSetting();
-                Ui.Log("桌面快捷方式自动移走开关 -> " + settings.DesktopAutoClean);
-            };
-            settingsMenu.Items.Add(autoCleanItem);
-
-            settingsMenu.Items.Add(new Separator());
-
             // ---- 悬浮按钮显示策略 ----
             // fullscreenDetect / hoverReveal 原先只能手改 settings.json，
             // 界面上没有开关 —— 这两个设置恰好也是被安全模式降级的项，
@@ -681,29 +639,6 @@ namespace Clover
             // 日常启动面板根本不会碰，收进来让顶层只剩 8 项。
             MenuItem maintainMenu = new MenuItem();
             maintainMenu.Header = "维护与诊断";
-
-            // 桌面快捷方式的清理/还原
-            MenuItem clean = new MenuItem();
-            clean.Header = "立即清理桌面快捷方式";
-            clean.Click += delegate { if (panel != null) panel.CleanDesktopFromMenu(); };
-            maintainMenu.Items.Add(clean);
-
-            MenuItem restore = new MenuItem();
-            restore.Header = "还原桌面快捷方式";
-            restore.ToolTip = "把 desktop-backup 里的快捷方式放回桌面（重名自动加后缀，不覆盖）";
-            restore.Click += delegate
-            {
-                if (panel == null) return;
-                int n = panel.RestoreDesktopFromMenu();
-                MessageBox.Show(
-                    n > 0
-                        ? "已把 " + n + " 个快捷方式放回桌面。\r\n重名的会加上「-还原N」后缀，没有覆盖任何文件。"
-                        : "没有可还原的快捷方式。\r\n（desktop-backup 里没有 .lnk 文件）",
-                    "四叶草");
-            };
-            maintainMenu.Items.Add(restore);
-
-            maintainMenu.Items.Add(new Separator());
 
             // 隐藏的项目管理（保持原有的二级结构：隐藏用不到的 ▸ 隐藏全部X / 查看 / 取消）
             MenuItem hideTools = new MenuItem();

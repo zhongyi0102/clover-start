@@ -176,9 +176,6 @@ Invoke-Suite 'CrashGuardTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'CrashGuardTest.cs')))
 
 # 桌面还原：直接测 AppWatcher.RestoreLinks/MakeUniqueDest 的纯文件逻辑
-Invoke-Suite 'DesktopRestoreTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'DesktopRestoreTest.cs')))
-
 # 打开文件所在位置：测 PanelWindow.TryBuildExplorerArgs 的路径解析
 Invoke-Suite 'OpenFolderTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'OpenFolderTest.cs')))

@@ -137,15 +137,8 @@ namespace Clover
                     DeleteDirectoryRobust(iconDir);
                     if (Directory.Exists(iconDir)) throw new Exception("目录未能删除");
                 }));
-
-                steps.Add(Do("清理桌面快捷方式备份", delegate
-                {
-                    string backup = Path.Combine(baseDir, "desktop-backup");
-                    if (!Directory.Exists(backup)) return;
-                    DeleteDirectoryRobust(backup);
-                    if (Directory.Exists(backup)) throw new Exception("目录未能删除");
-                }));
             }
+
 
             // ---------- 输出结果 ----------
             // 主程序是 winexe，从命令行运行时没有控制台；此时改用弹窗展示。

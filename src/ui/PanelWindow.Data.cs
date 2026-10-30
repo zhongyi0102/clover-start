@@ -104,29 +104,6 @@ namespace Clover
                 MessageBox.Show("重新扫描失败: " + ex.Message, "四叶草面板");
             }
         }
-
-        public void CleanDesktopFromMenu()
-        {
-            if (watcher == null) return;
-            int n = watcher.CleanDesktopNow(true);
-            MessageBox.Show("已把 " + n + " 个桌面快捷方式移到备份文件夹：\r\n" + Path.Combine(baseDir, "desktop-backup"), "四叶草");
-        }
-
-        /// <summary>把 desktop-backup 里的快捷方式放回桌面，返回成功数量。</summary>
-        public int RestoreDesktopFromMenu()
-        {
-            if (watcher == null) return 0;
-            try
-            {
-                return watcher.RestoreDesktopNow();
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "还原桌面快捷方式");
-                return 0;
-            }
-        }
-
         void ReloadCatalog()
         {
             catalog = Catalog.Load(baseDir);
@@ -282,20 +259,6 @@ namespace Clover
                 Ui.LogError(ex, "应用毛玻璃设置");
             }
         }
-
-        /// <summary>切换“自动移走桌面快捷方式”后调用：通知 watcher 立即停/启自动清理。</summary>
-        public void ApplyDesktopCleanSetting()
-        {
-            try
-            {
-                if (watcher != null) watcher.AutoCleanEnabled = settings.DesktopAutoClean;
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "应用桌面清理开关");
-            }
-        }
-
         /// <summary>隐藏项数量（供右键菜单显示）。</summary>
         public int HiddenCount()
         {

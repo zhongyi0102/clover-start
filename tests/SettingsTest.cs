@@ -33,8 +33,7 @@ namespace Clover
             Check(s1.HideTaskbar == false, "默认不隐藏任务栏");
             Check(s1.MiniTaskbar == true, "默认启用迷你任务栏");
             Check(s1.TaskbarHiding == true, "默认允许隐藏任务栏");
-            Check(s1.DesktopAutoClean == false, "默认**不**自动移走桌面快捷方式（本轮改为 false）");
-            Check(s1.DesktopAutoCleanNoticeShown == false, "默认未展示过自动移走确认说明");
+            // desktopAutoClean / desktopAutoCleanNoticeShown 字段已删除 —— 见下方 1b
             // hiddenCategories 字段已删除（分类系统下线）—— 见下方「已删键作为未知字段保留」
             Check(s1.NavCollapsed == false, "默认侧栏展开（不收起）");
             Check(s1.Theme == "system", "默认主题跟随系统");
@@ -52,13 +51,12 @@ namespace Clover
                 string rSafe = NewRoot();
                 Settings s = Settings.Load(rSafe);
 
-                // 用户偏好：除了桌面清理，其余都开着
+                // 用户偏好：全开
                 s.MiniTaskbar = true;
                 s.TaskbarHiding = true;
                 s.HideTaskbar = true;
                 s.FullscreenDetect = true;
                 s.HoverReveal = true;
-                s.DesktopAutoClean = true;
                 s.Save();
 
                 // 进入安全模式
@@ -68,7 +66,6 @@ namespace Clover
                 Check(!s.EffectiveMiniTaskbar, "安全模式：迷你任务栏无效");
                 Check(!s.EffectiveTaskbarHiding, "安全模式：允许隐藏任务栏无效");
                 Check(!s.EffectiveHideTaskbar, "安全模式：隐藏任务栏无效");
-                Check(!s.EffectiveDesktopAutoClean, "安全模式：桌面自动清理无效");
                 Check(!s.EffectiveFullscreenDetect, "安全模式：全屏检测无效");
                 Check(!s.EffectiveHoverReveal, "安全模式：悬停唤出无效");
 
@@ -78,7 +75,6 @@ namespace Clover
                 Check(s.HideTaskbar, "安全模式不改 HideTaskbar 原字段");
                 Check(s.FullscreenDetect, "安全模式不改 FullscreenDetect 原字段");
                 Check(s.HoverReveal, "安全模式不改 HoverReveal 原字段");
-                Check(s.DesktopAutoClean, "安全模式不改 DesktopAutoClean 原字段");
 
                 // ★关键：安全模式期间保存设置，落盘的必须仍是用户偏好
                 s.Save();
@@ -101,36 +97,42 @@ namespace Clover
             // 复位，别影响后续用例
             Settings.SafeModeActive = false;
 
-            // ---------- 1b. 老配置里显式的 desktopAutoClean=true 必须保持不变 ----------
-            string rOld = NewRoot();
-            File.WriteAllText(Path.Combine(rOld, "config", "settings.json"),
-                "{\"desktopAutoClean\":true}", new UTF8Encoding(false));
-            Settings sOld = Settings.Load(rOld);
-            Check(sOld.DesktopAutoClean == true, "老配置显式 true 保持不变（不被新默认值覆盖）");
+            // ---------- 1b. ★已删键 desktopAutoClean：旧值原样保留，不触发任何行为 ----------
+            //
+            // 桌面快捷方式自动移走功能已下线，Settings 里没有对应字段。
+            // 但老配置里的这两个键必须**原样保留**（用户降级回旧版本时不丢数据），
+            // 且**不能触发任何文件移动**（已无对应代码路径）。
+            {
+                string rLegacy = NewRoot();
+                string pLegacy = Path.Combine(rLegacy, "config", "settings.json");
+                File.WriteAllText(pLegacy,
+                    "{\"desktopAutoClean\":true,\"desktopAutoCleanNoticeShown\":true}",
+                    new UTF8Encoding(false));
 
-            // ---------- 1c. 未写 desktopAutoClean 的配置走新默认 false ----------
-            string rMissing = NewRoot();
-            File.WriteAllText(Path.Combine(rMissing, "config", "settings.json"),
-                "{\"miniTaskbar\":false}", new UTF8Encoding(false));
-            Settings sMissing = Settings.Load(rMissing);
-            Check(sMissing.DesktopAutoClean == false, "未写该项时用新默认 false");
+                Settings sLegacy = Settings.Load(rLegacy);
+                Check(true, "★老配置含 desktopAutoClean:true 时 Load 不抛异常");
 
-            // ---------- 1d. 首次确认标记读写 ----------
-            string rNotice = NewRoot();
-            Settings sNotice = Settings.Load(rNotice);
-            Check(sNotice.DesktopAutoCleanNoticeShown == false, "初始未提示");
-            sNotice.DesktopAutoCleanNoticeShown = true;
-            sNotice.DesktopAutoClean = true;
-            sNotice.Save();
-            Settings sNotice2 = Settings.Load(rNotice);
-            Check(sNotice2.DesktopAutoCleanNoticeShown == true, "首次确认标记已持久化");
-            Check(sNotice2.DesktopAutoClean == true, "同时保存的开关值也正确");
+                // 改一个已知字段并保存 → 两个旧键必须仍在
+                sLegacy.Theme = "dark";
+                sLegacy.Save();
+
+                string raw = File.ReadAllText(pLegacy, Encoding.UTF8);
+                Check(raw.IndexOf("\"desktopAutoClean\":true", StringComparison.Ordinal) >= 0,
+                    "★desktopAutoClean:true 原样保留（作为未知字段）", raw);
+                Check(raw.IndexOf("\"desktopAutoCleanNoticeShown\":true", StringComparison.Ordinal) >= 0,
+                    "★desktopAutoCleanNoticeShown:true 原样保留", raw);
+                Check(raw.IndexOf("\"theme\":\"dark\"", StringComparison.Ordinal) >= 0,
+                    "已知字段正常写入", raw);
+
+                // 再 Load 一次，确认不会因为旧键而崩
+                Settings sLegacy2 = Settings.Load(rLegacy);
+                Check(sLegacy2.Theme == "dark", "★重载后已知字段正确");
+            }
 
             // ---------- 2. 保存后重新读取一致 ----------
             s1.HideTaskbar = true;
             s1.MiniTaskbar = false;
             s1.TaskbarHiding = false;
-            s1.DesktopAutoClean = true;
             // hiddenCategories 字段已删除，不再写入（老文件里的键会原样保留）
             s1.NavCollapsed = true;
             s1.Theme = "dark";
@@ -140,7 +142,6 @@ namespace Clover
             Check(s2.HideTaskbar == true, "hideTaskbar 往返");
             Check(s2.MiniTaskbar == false, "miniTaskbar 往返");
             Check(s2.TaskbarHiding == false, "taskbarHiding 往返");
-            Check(s2.DesktopAutoClean == true, "desktopAutoClean 往返");
             {
                 string rawCfg = File.ReadAllText(Path.Combine(r1, "config", "settings.json"), Encoding.UTF8);
                 Check(rawCfg.IndexOf("hiddenCategories", StringComparison.Ordinal) < 0,
@@ -184,7 +185,6 @@ namespace Clover
             File.WriteAllText(p3, "{\"unknownField\":\"keep-me\",\"miniTaskbar\":false}", new UTF8Encoding(false));
             Settings s3 = Settings.Load(r3);
             Check(s3.MiniTaskbar == false, "读取已有 miniTaskbar");
-            s3.DesktopAutoClean = false;
             s3.Save();
             string after = File.ReadAllText(p3, Encoding.UTF8);
             Check(after.Contains("keep-me"), "保存时保留未知字段", after);

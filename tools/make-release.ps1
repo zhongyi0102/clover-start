@@ -134,7 +134,7 @@ $readme = @"
 
 【数据在哪】
   首次运行会在本目录生成 config\ 文件夹，里面是应用清单、设置、使用记录。
-  desktop-backup\ 存放被移走的桌面快捷方式（默认不会自动移走）。
+  desktop-backup\ 旧版本移走的桌面快捷方式（程序不再读写它）。
 
 【卸载】
   1. 运行 app\CloverStart.exe --reset-all

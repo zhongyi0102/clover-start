@@ -216,8 +216,7 @@ namespace Clover
             if (settings != null)
             {
                 List<string> items = HeadersOf(settings);
-                Check(items.Count == 4, "★设置有 4 项", "实际 " + items.Count + "：" + string.Join(", ", items.ToArray()));
-                Check(items.Contains("自动移走桌面快捷方式"), "含「自动移走桌面快捷方式」");
+                Check(items.Count == 3, "★设置有 3 项", "实际 " + items.Count + "：" + string.Join(", ", items.ToArray()));
                 Check(items.Contains("全屏时隐藏悬浮按钮"), "含「全屏时隐藏悬浮按钮」");
                 Check(items.Contains("全屏时鼠标移过去临时显示"), "含「全屏时鼠标移过去临时显示」");
                 Check(items.Contains("开机自启"), "含「开机自启」");
@@ -229,8 +228,6 @@ namespace Clover
             if (maintain != null)
             {
                 List<string> items = HeadersOf(maintain);
-                Check(items.Contains("立即清理桌面快捷方式"), "含「立即清理桌面快捷方式」");
-                Check(items.Contains("还原桌面快捷方式"), "含「还原桌面快捷方式」");
                 Check(items.Contains("隐藏用不到的"), "含「隐藏用不到的」");
                 Check(items.Contains("诊断"), "含「诊断」");
                 Check(items.Contains("一键回滚…"), "含「一键回滚…」");
@@ -314,8 +311,8 @@ namespace Clover
             MenuItem settings = FindTop(cm, "设置");
             if (settings != null)
             {
-                foreach (string h in new string[] { "自动移走桌面快捷方式", "全屏时隐藏悬浮按钮",
-                                                    "全屏时鼠标移过去临时显示", "开机自启" })
+                foreach (string h in new string[] { "全屏时隐藏悬浮按钮",
+                                            "全屏时鼠标移过去临时显示", "开机自启" })
                 {
                     MenuItem mi = FindChild(settings, h);
                     Check(mi != null && mi.IsCheckable, "「" + h + "」可勾选",

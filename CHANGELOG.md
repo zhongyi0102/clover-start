@@ -169,6 +169,29 @@
   - 理由：用户打开启动面板通常是想启动程序，不是找文件；找文件用资源管理器更合适
   - `diskSearchEnabled` 配置键从未正式发布，已一并移除（老配置里若存在会作为未知字段原样保留）
 
+### 移除（Removed）
+
+- **桌面快捷方式自动移走 / 还原功能整体下线**
+  - 删除 `AppWatcher` 的桌面监听、`CleanDesktopNow` / `CleanDesktopCore` /
+    `MoveToBackup` / `RestoreDesktopNow` / `RestoreDesktopCore` 等 12 个方法
+  - 删除右键菜单「立即清理桌面快捷方式」「还原桌面快捷方式」「自动移走桌面快捷方式」
+  - 删除 `Settings.DesktopAutoClean` / `DesktopAutoCleanNoticeShown` /
+    `EffectiveDesktopAutoClean`
+  - 删除 `Catalog.SaveManual`（唯一调用方是已删的桌面清理逻辑）
+  - 删除 `ResetAll` 的「清理桌面快捷方式备份」步骤（步骤数 8 → 7）
+  - 删除 `DesktopRestoreTest`（21 断言）
+  - **程序现在从不移动、删除或重命名桌面上的任何文件**
+
+  **兼容性**：老 `settings.json` 里的 `desktopAutoClean` /
+  `desktopAutoCleanNoticeShown` 会作为**未知字段原样保留**（降级不丢数据），
+  但不再有任何代码读它们 —— 不会触发任何文件移动。
+
+  **`desktop-backup\` 保持原样**：程序不再读写它，`--reset-all` 也不会删除它。
+  已有备份可手动取回（见 README「取回 desktop-backup 里的快捷方式」）。
+
+  **`manual-apps.json` 改为只读**：旧版本自动添加的条目仍会显示，
+  但不再有任何写入入口。不想要某条请用「从面板隐藏」。
+
 ### 修复（Fixed）
 
 - **外观参数只在「毛玻璃背景」菜单开关时生效**（本阶段发现的真实 bug）
