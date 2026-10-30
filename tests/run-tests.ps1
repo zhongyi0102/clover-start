@@ -161,7 +161,10 @@ Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
 Invoke-Suite 'FileFoldersTest' $baseRefs `
     (@((Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileFoldersTest.cs')))
 Invoke-Suite 'WatcherTest' $baseRefs `
-    @((Join-Path $testDir 'WatcherTest.cs'))
+    ($baseRefs + $webRef + @((Join-Path $testDir 'WatcherTest.cs')))
+# 「文件」标签：目录列举（过滤 / 排序 / 上限 / 只读）
+Invoke-Suite 'FilesTabTest' $baseRefs `
+    (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
 
 # 虚拟化面板的几何/滚动计算（用到 ItemsControl，需要 WPF 引用）
 
