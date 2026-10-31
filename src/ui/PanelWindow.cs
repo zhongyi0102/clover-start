@@ -60,7 +60,8 @@ namespace Clover
         // ---- 「文件」标签（2-3）----
         StackPanel filesPanel;         // 整个文件标签的容器
         StackPanel filesChipRow;       // 来源胶囊行
-        StackPanel filesSortRow;       // 排序按钮行
+        StackPanel filesExtRow;        // 第二行：后缀筛选
+        StackPanel filesUndoHost;      // 底部撤销提示条容器
         TextBlock filesNotice;         // 提示行
         StackPanel filesListPanel;     // 文件列表
         FilesTabView filesView;        // 逻辑
@@ -334,6 +335,57 @@ namespace Clover
 
             PreviewKeyDown += delegate(object s, KeyEventArgs e)
             {
+                // ---- 「文件」标签优先接管键盘 ----
+                //
+                // 为什么放在最前：文件列表的 ↑↓/Enter/空格/Delete 语义与磁贴完全不同，
+                // 必须先给它机会处理，处理不了（返回 false）再落到下面的磁贴逻辑。
+                //
+                // 搜索框里有焦点时不接管（否则空格会被当预览、Delete 会被当删除）：
+                // 用户正在输入，键盘属于输入框。唯一例外是 Esc —— 仍走分层。
+                bool inSearchBox = searchBox != null && searchBox.IsKeyboardFocusWithin;
+
+                if (current == FilesCategory && filesView != null)
+                {
+                    // Esc：分层处理（预览 → 搜索框 → 选择 → 收起面板）
+                    if (e.Key == Key.Escape)
+                    {
+                        // 1) 预览打开 → 先关预览
+                        if (filesView.IsPreviewOpen)
+                        {
+                            filesView.ClosePreview();
+                            e.Handled = true;
+                            return;
+                        }
+                        // 2) 搜索框有内容 → 清空
+                        if (searchBox != null && searchBox.Text.Length > 0)
+                        {
+                            searchSuppress = true;
+                            try { searchBox.Text = ""; }
+                            finally { searchSuppress = false; }
+                            if (searchHint != null) searchHint.Visibility = Visibility.Visible;
+                            filesView.ApplyFilter("");
+                            e.Handled = true;
+                            return;
+                        }
+                        // 3) 有选中 → 清选择
+                        if (filesView.HandleKey(e.Key, Keyboard.Modifiers))
+                        {
+                            e.Handled = true;
+                            return;
+                        }
+                        // 4) 都清完了 → 交给下面（收起面板）
+                    }
+                    else if (!inSearchBox)
+                    {
+                        // 非 Esc 且焦点不在搜索框 → 交给文件列表
+                        if (filesView.HandleKey(e.Key, Keyboard.Modifiers))
+                        {
+                            e.Handled = true;
+                            return;
+                        }
+                    }
+                }
+
                 if (e.Key == Key.Escape)
                 {
                     HidePanel();
@@ -567,6 +619,72 @@ namespace Clover
             // 窗口位置还没稳定，截到的背景会错位。
             // 160 ms 是 showShiftAnim 的时长，加一点余量。
             RefreshGlassSoon(220);
+        }
+
+        /// <summary>
+        /// 把焦点与前台激活状态抢回面板。
+        ///
+        /// ── 什么时候需要 ──
+        ///
+        /// 调用任何 Shell 模态操作之后：`SHFileOperation`（回收站删除）、
+        /// `SHObjectProperties`（属性对话框）、`OpenAs_RunDLL`（打开方式）。
+        /// 这些操作由 explorer.exe 代理执行，会让面板失去前台激活状态 ——
+        /// 表现就是"删完文件后键盘不响应、面板标题栏变灰"。
+        ///
+        /// ── 为什么不能只调 Activate() ──
+        ///
+        /// WPF 的 `Activate()` 走的是 `SetForegroundWindow`，但 Windows 有
+        /// **前台锁定**（foreground lock）：非前台进程调它会被静默忽略。
+        /// 实测删除后立刻 `Activate()` 经常无效。
+        ///
+        /// 可靠做法是组合：
+        ///   1. `Activate()` —— 常规路径
+        ///   2. `ShowWindow(SW_RESTORE)` —— 防御性（若被最小化）
+        ///   3. `SetForegroundWindow` —— 真正抢前台
+        ///   4. 仍失败 → `Topmost` 抖动，强制提到 Z 序顶端
+        ///
+        /// 最后把焦点还给搜索框（与 ShowPanel 一致，用户可直接打字搜索）。
+        /// </summary>
+        public void ReActivate()
+        {
+            try
+            {
+                if (!IsVisible) return;
+
+                Activate();
+
+                IntPtr h = IntPtr.Zero;
+                try { h = new WindowInteropHelper(this).Handle; }
+                catch { }
+
+                if (h != IntPtr.Zero)
+                {
+                    try { Native.ShowWindow(h, 9 /* SW_RESTORE */); } catch { }
+
+                    bool ok = false;
+                    try { ok = Native.SetForegroundWindow(h); } catch { }
+
+                    if (!ok)
+                    {
+                        try
+                        {
+                            bool wasTop = Topmost;
+                            Topmost = true;
+                            Topmost = wasTop;
+                        }
+                        catch { }
+                    }
+                }
+
+                if (searchBox != null)
+                {
+                    try { searchBox.Focus(); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                try { Ui.LogError(ex, "重新激活面板"); } catch { }
+            }
         }
 
         /// <summary>

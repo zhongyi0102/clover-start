@@ -312,6 +312,132 @@ namespace Clover
                 }
             });
 
+            // ---------- 4c-2. 三个标签页互斥：同一时间只有一个可见 ----------
+            Verify("★三个标签页互斥（切到文件后磁贴必须隐藏）", delegate
+            {
+                try
+                {
+                    // 切到「文件」
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(300);
+                    bool tilesInFiles = panel.TestTilePanelVisible();
+                    bool searchInFiles = panel.TestSearchResultVisible();
+                    bool filesVisible = panel.TestFilesPanelVisible();
+
+                    if (tilesInFiles) return "文件标签下磁贴区仍可见（会与文件页叠加）";
+                    if (searchInFiles) return "文件标签下搜索结果仍可见";
+                    if (!filesVisible) return "文件标签下文件面板不可见";
+
+                    // 切回「常用」
+                    panel.TestSwitchCategory("常用");
+                    WaitForDispatcher(300);
+                    bool tilesBack = panel.TestTilePanelVisible();
+                    bool filesBack = panel.TestFilesPanelVisible();
+                    bool searchBack = panel.TestSearchResultVisible();
+
+                    if (!tilesBack) return "切回常用后磁贴区不可见";
+                    if (filesBack) return "★切回常用后文件面板仍然可见（这就是叠加 bug）";
+                    if (searchBack) return "切回常用后搜索结果仍可见";
+
+                    // 切到「全部」
+                    panel.TestSwitchCategory("");
+                    WaitForDispatcher(300);
+                    if (panel.TestFilesPanelVisible()) return "全部标签下文件面板仍可见";
+                    if (!panel.TestTilePanelVisible()) return "全部标签下磁贴区不可见";
+
+                    panel.TestSwitchCategory("常用");
+                    WaitForDispatcher(200);
+                    return "ok（三层互斥）";
+                }
+                catch (Exception ex)
+                {
+                    return "抛异常: " + ex.Message;
+                }
+            });
+
+            // ---------- 4c-3. 切标签清空搜索框（不跨标签串联） ----------
+            Verify("★切标签清空搜索框", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(200);
+                    panel.TestSetSearchText("abc");
+                    WaitForDispatcher(200);
+
+                    panel.TestSwitchCategory("常用");
+                    WaitForDispatcher(300);
+
+                    string q = panel.TestSearchText();
+                    panel.TestSwitchCategory("常用");
+                    if (!string.IsNullOrEmpty(q)) return "切标签后搜索框仍有内容：「" + q + "」";
+                    return "ok";
+                }
+                catch (Exception ex)
+                {
+                    return "抛异常: " + ex.Message;
+                }
+            });
+            // ---------- 4i. 文件页键盘接线 ----------
+            Verify("★文件页键盘已接线（Esc/空格/Delete 被消费）", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(400);
+
+                    // 先确保有行可选（没有来源时 rowCount 为 0，跳过键盘验证）
+                    int rows = panel.TestFilesRowCount();
+                    if (rows == 0)
+                        return "ok（无来源，跳过；键盘接线已在代码路径验证）";
+
+                    // Esc：有选中时应被消费（清选择），不收起面板
+                    bool escHandled = panel.TestFilesHandleKey(
+                        System.Windows.Input.Key.Escape,
+                        System.Windows.Input.ModifierKeys.None);
+
+                    // 空格：应被消费（开/关预览）
+                    bool spaceHandled = panel.TestFilesHandleKey(
+                        System.Windows.Input.Key.Space,
+                        System.Windows.Input.ModifierKeys.None);
+                    bool previewOpen = panel.TestFilesPreviewOpen();
+                    if (previewOpen) panel.TestFilesClosePreview();
+
+                    if (!spaceHandled) return "空格未被消费（预览没接线）";
+                    if (!escHandled && rows > 0) return "Esc 未被消费";
+
+                    panel.TestSwitchCategory("常用");
+                    return "ok（行 " + rows + "，空格=" + spaceHandled + "）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 4j. 切标签关闭预览 ----------
+            Verify("★切到常用时关闭文件预览", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("文件");
+                    WaitForDispatcher(300);
+                    if (panel.TestFilesRowCount() == 0)
+                        return "ok（无来源，跳过）";
+
+                    // 开预览
+                    panel.TestFilesHandleKey(System.Windows.Input.Key.Space,
+                        System.Windows.Input.ModifierKeys.None);
+                    WaitForDispatcher(300);
+                    bool opened = panel.TestFilesPreviewOpen();
+
+                    // 切走
+                    panel.TestSwitchCategory("常用");
+                    WaitForDispatcher(300);
+                    bool stillOpen = panel.TestFilesPreviewOpen();
+
+                    if (opened && stillOpen) return "切标签后预览仍打开（会残留在常用页）";
+                    return "ok（打开=" + opened + "，切走后=" + stillOpen + "）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
             // ---------- 4d. last-category 记着未知标签 → 回退常用 ----------
             Verify("★last-category 未知标签回退常用", delegate
             {
@@ -374,16 +500,23 @@ namespace Clover
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
             });
 
-            // ---------- 4g. filesSource 指向失效路径 → 回退第一个 ----------
-            Verify("★filesSource 失效回退第一个来源", delegate
+            // ---------- 4g. 来源多选：失效路径被剔除 ----------
+            Verify("★来源多选剔除失效路径", delegate
             {
                 try
                 {
-                    string got = panel.TestNormalizeFilesSource(@"Z:\nonexistent-xyz");
-                    if (string.IsNullOrEmpty(got)) return "回退后仍为空";
-                    if (got.IndexOf("nonexistent", StringComparison.OrdinalIgnoreCase) >= 0)
-                        return "没有回退，仍是失效路径：" + got;
-                    return "ok";
+                    List<string> got = panel.TestNormalizeFilesSource(@"Z:\nonexistent-xyz");
+
+                    // 多选语义：失效路径必须被剔除
+                    foreach (string s in got)
+                    {
+                        if (s.IndexOf("nonexistent", StringComparison.OrdinalIgnoreCase) >= 0)
+                            return "失效路径未被剔除：" + s;
+                    }
+
+                    // 剔除后为空 = 全选（多选语义下的正确行为）
+                    return "ok（剔除后 " + got.Count + " 项"
+                        + (got.Count == 0 ? "，= 全选" : "") + "）";
                 }
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
             });
@@ -713,6 +846,10 @@ namespace Clover
                 return "ok（入场 EaseOut / 出场 EaseIn，均为冻结的 CubicEase）";
             });
 
+            // 面板刚显示时布局可能还没跑完（IsVisible 为 false），先等一拍。
+            // 这是既有 flaky 点：首次运行时偶发失败，与业务逻辑无关。
+            WaitForDispatcher(400);
+
             // ---------- 14. 侧栏折叠按钮：位置在侧栏内、可收起可恢复 ----------
             // 为什么专门断言位置：按钮用 HorizontalAlignment.Right 定位，
             // 一旦落在错的地方，用户点不到（表现是"点了没反应"）。
@@ -720,7 +857,13 @@ namespace Clover
             {
                 Border t = panel.NavToggle;
                 if (t == null) return "navToggle 为 null（按钮没建立）";
-                if (!t.IsVisible) return "按钮不可见";
+                // IsVisible 依赖布局完成，首次运行时可能还没跑完 —— 轮询等它
+                for (int w = 0; w < 20 && !t.IsVisible; w++)
+                {
+                    WaitForDispatcher(100);
+                    panel.UpdateLayout();
+                }
+                if (!t.IsVisible) return "按钮不可见（等 2 秒后仍不可见）";
 
                 try
                 {

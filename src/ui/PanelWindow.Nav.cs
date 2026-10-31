@@ -368,10 +368,7 @@ namespace Clover
                 {
                     // 先把当前分类的滚动位置存下来（必须在改 current 之前）
                     SaveScrollOffset();
-                    current = c;
-                    SaveLastCategory();   // 记住分类，重启后回到这里
-                    UpdateNav();
-                    RenderApps();
+                    SwitchCategory(c);
                 };
 
                 // 右键分类：两个标签都是虚拟分类，不提供改名/排序菜单
@@ -620,21 +617,110 @@ namespace Clover
         /// **搜索隔离**：文件标签下搜索框只过滤当前来源的文件名，
         /// 不调 searchResults.Search（那是全局应用搜索，会弹出一堆应用）。
         /// </summary>
+        /// <summary>
+        /// 内容区三个互斥层。**同一时间只能有一个可见**。
+        ///
+        /// 为什么用枚举而不是三个 bool：三层各自 Visible/Collapsed 的组合有 8 种，
+        /// 手动维护必然漏 —— 加「文件」标签时就漏了把 filesPanel 设回 Collapsed，
+        /// 结果切回「常用」后文件页还压在上面。用枚举 + 单一入口，
+        /// 新增层时只需在这里加一个 case，不可能漏。
+        /// </summary>
+        enum ContentLayer
+        {
+            /// <summary>应用磁贴（常用 / 全部）。</summary>
+            Tiles,
+            /// <summary>全局搜索结果列表。</summary>
+            SearchResults,
+            /// <summary>「文件」标签面板。</summary>
+            Files,
+        }
+
+        /// <summary>
+        /// <summary>
+        /// 切换分类（常用 / 全部 / 文件）。**所有切换入口都走这里**，
+        /// 不要各自写 `current = x; RenderApps();` —— 那样必然漏掉状态隔离。
+        ///
+        /// 做三件事：
+        ///   1. 让离开的标签释放自己的瞬时状态（文件标签清选择/过滤/缓存）
+        ///   2. 清空搜索框 —— 否则在文件页搜过 "abc"，切到「常用」会用 "abc" 过滤应用
+        ///   3. 重建标签选中态 + 渲染新标签
+        /// </summary>
+        void SwitchCategory(string cat)
+        {
+            try
+            {
+                string next = cat ?? "";
+                bool wasFiles = (current == FilesCategory);
+                bool willFiles = (next == FilesCategory);
+
+                // ---- 1. 离开的标签释放状态 ----
+                if (wasFiles && !willFiles && filesView != null)
+                    filesView.OnLeave();
+
+                // ---- 2. 清空搜索框（跨标签不共用搜索词）----
+                //   searchSuppress 防止 TextChanged 触发一次多余渲染
+                if (searchBox != null && searchBox.Text.Length > 0)
+                {
+                    searchSuppress = true;
+                    try { searchBox.Text = ""; }
+                    finally { searchSuppress = false; }
+                    if (searchHint != null) searchHint.Visibility = Visibility.Visible;
+                }
+
+                // ---- 3. 切换 + 渲染 ----
+                current = next;
+                SaveLastCategory();
+                UpdateNav();
+
+                // 进入文件标签：重置瞬时状态，从干净状态开始
+                if (willFiles && filesView != null)
+                    filesView.OnEnter();
+
+                RenderApps();
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "切换分类");
+            }
+        }
+
+        void ShowContentLayer(ContentLayer layer)
+
+        {
+            try
+            {
+                if (tilePanel != null)
+                    tilePanel.Visibility = layer == ContentLayer.Tiles
+                        ? Visibility.Visible : Visibility.Collapsed;
+
+                if (searchResultPanel != null)
+                    searchResultPanel.Visibility = layer == ContentLayer.SearchResults
+                        ? Visibility.Visible : Visibility.Collapsed;
+
+                if (filesPanel != null)
+                    filesPanel.Visibility = layer == ContentLayer.Files
+                        ? Visibility.Visible : Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "切换内容层");
+            }
+        }
+
         void RenderFilesTab()
         {
             try
             {
-                // 三者互斥：磁贴 / 搜索结果 / 文件面板
-                if (tilePanel != null) tilePanel.Visibility = Visibility.Collapsed;
-                if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Collapsed;
-                if (filesPanel != null) filesPanel.Visibility = Visibility.Visible;
+                // 三者互斥：只显示文件层
+                ShowContentLayer(ContentLayer.Files);
                 if (searchResults != null) searchResults.Clear();
 
                 // 首次创建 FilesTabView
                 if (filesView == null && filesPanel != null)
                 {
                     filesView = new FilesTabView(this, settings, baseDir,
-                        filesChipRow, filesListPanel, filesNotice, filesSortRow);
+                        filesChipRow, filesExtRow, filesListPanel, filesNotice,
+                        filesUndoHost);
                 }
 
                 if (filesView != null)
@@ -692,17 +778,17 @@ namespace Clover
             //
             // 搜索时同时隐藏快速启动区：它是"常用应用"的快捷入口，
             // 用户已经在搜索了，那排按钮只是占地方。
+            // ★ 应用侧只可能是这两个层之一。文件层在这里必须被收起来 ——
+            //   否则从「文件」切回「常用」时，文件页会一直压在上面。
             bool searching = q.Length > 0;
             if (searching)
             {
-                if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Visible;
-                if (tilePanel != null) tilePanel.Visibility = Visibility.Collapsed;
+                ShowContentLayer(ContentLayer.SearchResults);
                 if (searchResults != null) searchResults.Search(q);
             }
             else
             {
-                if (searchResultPanel != null) searchResultPanel.Visibility = Visibility.Collapsed;
-                if (tilePanel != null) tilePanel.Visibility = Visibility.Visible;
+                ShowContentLayer(ContentLayer.Tiles);
                 if (searchResults != null) searchResults.Clear();
             }
 
@@ -916,9 +1002,8 @@ namespace Clover
         {
             try
             {
-                current = cat ?? "";
-                UpdateNav();
-                RenderApps();
+                // 走生产路径，保证测试覆盖与真实切换一致
+                SwitchCategory(cat);
             }
             catch (Exception ex) { Ui.LogError(ex, "测试：切换分类"); }
         }
@@ -954,6 +1039,42 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "测试：重读 last-category"); }
         }
 
+
+        /// <summary>测试用：把按键转给文件视图，返回是否被消费。</summary>
+        internal bool TestFilesHandleKey(Key key, ModifierKeys mods)
+        {
+            try
+            {
+                if (filesView == null) return false;
+                return filesView.HandleKey(key, mods);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "测试：文件键盘");
+                return false;
+            }
+        }
+
+        /// <summary>测试用：预览是否打开。</summary>
+        internal bool TestFilesPreviewOpen()
+        {
+            try { return filesView != null && filesView.IsPreviewOpen; }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：关预览。</summary>
+        internal void TestFilesClosePreview()
+        {
+            try { if (filesView != null) filesView.ClosePreview(); }
+            catch { }
+        }
+
+        /// <summary>测试用：文件列表里当前选中的项数。</summary>
+        internal int TestFilesSelectedCount()
+        {
+            try { return filesView == null ? 0 : filesView.TestSelectedCount(); }
+            catch { return 0; }
+        }
 
         /// <summary>测试用：读当前分类。</summary>
         /// <summary>测试用：清空 file-folders.json（模拟"没有任何来源"）。</summary>
@@ -1002,30 +1123,39 @@ namespace Clover
             catch { return 0; }
         }
 
-        /// <summary>测试用：把 filesSource 设成一个失效路径，返回修正后的值。</summary>
-        internal string TestNormalizeFilesSource(string bogusPath)
+        /// <summary>
+        /// 测试用：把失效路径塞进来源多选，返回 NormalizeSource 之后的有效来源列表。
+        /// 多选语义下：失效路径会被剔除；全被剔除后为空 = 全选。
+        /// </summary>
+        internal List<string> TestNormalizeFilesSource(string bogusPath)
         {
+            List<string> result = new List<string>();
             try
             {
                 if (filesView == null)
                 {
-                    // 还没创建视图 → 先切到文件标签让它建出来
                     string old = current;
                     current = FilesCategory;
                     RenderApps();
                     current = old;
                 }
-                if (filesView == null) return "";
+                if (filesView == null) return result;
 
-                if (settings != null) settings.FilesSource = bogusPath;
+                // 只留失效路径 → ReloadFolders 触发 NormalizeSource 把它剔除
+                if (settings != null)
+                {
+                    settings.FilesSources = new List<string>();
+                    settings.FilesSources.Add(bogusPath);
+                }
+                filesView.TestSetSources(new List<string> { bogusPath });
                 filesView.ReloadFolders();
-                filesView.Refresh(true);
-                return filesView.CurrentSourcePath();
+                result = filesView.TestGetSources();
+                return result;
             }
             catch (Exception ex)
             {
-                Ui.LogError(ex, "测试：修正 filesSource");
-                return "";
+                Ui.LogError(ex, "测试：修正来源多选");
+                return result;
             }
         }
 
@@ -1047,6 +1177,23 @@ namespace Clover
                     && searchResultPanel.Visibility == Visibility.Visible;
             }
             catch { return false; }
+        }
+
+        /// <summary>测试用：文件面板是否可见。</summary>
+        internal bool TestFilesPanelVisible()
+        {
+            try
+            {
+                return filesPanel != null && filesPanel.Visibility == Visibility.Visible;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：读搜索框文字。</summary>
+        internal string TestSearchText()
+        {
+            try { return searchBox == null ? "" : (searchBox.Text ?? ""); }
+            catch { return ""; }
         }
 
         /// <summary>测试用：磁贴区是否可见。</summary>

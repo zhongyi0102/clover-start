@@ -147,15 +147,21 @@ namespace Clover
         public bool ShowFilesTab = true;
 
         /// <summary>
-        /// 「文件」标签当前选中的来源（FileFolders 里某个 path）。
-        /// 空串 = 没选（用第一个）；指向失效路径时回退第一个。
+        /// **已废弃，仅用于一次性迁移**。旧版单选来源。
+        /// 首次读取时若 filesSources 为空且此值非空，把它当作唯一选中项；之后不再写。
         /// </summary>
         public string FilesSource = "";
 
         /// <summary>
-        /// 「文件」列表排序：modified / name / size / type。非法值回退 modified。
+        /// 「文件」列表排序，格式 `列:方向`（如 `name:asc` / `modified:desc` / `size:desc`）。
+        /// 兼容旧值：只有列名（如 `modified`）时按降序兜底。非法值回退 `modified:desc`。
+        public string FilesSort = "modified:desc";
+
+        /// <summary>
+        /// 「文件」标签多选来源（FileFolders 里若干 path）。
+        /// 空列表 = 没选 = 显示所有来源的文件。
         /// </summary>
-        public string FilesSort = "modified";
+        public List<string> FilesSources = new List<string>();
 
 
 
@@ -252,7 +258,17 @@ namespace Clover
                     try { s.ShowFilesTab = Convert.ToBoolean(v); }
                     catch { Log.Warn("settings.showFilesTab 不是布尔值，已用默认 true"); }
                 }
+                // ---- 来源多选 ----
                 s.FilesSource = ReadString(d, "filesSource", s.FilesSource, null);
+                s.FilesSources = ReadStringList(d, "filesSources");
+
+                // 一次性迁移：filesSources 为空、旧 filesSource 有值 → 当作唯一选中项
+                // 迁移后不再写 filesSource（Save 时固定写空串）
+                if (s.FilesSources.Count == 0 && !string.IsNullOrEmpty(s.FilesSource))
+                {
+                    s.FilesSources.Add(s.FilesSource);
+                    Log.Warn("settings: 已把旧 filesSource 迁移到 filesSources");
+                }
                 s.FilesSort = ReadFilesSort(d, "filesSort", s.FilesSort);
                 // 文字清晰保底：缺键时用默认 true（老配置也享受保底）
                 if (d.TryGetValue("textContrastGuard", out v) && v != null)
@@ -305,7 +321,8 @@ namespace Clover
                 d["glassAccent"] = GlassAccent;
                 d["textContrastGuard"] = TextContrastGuard;
                 d["showFilesTab"] = ShowFilesTab;
-                d["filesSource"] = FilesSource;
+                d["filesSource"] = "";   // 已废弃，迁移后固定写空
+                d["filesSources"] = FilesSources;
                 d["filesSort"] = FilesSort;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
@@ -435,7 +452,11 @@ namespace Clover
         /// 不在这里硬编码一份，避免两处不同步。
         /// </summary>
         /// <summary>
-        /// 读 filesSort：只接受 modified / name / size / type，其余回退 def。
+        /// 读 filesSort，格式 `列:方向`：
+        ///   · `name:asc` / `modified:desc` / `size:desc`
+        ///   · 兼容旧值：只有列名（`modified`）→ 按降序兜底
+        ///   · 非法值 → 回退 def（`modified:desc`）
+        /// 只接受 modified / name / size 三列（type 已随排序按钮移除，但仍兼容旧值）。
         /// </summary>
         static string ReadFilesSort(Dictionary<string, object> d, string key, string def)
         {
@@ -447,7 +468,29 @@ namespace Clover
                 if (string.IsNullOrWhiteSpace(s)) return def;
                 s = s.Trim().ToLowerInvariant();
 
-                if (s == "modified" || s == "name" || s == "size" || s == "type") return s;
+                string col = s;
+                string dir = "desc";
+                int colon = s.IndexOf(':');
+                if (colon > 0)
+                {
+                    col = s.Substring(0, colon).Trim();
+                    string dpart = s.Substring(colon + 1).Trim();
+                    if (dpart == "asc" || dpart == "desc") dir = dpart;
+                    else
+                    {
+                        Log.Warn("settings." + key + " 方向非法（" + dpart + "），已用 desc");
+                    }
+                }
+
+                if (col == "modified" || col == "name" || col == "size")
+                    return col + ":" + dir;
+
+                // type 列已移除，旧配置回退到 modified:desc
+                if (col == "type")
+                {
+                    Log.Warn("settings." + key + " 的 type 列已移除，回退 modified:desc");
+                    return "modified:desc";
+                }
 
                 Log.Warn("settings." + key + " 值非法（" + s + "），已回退 " + def);
                 return def;
@@ -457,6 +500,28 @@ namespace Clover
                 Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已回退 " + def);
                 return def;
             }
+        }
+
+        /// <summary>读字符串数组（缺键/类型错 → 空列表，不抛）。</summary>
+        static List<string> ReadStringList(Dictionary<string, object> d, string key)
+        {
+            List<string> list = new List<string>();
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return list;
+                foreach (object o in JsonIO.AsArray(v))
+                {
+                    if (o == null) continue;
+                    string s = Convert.ToString(o);
+                    if (!string.IsNullOrWhiteSpace(s)) list.Add(s.Trim());
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已用空列表");
+            }
+            return list;
         }
 
         static string ReadPresetName(Dictionary<string, object> d, string key, string def)

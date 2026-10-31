@@ -294,7 +294,7 @@ namespace Clover
 
             // ---- 「文件」标签面板（与磁贴区、搜索结果三者互斥显示）----
             //
-            // 结构：来源胶囊行 + 排序行 + 提示行 + 文件列表
+            // 结构：来源筛选行 + 后缀筛选行 + 提示行 + 文件列表（含表头）
             // 全部在 StackPanel 里竖排，外面套 ScrollViewer（contentScroll 已有）。
             filesPanel = new StackPanel();
             filesPanel.Orientation = Orientation.Vertical;
@@ -310,11 +310,15 @@ namespace Clover
             chipScroll.Content = filesChipRow;
             filesPanel.Children.Add(chipScroll);
 
-            // 排序行（横向）
-            filesSortRow = new StackPanel();
-            filesSortRow.Orientation = Orientation.Horizontal;
-            filesSortRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            filesPanel.Children.Add(filesSortRow);
+            // 后缀筛选行（横向，可滚动 —— 分组 + 自定义 + 刷新可能超出宽度）
+            ScrollViewer extScroll = new ScrollViewer();
+            extScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            extScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            extScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesExtRow = new StackPanel();
+            filesExtRow.Orientation = Orientation.Horizontal;
+            extScroll.Content = filesExtRow;
+            filesPanel.Children.Add(extScroll);
 
             // 提示行（错误 / 截断 / 空目录）
             filesNotice = Ui.T("", 11, Ui.Sub);
@@ -327,6 +331,11 @@ namespace Clover
             filesListPanel = new StackPanel();
             filesListPanel.Orientation = Orientation.Vertical;
             filesPanel.Children.Add(filesListPanel);
+
+            // 撤销提示条（固定在文件面板底部）
+            filesUndoHost = new StackPanel();
+            filesUndoHost.Orientation = Orientation.Vertical;
+            filesPanel.Children.Add(filesUndoHost);
 
             contentStack.Children.Add(filesPanel);
 

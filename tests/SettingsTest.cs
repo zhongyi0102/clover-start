@@ -45,7 +45,7 @@ namespace Clover
             // 「文件」标签 3 个新键（2-3）
             Check(s1.ShowFilesTab == true, "★默认显示「文件」标签");
             Check(s1.FilesSource == "", "★默认 filesSource 为空（用第一个来源）", s1.FilesSource ?? "null");
-            Check(s1.FilesSort == "modified", "★默认 filesSort = modified", s1.FilesSort);
+            Check(s1.FilesSort == "modified:desc", "★默认 filesSort = modified:desc", s1.FilesSort);
 
             // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
             // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
@@ -199,18 +199,18 @@ namespace Clover
                 string rF = NewRoot();
                 string pF = Path.Combine(rF, "config", "settings.json");
                 File.WriteAllText(pF,
-                    "{\"showFilesTab\":false,\"filesSource\":\"D:\\\\Projects\",\"filesSort\":\"size\"}",
+                    "{\"showFilesTab\":false,\"filesSource\":\"D:\\\\Projects\",\"filesSort\":\"size:asc\"}",
                     new UTF8Encoding(false));
 
                 Settings sF = Settings.Load(rF);
                 Check(sF.ShowFilesTab == false, "showFilesTab=false 往返");
                 Check(sF.FilesSource == @"D:\Projects", "filesSource 往返", sF.FilesSource);
-                Check(sF.FilesSort == "size", "filesSort=size 往返", sF.FilesSort);
+                Check(sF.FilesSort == "size:asc", "filesSort=size:asc 往返", sF.FilesSort);
 
                 // 非法 filesSort → 回退 modified
                 File.WriteAllText(pF, "{\"filesSort\":\"bogus\"}", new UTF8Encoding(false));
                 Settings sBad = Settings.Load(rF);
-                Check(sBad.FilesSort == "modified", "★filesSort 非法值回退 modified", sBad.FilesSort);
+                Check(sBad.FilesSort == "modified:desc", "★filesSort 非法值回退 modified:desc", sBad.FilesSort);
 
                 // showFilesTab 类型错 → 回退 true
                 File.WriteAllText(pF, "{\"showFilesTab\":\"yes\"}", new UTF8Encoding(false));
@@ -222,7 +222,50 @@ namespace Clover
                 File.WriteAllText(pF, "{}", new UTF8Encoding(false));
                 Settings sMissing2 = Settings.Load(rF);
                 Check(sMissing2.ShowFilesTab == true, "缺键 showFilesTab 默认 true");
-                Check(sMissing2.FilesSort == "modified", "缺键 filesSort 默认 modified");
+                Check(sMissing2.FilesSort == "modified:desc", "缺键 filesSort 默认 modified:desc");
+                // 新格式：列:方向
+                File.WriteAllText(pF, "{\"filesSort\":\"name:asc\"}", new UTF8Encoding(false));
+                Settings sAsc = Settings.Load(rF);
+                Check(sAsc.FilesSort == "name:asc", "★filesSort name:asc 往返", sAsc.FilesSort);
+
+                File.WriteAllText(pF, "{\"filesSort\":\"size:desc\"}", new UTF8Encoding(false));
+                Settings sDesc = Settings.Load(rF);
+                Check(sDesc.FilesSort == "size:desc", "filesSort size:desc 往返", sDesc.FilesSort);
+
+                // 旧值（只有列名）→ 降序兜底
+                File.WriteAllText(pF, "{\"filesSort\":\"name\"}", new UTF8Encoding(false));
+                Settings sLegacy2 = Settings.Load(rF);
+                Check(sLegacy2.FilesSort == "name:desc", "★旧值 name → name:desc（降序兜底）", sLegacy2.FilesSort);
+
+                // 非法方向 → desc
+                File.WriteAllText(pF, "{\"filesSort\":\"name:sideways\"}", new UTF8Encoding(false));
+                Settings sBadDir = Settings.Load(rF);
+                Check(sBadDir.FilesSort == "name:desc", "★非法方向回退 desc", sBadDir.FilesSort);
+
+                // type 列已移除 → 回退 modified:desc
+                File.WriteAllText(pF, "{\"filesSort\":\"type\"}", new UTF8Encoding(false));
+                Settings sType = Settings.Load(rF);
+                Check(sType.FilesSort == "modified:desc", "★type 列已移除 → modified:desc", sType.FilesSort);
+
+                // filesSources 数组往返
+                File.WriteAllText(pF, "{\"filesSources\":[\"D:\\\\A\",\"D:\\\\B\"]}", new UTF8Encoding(false));
+                Settings sSrc = Settings.Load(rF);
+                Check(sSrc.FilesSources.Count == 2, "★filesSources 往返 2 项", Convert.ToString(sSrc.FilesSources.Count));
+
+                // 旧 filesSource 迁移到 filesSources
+                File.WriteAllText(pF, "{\"filesSource\":\"D:\\\\Old\"}", new UTF8Encoding(false));
+                Settings sMig = Settings.Load(rF);
+                Check(sMig.FilesSources.Count == 1 && sMig.FilesSources[0] == @"D:\Old",
+                    "★旧 filesSource 迁移到 filesSources",
+                    sMig.FilesSources.Count + " 项");
+
+                // 迁移后 Save → filesSource 写空、filesSources 保留
+                sMig.Save();
+                string afterMig = File.ReadAllText(pF, Encoding.UTF8);
+                Check(afterMig.IndexOf("\"filesSource\":\"\"", StringComparison.Ordinal) >= 0,
+                    "★迁移后 filesSource 写空", afterMig);
+                Check(afterMig.IndexOf("filesSources", StringComparison.Ordinal) >= 0,
+                    "★迁移后 filesSources 已写入");
             }
 
             // ---------- 3b. ★已删除的设置键

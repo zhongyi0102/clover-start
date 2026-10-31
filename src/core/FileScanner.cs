@@ -65,6 +65,12 @@ namespace Clover
             /// <summary>扩展名（小写，含点）。文件夹为空串。</summary>
             public string Ext = "";
 
+            /// <summary>
+            /// 这条记录来自哪个来源根目录（FileFolders 里的某个 path）。
+            /// 多来源并集时用来区分「这条属于哪个来源」。
+            /// </summary>
+            public string SourceRoot = "";
+
             public override string ToString()
             {
                 return (IsFolder ? "[D] " : "[F] ") + Name + "  " + Size + "B";
@@ -114,7 +120,103 @@ namespace Clover
         /// </summary>
         /// <param name="dirPath">目录路径（会先归一化）</param>
         /// <param name="sort">排序方式</param>
+        /// <summary>
+        /// 列举**多个来源目录**，合并成一个列表（并集）。
+        ///
+        /// 规则：
+        ///   · 每个目录各列一层，不递归
+        ///   · 结果按 Path 去重（不同来源可能指向同一目录）
+        ///   · 每个 Entry 的 SourceRoot 标记它来自哪个来源
+        ///   · 所有目录都失败时 Error 非空；部分失败只跳过该目录
+        ///   · 枚举上限按**总量**算（MaxEnumerate），返回上限 MaxReturn
+        /// </summary>
+        public static Result ListMany(List<string> dirPaths, SortKey sort, bool ascending)
+        {
+            Result r = new Result();
+            List<Entry> all = new List<Entry>();
+            HashSet<string> seenPath = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int okCount = 0;
+            bool truncated = false;
+            string firstError = null;
+
+            try
+            {
+                if (dirPaths == null || dirPaths.Count == 0)
+                {
+                    r.Error = "没有选中任何来源";
+                    return r;
+                }
+
+                foreach (string dir in dirPaths)
+                {
+                    if (all.Count >= MaxEnumerate) { truncated = true; break; }
+
+                    Result one = List(dir, sort, ascending);
+                    if (!string.IsNullOrEmpty(one.Error))
+                    {
+                        if (firstError == null) firstError = one.Error;
+                        continue;   // 单个来源失败 → 跳过，不影响其他
+                    }
+                    okCount++;
+
+                    foreach (Entry e in one.Items)
+                    {
+                        if (e == null) continue;
+                        if (all.Count >= MaxEnumerate) { truncated = true; break; }
+                        if (!seenPath.Add(e.Path)) continue;   // 跨来源去重
+                        all.Add(e);
+                    }
+
+                    if (one.EnumerateTruncated) truncated = true;
+                }
+
+                if (okCount == 0)
+                {
+                    r.Error = firstError ?? "所有来源都读取失败";
+                    return r;
+                }
+
+                r.ScannedCount = all.Count;
+                r.EnumerateTruncated = truncated;
+
+                Sort(all, sort, ascending);
+
+                r.FilteredCount = all.Count;
+                if (all.Count > MaxReturn)
+                {
+                    all.RemoveRange(MaxReturn, all.Count - MaxReturn);
+                    r.ReturnTruncated = true;
+                }
+                r.Items = all;
+            }
+            catch (Exception ex)
+            {
+                r.Error = "读取失败: " + ex.Message;
+                r.Items = new List<Entry>();
+            }
+
+            return r;
+        }
+
+        /// <summary>
+        /// 列举一个目录（不递归）。永远不抛异常 —— 失败写进 Result.Error。
+        /// </summary>
+        /// <param name="dirPath">目录路径（会先归一化）</param>
+        /// <param name="sort">排序方式</param>
+        /// <param name="ascending">true = 升序；false = 降序</param>
+        /// <summary>
+        /// 列举一个目录，**方向按列还原旧语义**：
+        ///   · Modified / Size → 降序（最新 / 最大在前）
+        ///   · Name / Type     → 升序（字典序）
+        /// 这样既有调用方和测试的行为与改动前完全一致。
+        /// </summary>
         public static Result List(string dirPath, SortKey sort)
+        {
+            bool asc = (sort == SortKey.Name || sort == SortKey.Type);
+            return List(dirPath, sort, asc);
+        }
+
+        public static Result List(string dirPath, SortKey sort, bool ascending)
         {
             Result r = new Result();
 
@@ -146,7 +248,7 @@ namespace Clover
                     foreach (string d in Directory.EnumerateDirectories(norm))
                     {
                         if (all.Count >= MaxEnumerate) { truncated = true; break; }
-                        Entry e = MakeEntry(d, true);
+                        Entry e = MakeEntry(d, true, norm);
                         if (e != null) all.Add(e);
                     }
                 }
@@ -162,7 +264,7 @@ namespace Clover
                         foreach (string f in Directory.EnumerateFiles(norm))
                         {
                             if (all.Count >= MaxEnumerate) { truncated = true; break; }
-                            Entry e = MakeEntry(f, false);
+                            Entry e = MakeEntry(f, false, norm);
                             if (e != null) all.Add(e);
                         }
                     }
@@ -175,7 +277,7 @@ namespace Clover
                 r.EnumerateTruncated = truncated;
 
                 // ---- 排序 ----
-                Sort(all, sort);
+                Sort(all, sort, ascending);
 
                 r.FilteredCount = all.Count;
 
@@ -212,7 +314,7 @@ namespace Clover
         ///
         /// 单个文件出错（属性读不出、路径太长）只跳过该项，不影响整批。
         /// </summary>
-        static Entry MakeEntry(string fullPath, bool isFolder)
+        static Entry MakeEntry(string fullPath, bool isFolder, string sourceRoot)
         {
             try
             {
@@ -226,6 +328,7 @@ namespace Clover
                 e.Name = name;
                 e.Path = fullPath;
                 e.IsFolder = isFolder;
+                e.SourceRoot = sourceRoot ?? "";
 
                 if (isFolder)
                 {
@@ -315,13 +418,22 @@ namespace Clover
         /// </summary>
         public static void Sort(List<Entry> list, SortKey sort)
         {
+            Sort(list, sort, false);
+        }
+
+        /// <summary>
+        /// 排序（带方向）。**文件夹始终排在文件前** —— 这条优先于任何排序方式和方向。
+        /// </summary>
+        /// <param name="ascending">true = 升序；false = 降序</param>
+        public static void Sort(List<Entry> list, SortKey sort, bool ascending)
+        {
             if (list == null || list.Count < 2) return;
 
             try
             {
                 list.Sort(delegate(Entry x, Entry y)
                 {
-                    // 文件夹在前（这条优先于任何排序方式）
+                    // 文件夹在前（这条优先于任何排序方式和方向）
                     if (x.IsFolder != y.IsFolder) return x.IsFolder ? -1 : 1;
 
                     int c = 0;
@@ -332,8 +444,8 @@ namespace Clover
                             break;
 
                         case SortKey.Size:
-                            // 大文件在前；文件夹之间按名字（它们大小都是 0）
-                            c = y.Size.CompareTo(x.Size);
+                            // 文件夹之间按名字（它们大小都是 0）
+                            c = x.Size.CompareTo(y.Size);
                             if (c == 0) c = CompareName(x, y);
                             break;
 
@@ -344,13 +456,12 @@ namespace Clover
 
                         case SortKey.Modified:
                         default:
-                            // 新的在前
-                            c = y.Modified.CompareTo(x.Modified);
+                            c = x.Modified.CompareTo(y.Modified);
                             if (c == 0) c = CompareName(x, y);
                             break;
                     }
 
-                    if (c != 0) return c;
+                    if (c != 0) return ascending ? c : -c;
                     // 最后用路径兜底，保证顺序稳定（不会每次刷新都跳）
                     return string.Compare(x.Path, y.Path, StringComparison.OrdinalIgnoreCase);
                 });

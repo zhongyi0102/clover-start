@@ -46,6 +46,7 @@ namespace Clover
             TestErrors();
             TestFormatting();
             TestReadOnly();
+            TestExtGroups();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -509,7 +510,131 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ========== 辅助 ==========
+        // ---------- 15. 后缀分组（FileExtGroups）----------
+        static void TestExtGroups()
+        {
+            Console.WriteLine("--- 15. 后缀分组 ---");
+
+            List<FileExtGroups.Group> builtin = FileExtGroups.Builtin();
+            List<FileExtGroups.Group> custom = new List<FileExtGroups.Group>();
+
+            // ---- 固定分组命中 ----
+            Check(FileExtGroups.MatchGroups(".docx", builtin, custom).Contains("doc"),
+                "★.docx → doc 组");
+            Check(FileExtGroups.MatchGroups(".xlsx", builtin, custom).Contains("xls"),
+                "★.xlsx → xls 组");
+            Check(FileExtGroups.MatchGroups(".pdf", builtin, custom).Contains("pdf"),
+                "★.pdf → pdf 组");
+            Check(FileExtGroups.MatchGroups(".jpg", builtin, custom).Contains("img"),
+                "★.jpg → 图片组");
+            Check(FileExtGroups.MatchGroups(".zip", builtin, custom).Contains("zip"),
+                "★.zip → 压缩包组");
+            Check(FileExtGroups.MatchGroups(".exe", builtin, custom).Contains("setup"),
+                "★.exe → 安装包组");
+
+            // ---- 大小写与点号归一化 ----
+            Check(FileExtGroups.MatchGroups(".DOCX", builtin, custom).Contains("doc"),
+                "★大写 .DOCX 也命中");
+            Check(FileExtGroups.Normalize(".PDF") == "pdf", "Normalize 去点去大写",
+                FileExtGroups.Normalize(".PDF"));
+            Check(FileExtGroups.Normalize("pdf") == "pdf", "Normalize 无点也 OK");
+
+            // ---- 「其他」：不属于任何固定组 ----
+            Check(FileExtGroups.IsOther(".md", builtin, custom), "★.md → 其他");
+            Check(FileExtGroups.IsOther(".py", builtin, custom), "★.py → 其他");
+            Check(FileExtGroups.IsOther(".log", builtin, custom), ".log → 其他");
+            Check(!FileExtGroups.IsOther(".pdf", builtin, custom), ".pdf 不属于其他");
+
+            // ---- 「其他」：无扩展名也算 ----
+            Check(FileExtGroups.IsOther("", builtin, custom), "★无扩展名 → 其他");
+            Check(FileExtGroups.IsOther(null, builtin, custom), "★null 扩展名 → 其他");
+
+            // ---- 自定义后缀从「其他」里移出 ----
+            FileExtGroups.Group mdGroup = new FileExtGroups.Group("md", "md", new string[] { "md" });
+            mdGroup.IsCustom = true;
+            custom.Add(mdGroup);
+            Check(!FileExtGroups.IsOther(".md", builtin, custom),
+                "★加了自定义 md 后，.md 不再属于其他");
+            Check(FileExtGroups.MatchGroups(".md", builtin, custom).Contains("md"),
+                "★.md 命中自定义组");
+            Check(FileExtGroups.IsOther(".py", builtin, custom),
+                "未加自定义的 .py 仍在其他");
+
+            // ---- Passes 筛选 ----
+            HashSet<string> sel = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Check(FileExtGroups.Passes(".docx", sel, builtin, custom),
+                "★空选择 → 全部通过");
+
+            sel.Add("doc");
+            Check(FileExtGroups.Passes(".docx", sel, builtin, custom),
+                "★选了 doc → .docx 通过");
+            Check(!FileExtGroups.Passes(".pdf", sel, builtin, custom),
+                "★选了 doc → .pdf 不通过");
+
+            sel.Add("pdf");
+            Check(FileExtGroups.Passes(".pdf", sel, builtin, custom),
+                "★doc+pdf 并集 → .pdf 通过");
+            Check(!FileExtGroups.Passes(".md", sel, builtin, custom),
+                "★doc+pdf 并集 → .md 不通过");
+
+            // ---- 选「其他」 ----
+            HashSet<string> selOther = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            selOther.Add(FileExtGroups.OtherKey);
+            Check(FileExtGroups.Passes(".py", selOther, builtin, custom),
+                "★选其他 → .py 通过");
+            Check(FileExtGroups.Passes("", selOther, builtin, custom),
+                "★选其他 → 无扩展名通过");
+            Check(!FileExtGroups.Passes(".pdf", selOther, builtin, custom),
+                "★选其他 → .pdf 不通过");
+
+            // ---- KeepEntry：四种组合（类型过滤的唯一判定）----
+            HashSet<string> empty = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> docOnly = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            docOnly.Add("doc");
+
+            // ① 后缀空 + 文件夹关 → 只放行文件
+            Check(!FileExtGroups.KeepEntry(true, "", false, empty, builtin, custom),
+                "★①文件夹关 → 文件夹不放行");
+            Check(FileExtGroups.KeepEntry(false, ".docx", false, empty, builtin, custom),
+                "★①文件夹关 → 文件放行");
+            Check(FileExtGroups.KeepEntry(false, ".pdf", false, empty, builtin, custom),
+                "①文件夹关 → 任意后缀文件都放行");
+
+            // ② 后缀空 + 文件夹开 → 只放行文件夹（关键：文件一律排除）
+            Check(FileExtGroups.KeepEntry(true, "", true, empty, builtin, custom),
+                "★②文件夹开 → 文件夹放行");
+            Check(!FileExtGroups.KeepEntry(false, ".docx", true, empty, builtin, custom),
+                "★②文件夹开 → .docx 文件**不放行**（这是本轮修的 bug）");
+            Check(!FileExtGroups.KeepEntry(false, ".doc", true, empty, builtin, custom),
+                "★②文件夹开 → .doc 文件**不放行**");
+            Check(!FileExtGroups.KeepEntry(false, "", true, empty, builtin, custom),
+                "★②文件夹开 → 无扩展名文件也不放行");
+
+            // ③ 后缀非空 + 文件夹关 → 只放行匹配的文件
+            Check(!FileExtGroups.KeepEntry(true, "", false, docOnly, builtin, custom),
+                "★③选 doc + 文件夹关 → 文件夹不放行");
+            Check(FileExtGroups.KeepEntry(false, ".docx", false, docOnly, builtin, custom),
+                "★③选 doc → .docx 放行");
+            Check(!FileExtGroups.KeepEntry(false, ".pdf", false, docOnly, builtin, custom),
+                "★③选 doc → .pdf 不放行");
+
+            // ④ 后缀非空 + 文件夹开 → 文件夹 + 匹配的文件
+            Check(FileExtGroups.KeepEntry(true, "", true, docOnly, builtin, custom),
+                "★④选 doc + 文件夹开 → 文件夹放行");
+            Check(FileExtGroups.KeepEntry(false, ".docx", true, docOnly, builtin, custom),
+                "★④选 doc + 文件夹开 → .docx 放行");
+            Check(!FileExtGroups.KeepEntry(false, ".pdf", true, docOnly, builtin, custom),
+                "★④选 doc + 文件夹开 → .pdf 仍不放行");
+
+            // null 集合不崩
+            Check(!FileExtGroups.KeepEntry(true, "", false, null, builtin, custom),
+                "KeepEntry(null 集合) 文件夹关 → false");
+            Check(FileExtGroups.KeepEntry(false, ".txt", false, null, builtin, custom),
+                "KeepEntry(null 集合) 文件 → true");
+
+            Console.WriteLine();
+        }
+
 
         static string NewRoot()
         {
