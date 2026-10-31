@@ -480,21 +480,23 @@ namespace Clover
             };
             cm.Items.Add(appearanceItem);
 
-            // ---- 桌面快捷方式…（桌面保持无快捷方式）----
+            // ---- 整理与隐藏…（桌面快捷方式 + 已隐藏的应用，两个标签）----
             MenuItem desktopItem = new MenuItem();
-            desktopItem.Header = "桌面快捷方式…";
-            desktopItem.ToolTip = "桌面保持无快捷方式：开关、保留名单、已移除列表";
+            desktopItem.Header = "整理与隐藏…";
+            desktopItem.ToolTip = "标签一：桌面保持无快捷方式；标签二：已隐藏的应用";
             desktopItem.Click += delegate
             {
                 try
                 {
-                    DesktopCleanDialog dlg = new DesktopCleanDialog(
-                        this, settings, panel == null ? null : panel.Watcher, delegate { if (panel != null) panel.RefreshCatalogQuiet(); });
+                    OrganizeDialog dlg = new OrganizeDialog(
+                        this, settings, panel == null ? null : panel.Watcher, panel,
+                        delegate { if (panel != null) panel.RefreshCatalogQuiet(); },
+                        OrganizeDialog.Tab.Desktop);
                     dlg.Show();
                 }
                 catch (Exception ex)
                 {
-                    ErrorLog.Warn("打开桌面快捷方式设置失败: " + ex.Message);
+                    ErrorLog.Warn("打开整理与隐藏窗口失败: " + ex.Message);
                 }
             };
             cm.Items.Add(desktopItem);

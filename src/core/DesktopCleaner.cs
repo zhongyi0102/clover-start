@@ -202,6 +202,7 @@ namespace Clover
             {
                 if (string.IsNullOrWhiteSpace(path)) return;
                 if (!IsTargetExt(path)) return;                 // 只放行 .lnk / .url
+                if (IsTempFile(path)) return;                   // 程序自己的临时文件，不碰
                 if (IsExempt(path)) return;                     // 撤销豁免期内不处理
 
                 int now = Environment.TickCount;
@@ -266,6 +267,52 @@ namespace Clover
         }
 
         // ========== 过滤与豁免 ==========
+
+        /// <summary>
+        /// 程序自己生成的临时文件 —— 一律跳过，不记入「已移除」。
+        ///
+        /// ── 为什么需要 ──
+        ///
+        /// 某些工具（包括调试时的 dsh-undo-savepoint 之类）会在桌面留下
+        /// 临时 .lnk。它们不是用户的应用快捷方式，移除它们既没意义，
+        /// 还会污染「已移除」列表。
+        ///
+        /// 判定按**文件名前缀**（不区分大小写）。
+        /// </summary>
+        static readonly string[] TempFilePrefixes = new string[]
+        {
+            "dsh-undo-savepoint",
+            "~$",              // Office 临时文件
+            "~",               // 通用临时前缀
+            ".~",              // 隐藏临时
+            "thumbs.db",       // 缩略图缓存
+            "desktop.ini",     // 桌面配置
+        };
+
+        /// <summary>是不是程序自己生成的临时文件（这类不处理、不记录）。</summary>
+        public static bool IsTempFile(string path)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path)) return false;
+
+                string name = Path.GetFileName(path) ?? "";
+                if (name.Length == 0) return false;
+
+                foreach (string pre in TempFilePrefixes)
+                {
+                    if (string.IsNullOrEmpty(pre)) continue;
+                    if (name.StartsWith(pre, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+
+                // 以 .tmp / .temp 结尾的也跳过
+                string ext = (Path.GetExtension(name) ?? "").ToLowerInvariant();
+                if (ext == ".tmp" || ext == ".temp") return true;
+
+                return false;
+            }
+            catch { return false; }
+        }
 
         /// <summary>只处理 .lnk / .url。</summary>
         public static bool IsTargetExt(string path)
@@ -354,6 +401,7 @@ namespace Clover
             {
                 if (!File.Exists(path)) return false;
                 if (!IsTargetExt(path)) return false;
+                if (IsTempFile(path)) return false;
                 if (IsExempt(path)) return false;
 
                 // ★ 保留名单：永远跳过
@@ -513,6 +561,7 @@ namespace Clover
                             try
                             {
                                 if (!IsTargetExt(f)) continue;
+                                if (IsTempFile(f)) continue;
                                 if (DesktopKeep.IsKept(settings.DesktopKeepTargets, f)) continue;
 
                                 // 只处理「新增」的：创建时间晚于下限
@@ -647,6 +696,7 @@ namespace Clover
                             try
                             {
                                 if (!IsTargetExt(f)) continue;
+                                if (IsTempFile(f)) continue;
                                 if (DesktopKeep.IsKept(settings.DesktopKeepTargets, f)) continue;
                                 all.Add(f);
                             }

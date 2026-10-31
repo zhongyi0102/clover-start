@@ -15,10 +15,15 @@ namespace Clover
     ///   2. 保留名单（可手动增删）
     ///   3. 已移除（可单个恢复 / 全部恢复；恢复即加入保留名单）
     ///   4. 待处理（公共桌面被拒的，点此提权处理）
+    /// <summary>
+    /// 「整理与隐藏」窗口的标签一：桌面快捷方式。
+    ///
+    /// 原 DesktopCleanDialog 的内容，改成可嵌入的 Page（不自己开窗口）。
+    /// 数据和逻辑与标签二完全独立，只共用外壳。
     /// </summary>
-    class DesktopCleanDialog
+    class DesktopCleanPage
     {
-        readonly Window dlg;
+        readonly Window dlg;      // 宿主窗口（用于 MessageBox 的 owner）
         readonly Settings settings;
         readonly AppWatcher watcher;
         readonly Action onChanged;
@@ -30,21 +35,15 @@ namespace Clover
         Border pendingBox;
         TextBlock pendingText;
 
-        public DesktopCleanDialog(Window owner, Settings settings, AppWatcher watcher, Action onChanged)
+        /// <summary>页面内容（由外壳放进 ContentControl）。</summary>
+        public FrameworkElement Content { get; private set; }
+
+        public DesktopCleanPage(Window host, Settings settings, AppWatcher watcher, Action onChanged)
         {
+            this.dlg = host;
             this.settings = settings;
             this.watcher = watcher;
             this.onChanged = onChanged;
-
-            dlg = new Window();
-            dlg.Title = "四叶草 · 桌面快捷方式";
-            dlg.Width = 520;
-            dlg.Height = 640;
-            dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-            dlg.Owner = owner;
-            dlg.Background = Ui.Bg;
-            dlg.ResizeMode = ResizeMode.CanResize;
-            dlg.ShowInTaskbar = false;
 
             BuildUi();
         }
@@ -138,6 +137,7 @@ namespace Clover
             col.Children.Add(pendingBox);
 
             sv.Content = col;
+            Content = sv;
             dlg.Content = sv;
 
             RefreshLists();
@@ -501,10 +501,5 @@ namespace Clover
             return b;
         }
 
-        public void Show()
-        {
-            try { dlg.ShowDialog(); }
-            catch (Exception ex) { Ui.LogError(ex, "显示桌面快捷方式设置"); }
-        }
     }
 }

@@ -334,7 +334,20 @@ namespace Clover
         }
 
         /// <summary>
+        /// <summary>
         /// 一键隐藏一整类（如「系统工具」45 个）。
+        ///
+        /// ── 先预览再执行 ──
+        ///
+        /// 改造点：以前是直接执行，用户看到面板突然少一大片才知道发生了什么。
+        /// 现在先弹「将隐藏 N 个应用」（可展开清单），确认后才动手。
+        /// 预览框默认焦点在「取消」，回车不会误触。
+        ///
+        /// ── 例外名单 ──
+        ///
+        /// 已在 `batchExceptions` 里的应用**不计入、不显示** ——
+        /// 用户明确表示过"这个我要留着"，再列进"将隐藏"清单只会让人困惑。
+        ///
         /// 返回实际隐藏的数量。
         /// </summary>
         public int HideCategory(string category)
@@ -344,13 +357,46 @@ namespace Clover
                 if (string.IsNullOrEmpty(category)) return 0;
                 if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
 
-                int n = 0;
+                // ---- 1. 收集候选（排除例外名单）----
+                List<AppItem> targets = new List<AppItem>();
                 foreach (AppItem a in catalog.Apps)
                 {
+                    if (a == null) continue;
                     if (a.Hidden || a.Category != category) continue;
                     if (string.IsNullOrEmpty(a.Path)) continue;
-                    if (hiddenApps.Hide(a.Path)) { a.Hidden = true; n++; }
+
+                    // ★ 例外名单里的不隐藏、不显示
+                    if (hiddenApps.IsException(a.Path)) continue;
+
+                    targets.Add(a);
                 }
+
+                if (targets.Count == 0)
+                {
+                    MessageBox.Show(this,
+                        "「" + category + "」里没有可隐藏的应用。"
+                        + "\r\n\r\n（全部都在例外名单里，或已经隐藏了）",
+                        "四叶草 · 批量隐藏",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return 0;
+                }
+
+                // ---- 2. 预览确认 ----
+                BatchHidePreviewDialog dlg = new BatchHidePreviewDialog(this, category, targets);
+                if (!dlg.ShowDialog()) return 0;   // 用户取消
+
+                // ---- 3. 执行 ----
+                HideReason reason = HideReason.Batch(category);
+                int n = 0;
+                foreach (AppItem a in targets)
+                {
+                    if (hiddenApps.Hide(a.Path, reason))
+                    {
+                        a.Hidden = true;
+                        n++;
+                    }
+                }
+
                 if (n > 0)
                 {
                     Ui.Log("隐藏分类: " + category + " (" + n + " 个)");
@@ -394,6 +440,110 @@ namespace Clover
         }
 
         /// <summary>
+        // ========== 「已隐藏的应用」页面需要的接口 ==========
+
+        /// <summary>隐藏应用快照（供弹窗显示）。</summary>
+        internal List<AppItem> HiddenSnapshot()
+        {
+            try { return catalog == null ? new List<AppItem>() : catalog.HiddenItems(); }
+            catch { return new List<AppItem>(); }
+        }
+
+        /// <summary>取某应用的隐藏原因（没记录 → 手动隐藏）。</summary>
+        internal HideReason ReasonOf(string appPath)
+        {
+            try
+            {
+                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+                return hiddenApps.ReasonOf(appPath);
+            }
+            catch { return HideReason.Manual(); }
+        }
+
+        /// <summary>
+        /// 恢复一个隐藏项。
+        ///
+        /// **例外名单写入时机**：只有该项的原因是「批量隐藏」时才写
+        /// （`ShowWithException`）；手动隐藏的项走普通 `Show`，不写例外。
+        /// </summary>
+        internal bool RestoreHidden(AppItem a)
+        {
+            try
+            {
+                if (a == null || string.IsNullOrEmpty(a.Path)) return false;
+                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+
+                HideReason r = hiddenApps.ReasonOf(a.Path);
+                bool wasBatch = (r != null && r.Type == HideReason.Kind.Batch);
+
+                bool ok = wasBatch
+                    ? hiddenApps.ShowWithException(a.Path)
+                    : hiddenApps.Show(a.Path);
+
+                a.Hidden = false;
+
+                Ui.Log("恢复隐藏项: " + a.Name + (wasBatch ? "（批量隐藏，已加入例外名单）" : ""));
+
+                RefreshCatalogQuiet();
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "恢复隐藏项");
+                return false;
+            }
+        }
+
+        /// <summary>恢复全部隐藏项（不清例外名单）。</summary>
+        internal int RestoreAllHidden()
+        {
+            try
+            {
+                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+
+                // 只清 paths 和 reasons，保留 batchExceptions
+                List<string> all = hiddenApps.Snapshot();
+                int n = 0;
+                foreach (string p in all)
+                    if (hiddenApps.Show(p)) n++;
+
+                if (catalog != null)
+                    foreach (AppItem a in catalog.Apps) a.Hidden = false;
+
+                Ui.Log("恢复全部隐藏项: " + n + " 个（例外名单保留）");
+                RefreshCatalogQuiet();
+                return n;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "恢复全部隐藏项");
+                return 0;
+            }
+        }
+
+        /// <summary>例外名单快照。</summary>
+        internal List<string> BatchExceptionSnapshot()
+        {
+            try
+            {
+                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+                return hiddenApps.ExceptionSnapshot();
+            }
+            catch { return new List<string>(); }
+        }
+
+        /// <summary>从例外名单移除（之后批量隐藏会重新包含它）。</summary>
+        internal bool RemoveBatchException(string key)
+        {
+            try
+            {
+                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+                return hiddenApps.RemoveException(key);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
         /// 查看隐藏的项目（右键菜单用）。
         ///
         /// 分类标签只剩「常用」「全部」后，没有「隐藏的项目」页了 ——
@@ -406,35 +556,16 @@ namespace Clover
         {
             try
             {
-                List<AppItem> hidden = catalog.HiddenItems();
-                if (hidden == null || hidden.Count == 0) return;
-
-                HiddenItemsDialog.Show(this, hidden, delegate(string path)
-                {
-                    try
-                    {
-                        // 复用已有的 SetAppHidden（内部写 hidden-apps.json + 刷新）
-                        AppItem target = null;
-                        foreach (AppItem a in catalog.Apps)
-                        {
-                            if (a != null && string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase))
-                            { target = a; break; }
-                        }
-                        if (target == null) return false;
-
-                        SetAppHidden(target, false);
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        Ui.LogError(ex, "恢复隐藏项");
-                        return false;
-                    }
-                });
+                // 统一入口：打开「整理与隐藏」窗口并定位到标签二
+                OrganizeDialog dlg = new OrganizeDialog(
+                    this, settings, watcher, this,
+                    delegate { RefreshCatalogQuiet(); },
+                    OrganizeDialog.Tab.Hidden);
+                dlg.Show();
             }
             catch (Exception ex)
             {
-                Ui.LogError(ex, "打开隐藏的项目");
+                Ui.LogError(ex, "打开整理与隐藏窗口");
             }
         }
 

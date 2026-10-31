@@ -1,0 +1,233 @@
+using System;
+using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+
+namespace Clover
+{
+    /// <summary>
+    /// 「整理与隐藏」窗口外壳：两个标签页。
+    ///
+    /// ── 为什么合并 ──
+    ///
+    /// 「桌面快捷方式」和「已隐藏的应用」都是"清理掉不想看的东西"，
+    /// 分成两个窗口各占一个菜单项，菜单越来越长，用户也记不住哪个在哪个。
+    /// 合并成一个窗口、两个标签，**数据和逻辑完全独立**，只共用外壳。
+    ///
+    /// ── 标签 ──
+    ///
+    ///   1. 桌面快捷方式（原 DesktopCleanDialog 的内容）
+    ///   2. 已隐藏的应用（原 HiddenItemsDialog 的内容）
+    ///
+    /// ── 焦点 ──
+    ///
+    /// 关闭后不抢主面板焦点、不触发「点击面板外自动收起」。
+    /// </summary>
+    class OrganizeDialog
+    {
+        /// <summary>标签索引。</summary>
+        public enum Tab
+        {
+            Desktop = 0,
+            Hidden = 1,
+        }
+
+        readonly Window dlg;
+        readonly Settings settings;
+        readonly AppWatcher watcher;
+        readonly PanelWindow panel;
+        readonly Action onChanged;
+
+        Tab current = Tab.Desktop;
+
+        Border tabDesktopBtn;
+        Border tabHiddenBtn;
+        ContentControl pageHost;
+
+        DesktopCleanPage desktopPage;
+        HiddenAppsPage hiddenPage;
+
+        /// <summary>
+        /// 构造。
+        /// </summary>
+        /// <param name="initialTab">打开时定位到哪个标签</param>
+        public OrganizeDialog(Window owner, Settings settings, AppWatcher watcher,
+            PanelWindow panel, Action onChanged, Tab initialTab)
+        {
+            this.settings = settings;
+            this.watcher = watcher;
+            this.panel = panel;
+            this.onChanged = onChanged;
+            this.current = initialTab;
+
+            dlg = new Window();
+            dlg.Title = "四叶草 · 整理与隐藏";
+            dlg.Width = 560;
+            dlg.Height = 700;
+            dlg.WindowStartupLocation = owner != null
+                ? WindowStartupLocation.CenterOwner
+                : WindowStartupLocation.CenterScreen;
+            dlg.Owner = owner;
+            dlg.Background = Ui.Bg;
+            dlg.ResizeMode = ResizeMode.CanResize;
+            dlg.ShowInTaskbar = false;
+            dlg.MinWidth = 460;
+            dlg.MinHeight = 480;
+
+            BuildShell();
+        }
+
+        void BuildShell()
+        {
+            Grid layout = new Grid();
+            layout.RowDefinitions.Add(new RowDefinition());   // 标签栏
+            layout.RowDefinitions.Add(new RowDefinition());   // 内容
+            layout.RowDefinitions[0].Height = GridLength.Auto;
+            layout.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
+
+            // ---- 标签栏 ----
+            StackPanel tabs = new StackPanel();
+            tabs.Orientation = Orientation.Horizontal;
+            tabs.Margin = new Thickness(Ui.S.Xl, Ui.S.Lg, Ui.S.Xl, 0);
+
+            tabDesktopBtn = MakeTab("桌面快捷方式", Tab.Desktop);
+            tabs.Children.Add(tabDesktopBtn);
+
+            tabHiddenBtn = MakeTab("已隐藏的应用", Tab.Hidden);
+            tabHiddenBtn.Margin = new Thickness(Ui.S.Xs, 0, 0, 0);
+            tabs.Children.Add(tabHiddenBtn);
+
+            Grid.SetRow(tabs, 0);
+            layout.Children.Add(tabs);
+
+            // ---- 内容 ----
+            pageHost = new ContentControl();
+            pageHost.Margin = new Thickness(0, Ui.S.Md, 0, 0);
+            Grid.SetRow(pageHost, 1);
+            layout.Children.Add(pageHost);
+
+            dlg.Content = layout;
+
+            // Esc：先清搜索，再关闭（不影响主面板）
+            dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.Key != Key.Escape) return;
+
+                try
+                {
+                    if (hiddenPage != null && hiddenPage.HandleEscape()) { e.Handled = true; return; }
+                }
+                catch { }
+
+                dlg.Close();
+                e.Handled = true;
+            };
+
+            SwitchTab(current);
+        }
+
+        Border MakeTab(string label, Tab tab)
+        {
+            Border b = new Border();
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Padding = new Thickness(14, 6, 14, 6);
+            b.Cursor = Cursors.Hand;
+            b.Background = Brushes.Transparent;
+            b.BorderThickness = new Thickness(0, 0, 0, 2);
+            b.BorderBrush = Brushes.Transparent;
+            b.Tag = tab;
+
+            TextBlock t = Ui.T(label, 12.5, Ui.Sub);
+            t.VerticalAlignment = VerticalAlignment.Center;
+            b.Child = t;
+
+            b.MouseEnter += delegate
+            {
+                try
+                {
+                    if ((Tab)b.Tag != current) b.Background = Ui.Hover;
+                }
+                catch { }
+            };
+            b.MouseLeave += delegate
+            {
+                try
+                {
+                    if ((Tab)b.Tag != current) b.Background = Brushes.Transparent;
+                }
+                catch { }
+            };
+            b.MouseLeftButtonUp += delegate
+            {
+                try { SwitchTab((Tab)b.Tag); }
+                catch (Exception ex) { Ui.LogError(ex, "切换整理与隐藏标签"); }
+            };
+
+            return b;
+        }
+
+        /// <summary>切到指定标签。</summary>
+        public void SwitchTab(Tab tab)
+        {
+            try
+            {
+                current = tab;
+
+                // 标签外观
+                UpdateTabLook(tabDesktopBtn, Tab.Desktop);
+                UpdateTabLook(tabHiddenBtn, Tab.Hidden);
+
+                // 内容（懒创建，只建一次）
+                if (tab == Tab.Desktop)
+                {
+                    if (desktopPage == null)
+                        desktopPage = new DesktopCleanPage(dlg, settings, watcher, Notify);
+                    pageHost.Content = desktopPage.Content;
+                }
+                else
+                {
+                    if (hiddenPage == null)
+                        hiddenPage = new HiddenAppsPage(dlg, panel, settings, Notify);
+                    pageHost.Content = hiddenPage.Content;
+                    hiddenPage.OnShown();
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "切换整理与隐藏标签"); }
+        }
+
+        void UpdateTabLook(Border b, Tab tab)
+        {
+            try
+            {
+                if (b == null) return;
+
+                bool on = (tab == current);
+                b.BorderBrush = on ? Ui.Accent : Brushes.Transparent;
+                b.Background = Brushes.Transparent;
+
+                TextBlock t = b.Child as TextBlock;
+                if (t != null)
+                {
+                    t.Foreground = on ? Ui.Fg : Ui.Sub;
+                    t.FontWeight = on ? FontWeights.SemiBold : FontWeights.Normal;
+                }
+            }
+            catch { }
+        }
+
+        void Notify()
+        {
+            try { if (onChanged != null) onChanged(); }
+            catch { }
+        }
+
+        public void Show()
+        {
+            try { dlg.ShowDialog(); }
+            catch (Exception ex) { Ui.LogError(ex, "显示整理与隐藏窗口"); }
+        }
+    }
+}

@@ -115,7 +115,7 @@ namespace Clover
                 if (mi != null) names.Add(mi.Header as string ?? "");
             }
 
-        string[] expect = { "打开面板", "重新扫描应用", "外观…", "桌面快捷方式…", "主题", "任务栏", "设置", "维护与诊断", "退出" };
+        string[] expect = { "打开面板", "重新扫描应用", "外观…", "整理与隐藏…", "主题", "任务栏", "设置", "维护与诊断", "退出" };
             Check(names.Count == expect.Length, "顶层项数一致", names.Count + " vs " + expect.Length);
 
             for (int i = 0; i < Math.Min(names.Count, expect.Length); i++)

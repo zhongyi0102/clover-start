@@ -79,7 +79,7 @@ $catalogDeps = @(
     (Join-Path $coreDir 'PinyinData.cs'),
     (Join-Path $coreDir 'CategoryOverrides.cs'),
     (Join-Path $coreDir 'CategoryRules.cs'),
-    (Join-Path $coreDir 'HiddenApps.cs'),
+    (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'),
     (Join-Path $coreDir 'NameMatch.cs'),
     (Join-Path $coreDir 'JsonIO.cs'),
     (Join-Path $coreDir 'UsageStore.cs')
@@ -92,7 +92,7 @@ $dedupDeps = @(
     (Join-Path $coreDir 'Settings.cs'),
     (Join-Path $coreDir 'AppearancePresets.cs'),
     (Join-Path $coreDir 'Log.cs'),
-    (Join-Path $coreDir 'HiddenApps.cs'),
+    (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'),
     (Join-Path $coreDir 'NameMatch.cs'),
     (Join-Path $coreDir 'JsonIO.cs'),
     (Join-Path $coreDir 'UsageStore.cs'),
@@ -179,6 +179,10 @@ Invoke-Suite 'LowValueTest' $baseRefs `
 Invoke-Suite 'DesktopKeepTest' $baseRefs `
     (@((Join-Path $coreDir 'DesktopKeep.cs'), (Join-Path $coreDir 'DesktopCleaner.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DesktopKeepTest.cs')))
 # 「文件」标签：修改操作（重命名/删除/剪切粘贴/新建，走可注入的假文件系统）
+
+# 隐藏项数据层 v2：原因 / 例外名单 / 向后兼容
+Invoke-Suite 'HiddenAppsV2Test' $baseRefs `
+    (@((Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'HiddenAppsV2Test.cs')))
 Invoke-Suite 'FileOpsTest' $baseRefs `
     (@((Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileOpsTest.cs')))
 # 虚拟化面板的几何/滚动计算（用到 ItemsControl，需要 WPF 引用）
@@ -230,7 +234,7 @@ Invoke-Suite 'FullscreenTest' $wpfRefs `
 
 # 搜索合并：主（MatchCatalog）+ 补充（Instant）的去重/排序/上限
 Invoke-Suite 'SearchMergeTest' $baseRefs `
-    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
+    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
 
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))

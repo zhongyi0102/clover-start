@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -923,9 +924,41 @@ namespace Clover
             }
             else
             {
-                footerCount.Text = showingHidden
-                    ? "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏"
-                    : BuildAllStats();
+                if (showingHidden)
+                {
+                    footerCount.Text = "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏";
+                }
+                else
+                {
+                    // ★ 「已隐藏 M 个」是可点的：点它打开「整理与隐藏」窗口并定位到标签二
+                    int hiddenCount = catalog.HiddenItems().Count;
+                    if (hiddenCount > 0)
+                    {
+                        footerCount.Inlines.Clear();
+
+                        Run head = new Run("共 " + visible + " 个应用，");
+                        head.Foreground = Ui.Sub;
+                        footerCount.Inlines.Add(head);
+
+                        Hyperlink link = new Hyperlink();
+                        link.Inlines.Add(new Run("已隐藏 " + hiddenCount + " 个"));
+                        link.Foreground = Ui.Accent;
+                        link.TextDecorations = null;
+                        link.Cursor = System.Windows.Input.Cursors.Hand;
+                        link.ToolTip = "点击查看并恢复已隐藏的应用";
+                        link.Click += delegate
+                        {
+                            try { ShowHiddenItems(); }
+                            catch (Exception ex) { Ui.LogError(ex, "打开整理与隐藏窗口"); }
+                        };
+                        footerCount.Inlines.Add(link);
+                    }
+                    else
+                    {
+                        footerCount.Inlines.Clear();
+                        footerCount.Text = "共 " + visible + " 个应用";
+                    }
+                }
             }
 
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
@@ -2239,6 +2272,38 @@ namespace Clover
         }
         /// <summary>桌面移除提示条（与文件页分开，避免互相覆盖）。</summary>
         UndoBar undoBarForDesktop;
+        /// <summary>
+        /// 单个隐藏后的轻提示：「已隐藏：xxx　[撤销]」。
+        ///
+        /// 复用 UndoBar（不抢焦点、5 秒消失、点按钮后焦点回到列表）。
+        /// 撤销 = 取消隐藏。
+        /// </summary>
+        void ShowHiddenTip(AppItem a)
+        {
+            try
+            {
+                if (a == null) return;
+
+                if (undoBarForDesktop == null && filesUndoHost != null)
+                {
+                    undoBarForDesktop = new UndoBar(filesUndoHost);
+                    undoBarForDesktop.OnFocusBack = delegate
+                    {
+                        try { if (tilePanel != null) tilePanel.Focus(); } catch { }
+                    };
+                }
+                if (undoBarForDesktop == null) return;
+
+                AppItem captured = a;
+                undoBarForDesktop.Show("已隐藏：" + (a.Name ?? ""), delegate
+                {
+                    try { SetAppHidden(captured, false); }
+                    catch (Exception ex) { Ui.LogError(ex, "撤销隐藏"); }
+                });
+            }
+            catch (Exception ex) { Ui.LogError(ex, "显示隐藏提示"); }
+        }
+
         /// <summary>某个目标路径是否已在保留名单里。</summary>
         bool IsKeptOnDesktop(string targetPath)
         {
@@ -2608,6 +2673,9 @@ namespace Clover
 
                 RebuildNav();
                 RenderApps();
+
+                // 单个隐藏后弹轻提示（不抢焦点）
+                if (hidden) ShowHiddenTip(a);
             }
             catch (Exception ex)
             {
