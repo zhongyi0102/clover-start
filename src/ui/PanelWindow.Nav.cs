@@ -924,7 +924,7 @@ namespace Clover
             {
                 footerCount.Text = showingHidden
                     ? "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏"
-                    : "共 " + visible + " 个应用";
+                    : BuildAllStats();
             }
 
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
@@ -946,19 +946,60 @@ namespace Clover
         /// 「常用」已经承担了"按使用频率"的角色，「全部」应该是
         /// 可预测的字典序 —— 用户找某个应用时能按名字直接定位。
         /// </summary>
+        /// <summary>
+        /// 「全部」页底部统计：共 N 个应用，其中 M 个低价值。
+        ///
+        /// 只在「全部」页显示低价值数量 —— 「常用」页不受沉底影响，不显示。
+        /// </summary>
+        string BuildAllStats()
+        {
+            try
+            {
+                int total = 0, low = 0;
+                foreach (AppItem a in catalog.Apps)
+                {
+                    if (a == null || a.Hidden) continue;
+                    total++;
+                    if (a.LowValue) low++;
+                }
+
+                if (low > 0)
+                    return "共 " + total + " 个应用，其中 " + low + " 个低价值";
+                return "共 " + total + " 个应用";
+            }
+            catch { return ""; }
+        }
         List<AppItem> AllAppsSorted()
         {
             List<AppItem> list = new List<AppItem>();
             try
             {
+                // ---- 1. 收集可见应用 + 按目标路径去重 ----
+                //
+                // 「目标路径相同的快捷方式只保留一个」：开始菜单里同一个程序
+                // 常同时存在「用户」和「公共」两份 .lnk，解析后 Path 相同。
+                HashSet<string> seenPath = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
                 foreach (AppItem a in catalog.Apps)
                 {
                     if (a == null || a.Hidden) continue;
+
+                    string key = a.Path ?? "";
+                    if (key.Length > 0 && !seenPath.Add(key)) continue;   // 已见过同路径 → 跳过
+
                     list.Add(a);
                 }
 
+                // ---- 2. 标记低价值 ----
+                foreach (AppItem a in list)
+                    a.LowValue = IsLowValueApp(a);
+
+                // ---- 3. 排序：低价值整体沉底，各自内部保持字典序 ----
                 list.Sort(delegate(AppItem x, AppItem y)
                 {
+                    // 低价值在后（这一条优先于名称排序）
+                    if (x.LowValue != y.LowValue) return x.LowValue ? 1 : -1;
+
                     int c = string.Compare(
                         Pinyin.SortKey(x.Name), Pinyin.SortKey(y.Name), StringComparison.Ordinal);
                     if (c != 0) return c;
@@ -971,6 +1012,42 @@ namespace Clover
                 Ui.LogError(ex, "排序全部应用");
             }
             return list;
+        }
+
+        /// <summary>
+        /// 判定一个应用是否低价值。**手动标记优先于自动规则**：
+        ///   · 在 LowValueUnmarked 里 → 一律不低价值（最高优先）
+        ///   · 在 LowValueMarked 里   → 一律低价值
+        ///   · 否则走 LowValueRules.IsLowValue 自动判定
+        /// </summary>
+        bool IsLowValueApp(AppItem a)
+        {
+            try
+            {
+                if (a == null || string.IsNullOrEmpty(a.Path)) return false;
+
+                if (settings != null)
+                {
+                    if (settings.LowValueUnmarked != null)
+                    {
+                        foreach (string p in settings.LowValueUnmarked)
+                            if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return false;
+                    }
+
+                    if (settings.LowValueMarked != null)
+                    {
+                        foreach (string p in settings.LowValueMarked)
+                            if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return true;
+                    }
+                }
+
+                // 商店应用没有真实文件路径，不做「失效」判定
+                string target = a.Path;
+                if (!string.IsNullOrEmpty(a.Aumid)) target = null;
+
+                return LowValueRules.IsLowValue(a.Name, target, LowValueRules.ExeNameOf(target));
+            }
+            catch { return false; }
         }
 
         /// <summary>
@@ -1074,6 +1151,51 @@ namespace Clover
         {
             try { return filesView == null ? 0 : filesView.TestSelectedCount(); }
             catch { return 0; }
+        }
+
+        /// <summary>测试用：「全部」页的低价值条目数。</summary>
+        internal int TestLowValueCount()
+        {
+            try
+            {
+                List<AppItem> list = AllAppsSorted();
+                int n = 0;
+                foreach (AppItem a in list) if (a != null && a.LowValue) n++;
+                return n;
+            }
+            catch { return 0; }
+        }
+
+        /// <summary>测试用：全部页排序后，低价值是否全部排在末尾。</summary>
+        internal bool TestLowValueAtEnd()
+        {
+            try
+            {
+                List<AppItem> list = AllAppsSorted();
+                bool seenLow = false;
+                foreach (AppItem a in list)
+                {
+                    if (a == null) continue;
+                    if (a.LowValue) { seenLow = true; }
+                    else if (seenLow) return false;   // 低价值后面又出现正常项 → 没沉底
+                }
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：底部统计文字。</summary>
+        internal string TestAllStatsText()
+        {
+            try { return BuildAllStats(); }
+            catch { return ""; }
+        }
+
+        /// <summary>测试用：设置/取消低价值标记。</summary>
+        internal void TestSetLowValue(AppItem a, bool low)
+        {
+            try { SetLowValue(a, low); }
+            catch { }
         }
 
         /// <summary>测试用：读当前分类。</summary>
@@ -1287,6 +1409,10 @@ namespace Clover
             b.Background = Brushes.Transparent;
             b.Cursor = Cursors.Hand;
             b.ToolTip = DisplayNameOf(a);
+
+            // ★ 低价值条目变淡（沉底排序在 AllAppsSorted 里做）
+            // 0.45 足够看出"这个不太重要"，又不至于看不清名字
+            if (a != null && a.LowValue) b.Opacity = 0.45;
 
             StackPanel sp = new StackPanel();
             sp.VerticalAlignment = VerticalAlignment.Center;
@@ -2013,6 +2139,38 @@ namespace Clover
             catch { }
         }
 
+        /// <summary>
+        /// 手动标记 / 取消低价值。
+        ///
+        /// 两个列表互斥：标记时从 Unmarked 里移除、加入 Marked；反之亦然。
+        /// 优先级：Unmarked（强制不高）> Marked（强制低）> 自动规则。
+        /// </summary>
+        void SetLowValue(AppItem a, bool low)
+        {
+            try
+            {
+                if (a == null || settings == null || string.IsNullOrEmpty(a.Path)) return;
+
+                if (settings.LowValueMarked == null) settings.LowValueMarked = new List<string>();
+                if (settings.LowValueUnmarked == null) settings.LowValueUnmarked = new List<string>();
+
+                // 先从两个列表里都清掉（避免互斥冲突）
+                settings.LowValueMarked.RemoveAll(delegate(string p)
+                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+                settings.LowValueUnmarked.RemoveAll(delegate(string p)
+                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+
+                if (low) settings.LowValueMarked.Add(a.Path);
+                else settings.LowValueUnmarked.Add(a.Path);
+
+                settings.Save();
+
+                // 立即重算 + 重渲染（排序会变）
+                a.LowValue = low;
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "设置低价值标记"); }
+        }
         void ShowTileMenu(AppItem a)
         {
             if (a == null || string.IsNullOrEmpty(a.Path)) return;
@@ -2064,6 +2222,31 @@ namespace Clover
                     RenderApps();
                 };
                 cm.Items.Add(rm);
+            }
+
+            // ---- 低价值标记（手动纠正，优先于自动规则）----
+            //
+            // 只作用于「全部」页：常用页是"你常用的"，不该有沉底概念。
+            if (!showingCommon)
+            {
+                cm.Items.Add(new Separator());
+
+                if (a.LowValue)
+                {
+                    MenuItem unmark = new MenuItem();
+                    unmark.Header = "取消低价值标记";
+                    unmark.ToolTip = "恢复正常排序与不透明度";
+                    unmark.Click += delegate { SetLowValue(a, false); };
+                    cm.Items.Add(unmark);
+                }
+                else
+                {
+                    MenuItem mark = new MenuItem();
+                    mark.Header = "标记为低价值";
+                    mark.ToolTip = "排到最后并变淡";
+                    mark.Click += delegate { SetLowValue(a, true); };
+                    cm.Items.Add(mark);
+                }
             }
 
             taskMenuOpen = true;

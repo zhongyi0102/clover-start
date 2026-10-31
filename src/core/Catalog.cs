@@ -57,6 +57,15 @@ namespace Clover
 
         /// <summary>能否启动（注册表里解析不出路径的条目为 false，界面不显示）。</summary>
         public bool Launchable = true;
+
+        /// <summary>
+        /// 低价值条目（卸载器/帮助/许可/失效快捷方式等）。
+        ///
+        /// **运行时计算，不写进 json** —— 由 LowValueRules 自动判定 +
+        /// settings 里的手动标记共同决定，每次渲染时重算。
+        /// </summary>
+        [System.Web.Script.Serialization.ScriptIgnore]
+        public bool LowValue;
     }
 
     class Catalog

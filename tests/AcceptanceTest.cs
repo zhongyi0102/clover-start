@@ -543,6 +543,39 @@ namespace Clover
                 }
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
             });
+            // ---------- 4k. 「全部」页低价值沉底 ----------
+            Verify("★低价值条目全部沉底", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    WaitForDispatcher(400);
+
+                    bool atEnd = panel.TestLowValueAtEnd();
+                    int low = panel.TestLowValueCount();
+
+                    if (!atEnd) return "低价值条目后面还有正常应用（没沉底）";
+                    return "ok（" + low + " 个低价值，全部在末尾）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 4l. 底部统计含低价值数量 ----------
+            Verify("★底部统计体现低价值数量", delegate
+            {
+                try
+                {
+                    string s = panel.TestAllStatsText();
+                    if (string.IsNullOrEmpty(s)) return "统计为空";
+
+                    int low = panel.TestLowValueCount();
+                    if (low > 0 && s.IndexOf("低价值", StringComparison.Ordinal) < 0)
+                        return "有 " + low + " 个低价值但统计没提：" + s;
+
+                    return "ok（" + s + "）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
             // ---------- 5. 应用磁贴真的渲染了
             int tileCount = 0;
             Verify("应用磁贴已渲染", delegate

@@ -170,6 +170,10 @@ Invoke-Suite 'FilesTabTest' $baseRefs `
     (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
 
 
+# 「全部」页：低价值条目识别规则
+Invoke-Suite 'LowValueTest' $baseRefs `
+    (@((Join-Path $coreDir 'LowValueRules.cs'), (Join-Path $testDir 'LowValueTest.cs')))
+
 # 「文件」标签：修改操作（重命名/删除/剪切粘贴/新建，走可注入的假文件系统）
 Invoke-Suite 'FileOpsTest' $baseRefs `
     (@((Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileOpsTest.cs')))

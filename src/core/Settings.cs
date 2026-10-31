@@ -163,6 +163,18 @@ namespace Clover
         /// </summary>
         public List<string> FilesSources = new List<string>();
 
+        /// <summary>
+        /// **手动标记为低价值**的应用路径（用户右键操作）。
+        /// 优先级高于自动规则 —— 在这里的一律沉底。
+        /// </summary>
+        public List<string> LowValueMarked = new List<string>();
+
+        /// <summary>
+        /// **手动取消低价值标记**的应用路径。
+        /// 优先级最高 —— 即使自动规则命中，这里的一律不沉底。
+        /// </summary>
+        public List<string> LowValueUnmarked = new List<string>();
+
 
 
         /// <summary>
@@ -269,6 +281,8 @@ namespace Clover
                     s.FilesSources.Add(s.FilesSource);
                     Log.Warn("settings: 已把旧 filesSource 迁移到 filesSources");
                 }
+                s.LowValueMarked = ReadStringList(d, "lowValueMarked");
+                s.LowValueUnmarked = ReadStringList(d, "lowValueUnmarked");
                 s.FilesSort = ReadFilesSort(d, "filesSort", s.FilesSort);
                 // 文字清晰保底：缺键时用默认 true（老配置也享受保底）
                 if (d.TryGetValue("textContrastGuard", out v) && v != null)
@@ -324,6 +338,8 @@ namespace Clover
                 d["filesSource"] = "";   // 已废弃，迁移后固定写空
                 d["filesSources"] = FilesSources;
                 d["filesSort"] = FilesSort;
+                d["lowValueMarked"] = LowValueMarked;
+                d["lowValueUnmarked"] = LowValueUnmarked;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 JsonIO.WriteAtomic(path, ser.Serialize(d));

@@ -220,8 +220,10 @@ outerLayer（圆角裁剪）
 | `filesSources` | `[]` | **多选来源数组**（`["D:\\Projects","E:\\Docs"]`）。空 = 显示所有来源 |
 | `filesSource` | `""` | **已废弃，仅用于一次性迁移**（`filesSources` 为空时把旧值当作唯一选中项）|
 | `filesSort` | `"modified:desc"` | 排序，格式 `列:方向`（`modified`/`name`/`size` + `asc`/`desc`）。兼容旧值 |
+| `lowValueMarked` | `[]` | **手动标记为低价值**的应用路径（右键「标记为低价值」）|
+| `lowValueUnmarked` | `[]` | **手动取消低价值标记**的应用路径（优先级最高）|
 
-> **共 21 个键**，按用途分五组：
+> **共 23 个键**，按用途分五组：
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
@@ -229,6 +231,7 @@ outerLayer（圆角裁剪）
 > | **状态与标记** | `hideTaskbar` | 1 |
 > | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `textContrastGuard` | 11 |
 > | **文件标签** | `showFilesTab` / `filesSources` / `filesSource` / `filesSort` | 4 |
+> | **低价值标记** | `lowValueMarked` / `lowValueUnmarked` | 2 |
 > | **数据** | （无） | 0 |
 >
 > **界面入口**：
@@ -443,6 +446,57 @@ outerLayer（圆角裁剪）
 - 删掉该文件即恢复全部自动分类
 - 数据层保留，界面入口已移除；需要时可直接编辑文件
 
+## 「全部」页低价值条目沉底
+
+卸载器、帮助文档、许可协议这类条目不是"要用的应用"，但会在「全部」里把列表撑得很长。
+识别出来后**排在最后 + 视觉变淡**，不隐藏（偶尔还是要找它们）。
+
+### 识别规则
+
+规则集中在 `src/core/LowValueRules.cs`，**增删规则只改这一个文件**。全部**不区分大小写**。
+
+**1. 名称关键词**（命中任一）：
+
+| 类别 | 关键词 |
+|---|---|
+| 卸载 | 卸载 / Uninstall / Uninstaller / Remove |
+| 帮助说明 | 帮助 / Help / 说明 / Readme / 手册 / Manual / 文档 / Documentation / 指南 / Guide / 教程 |
+| 更新日志 | 更新日志 / Release Notes / Changelog / What's New |
+| 许可 | 许可 / License / Licence / EULA / 授权 / 协议 / Terms |
+| 修复 | 修复 / Repair / Fix |
+| 语言 | 语言首选项 / Language Preferences / 语言设置 |
+
+**2. 目标扩展名**：`.url` `.txt` `.pdf` `.chm` `.html` `.htm`（网址链接、说明书）
+
+**3. 失效快捷方式**：目标文件不存在的
+
+### 沉底与去重
+
+- 低价值整体排在所有正常应用**之后**，**不单独分组、不加标题**
+- 正常应用和低价值**各自内部保持原有字典序**，互不打乱
+- **目标路径相同的快捷方式只保留一个**（开始菜单里同一程序常有用户/公共两份 `.lnk`）
+
+### 手动纠正
+
+右键菜单（**仅「全部」页**）：
+
+| 项 | 作用 |
+|---|---|
+| 标记为低价值 | 强制沉底 + 变淡 |
+| 取消低价值标记 | 强制不沉底（优先级最高）|
+
+**优先级**：`lowValueUnmarked` > `lowValueMarked` > 自动规则。两个列表存 `settings.json`，重启后保留。
+
+### 范围
+
+- **只作用于「全部」页**，「常用」页不受影响（常用是"你常用的"，不该有沉底概念）
+- **搜索结果不受影响**：低价值条目照常能被搜到，按匹配度正常排序
+- 底部统计：`共 114 个应用，其中 9 个低价值`
+
+### 已知取舍
+
+`Geek Uninstaller` 这类"本身就是工具、但名字含 Uninstall"的程序会被自动判为低价值。
+完全避免需要维护工具白名单，成本高于收益 —— 用右键「取消低价值标记」手动纠正即可。
 ## 目录结构
 
 ```
@@ -535,6 +589,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
 | `AppearancePresets.cs` | **毛玻璃预设集中定义**（6 款 × 7 参数）、`Apply` / `Find` / `MarkCustom` / `RestoreDefaults` / `DetectKey` |
 | `Catalog.cs` | 软件清单模型、分类规则、排序 |
+| `LowValueRules.cs` | **低价值条目识别**：名称关键词表 + 目标扩展名 + 失效判定；规则集中在一处便于增删 |
 | `AppPaths.cs` | Shell 路径（`shell:AppsFolder\...`）识别与归一化：`IsShellPath` / `ExtractAumid` / `Normalize` |
 | `AppDedup.cs` | **跨来源去重合并**：真实路径优先 → 名称+发布者 → 名称+同 exe 名（三重证据）|
 | `ShortcutResolver.cs` | `.lnk` 目标解析 + 缓存（去重和图标都要用）|
@@ -987,7 +1042,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**二十八个套件，共 1663 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**二十九个套件，共 1724 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -1016,6 +1071,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `FileFoldersTest` | 81 | 来源清单：添加合法目录、拒绝不存在/文件/UNC/网络盘、路径归一化（反斜杠/尾斜杠/盘符根/空格/引号）、去重（大小写/尾斜杠/正斜杠）、上限 10 个、重命名与重名加 (2)(3)、移除不碰磁盘、**失效路径记录保留**、**损坏 JSON 回退**、**主文件损坏从 `.bak` 恢复**、原子写无 `.tmp` 残留 |
 | `FilesTabTest` | 118 | 目录列举：**不递归**、过滤规则 12 项（`.lnk`/`desktop.ini`/`~$`/`.tmp`/`.crdownload`/`.part`/`.download` 不显示，`.url`/`.exe`/`.msi` 显示）、隐藏与系统属性、四种排序、拼音过滤、**500 返回上限**、**5000 枚举上限**、错误处理不抛异常、**只读验证**、**后缀分组**（固定组命中/大小写归一化/「其他」判定含无扩展名/自定义后缀移出「其他」/`Passes` 筛选）|
 | `FileOpsTest` | 261 | 修改操作（**假文件系统，不碰真实回收站**）：名称校验 28 项（空/null/9 种非法字符/末尾点空格/8 个保留名/255 字符）、重命名成功与拒绝、**仅大小写变化走两步中转**、来源根不可改、**删除走回收站**（`HardDeleteCalls==0`）、**可移动盘/网络盘拒绝**、受保护目录、**受保护精确性**（用户 Desktop/Documents/Projects 不受保护、`WindowsApps` 不误伤）、剪切不移动、**粘贴不覆盖**、**禁止粘贴到自身子目录**、**同卷/跨卷分别走不同接口且 `CopyCalls==0`**、新建文件夹重名加序号、**失败不重试且不删原文件**、**日志追加与 1000 条裁剪**、**提权工具**（异常判定 / UAC 取消 / cmd 转义）|
+| `LowValueTest` | 59 | 低价值识别：卸载/帮助/许可/语言/修复关键词、6 种扩展名、失效快捷方式、大小写不敏感、`ExeNameOf`、不误伤普通应用 |
 
 **外观参数测试**：
 
@@ -1056,7 +1112,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：28 个套件、1663 个断言全部通过（2026-10-31）**
+**最近一次运行结果：29 个套件、1724 个断言全部通过（2026-10-31）**
 
 > **`FullscreenTest` 是环境相关的**：它需要真的创建一个全屏窗口来测判定逻辑。
 > 某些环境下窗口创建失败时会提前退出（5 → 3 PASS），但 `FAIL` 计数始终为 0、退出码 0，
@@ -1433,6 +1489,8 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 | **`filesSources`** | `[]` | **多选来源数组**。空 = 显示所有来源 |
 | `filesSource` | `""` | **已废弃，仅用于一次性迁移**。首次读取时若 `filesSources` 为空且此值非空，当作唯一选中项；之后不再写 |
 | `filesSort` | `"modified:desc"` | 排序，格式 `列:方向`。列 = `modified`/`name`/`size`，方向 = `asc`/`desc`。兼容旧值（只有列名 → 降序兜底）|
+| `lowValueMarked` | `[]` | **手动标记为低价值**的应用路径（右键「标记为低价值」）|
+| `lowValueUnmarked` | `[]` | **手动取消低价值标记**的应用路径（优先级最高）|
 
 > **不持久化**：后缀筛选、文件夹标签、选中项 —— 都只在会话内保留，重启后恢复默认。
 
