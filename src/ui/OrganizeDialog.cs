@@ -35,6 +35,7 @@ namespace Clover
             Hidden = 1,
         }
 
+        readonly string baseDir;
         readonly Window dlg;
         readonly Settings settings;
         readonly AppWatcher watcher;
@@ -54,9 +55,10 @@ namespace Clover
         /// 构造。
         /// </summary>
         /// <param name="initialTab">打开时定位到哪个标签</param>
-        public OrganizeDialog(Window owner, Settings settings, AppWatcher watcher,
+        public OrganizeDialog(Window owner, string baseDir, Settings settings, AppWatcher watcher,
             PanelWindow panel, Action onChanged, Tab initialTab)
         {
+            this.baseDir = baseDir;
             this.settings = settings;
             this.watcher = watcher;
             this.panel = panel;
@@ -76,6 +78,10 @@ namespace Clover
             dlg.ShowInTaskbar = false;
             dlg.MinWidth = 460;
             dlg.MinHeight = 480;
+
+            // 位置记忆：有记录就恢复（此时不要再 CenterOwner），没记录保持居中
+            if (WindowPos.Attach(baseDir, WindowPos.Organize, dlg))
+                dlg.WindowStartupLocation = WindowStartupLocation.Manual;
 
             BuildShell();
         }
@@ -222,6 +228,72 @@ namespace Clover
         {
             try { if (onChanged != null) onChanged(); }
             catch { }
+        }
+
+        // ========== 测试辅助（生产代码不调）==========
+        //
+        // AcceptanceTest 要验证"切标签不会把宿主窗口的内容搞丢"，
+        // 但 dlg / pageHost 都是 private。加这几个 internal 访问器，
+        // 比反射稳（反射遇到重命名就静默失效）。
+
+        /// <summary>测试用：宿主窗口。</summary>
+        internal Window TestWindow
+        {
+            get { return dlg; }
+        }
+
+        /// <summary>测试用：内容容器。</summary>
+        internal ContentControl TestPageHost
+        {
+            get { return pageHost; }
+        }
+
+        /// <summary>测试用：当前标签。</summary>
+        internal Tab TestCurrentTab
+        {
+            get { return current; }
+        }
+
+        /// <summary>测试用：外壳根元素是不是 Grid（没被页面覆盖）。</summary>
+        internal bool TestShellIntact()
+        {
+            try
+            {
+                Grid g = dlg.Content as Grid;
+                if (g == null) return false;
+
+                // pageHost 必须真的挂在这棵树上
+                if (pageHost == null) return false;
+                if (!g.Children.Contains(pageHost)) return false;
+
+                // 标签栏也还在（Grid 至少 2 个子元素：tabs + pageHost）
+                if (g.Children.Count < 2) return false;
+
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：pageHost 是否挂在视觉树上。</summary>
+        internal bool TestPageHostInTree()
+        {
+            try
+            {
+                if (pageHost == null) return false;
+                return System.Windows.Media.VisualTreeHelper.GetParent(pageHost) != null;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：当前页面内容是否非空。</summary>
+        internal bool TestPageHasContent()
+        {
+            try
+            {
+                if (pageHost == null) return false;
+                return pageHost.Content != null;
+            }
+            catch { return false; }
         }
 
         public void Show()

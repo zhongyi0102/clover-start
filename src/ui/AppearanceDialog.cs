@@ -37,7 +37,7 @@ namespace Clover
         /// <param name="settings">当前设置（**直接改这个对象**）</param>
         /// <param name="panel">面板（用于实时预览；可为 null）</param>
         /// <param name="onCommit">写盘并全尺寸重算的回调（松手/关窗时调）</param>
-        public static void Show(Window owner, Settings settings, PanelWindow panel, Action onCommit)
+        public static void Show(Window owner, string baseDir, Settings settings, PanelWindow panel, Action onCommit)
         {
             try
             {
@@ -150,6 +150,76 @@ namespace Clover
                 scroll.Content = body;
                 Grid.SetRow(scroll, 1);
                 layout.Children.Add(scroll);
+
+                // ===== 主题（三选一，原右键菜单「主题 ▸」迁移至此）=====
+                body.Children.Add(SectionLabel("主题"));
+
+                TextBlock themeHint = Ui.T("跟随系统时，Windows 切深浅色本程序会自动跟随", 10.5, Ui.Sub);
+                themeHint.Margin = new Thickness(0, 2, 0, 0);
+                body.Children.Add(themeHint);
+
+                StackPanel themeRow = new StackPanel();
+                themeRow.Orientation = Orientation.Horizontal;
+                themeRow.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Lg);
+
+                Ui.ThemeMode curTheme = Ui.ParseTheme(settings.Theme);
+                List<Border> themeChips = new List<Border>();
+
+                foreach (Ui.ThemeMode m in new Ui.ThemeMode[]
+                    { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
+                {
+                    Ui.ThemeMode mm = m;
+                    bool on = (mm == curTheme);
+
+                    Border chip = new Border();
+                    chip.CornerRadius = new CornerRadius(14);
+                    chip.Padding = new Thickness(14, 5, 14, 5);
+                    chip.Cursor = Cursors.Hand;
+                    chip.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+                    chip.Background = on ? Ui.Accent : Ui.SearchBg;
+                    chip.BorderBrush = on ? Ui.Accent : Ui.Line;
+                    chip.BorderThickness = new Thickness(1);
+
+                    TextBlock ct = Ui.T(Ui.ThemeDisplayName(mm), 11.5,
+                        on ? Brushes.White : Ui.Fg);
+                    ct.VerticalAlignment = VerticalAlignment.Center;
+                    chip.Child = ct;
+
+                    themeChips.Add(chip);
+
+                    chip.MouseLeftButtonUp += delegate
+                    {
+                        try
+                        {
+                            settings.Theme = Ui.ThemeToString(mm);
+                            settings.Save();
+                            Ui.ApplyTheme(mm);
+                            Ui.Log("主题 -> " + Ui.ThemeDisplayName(mm));
+
+                            // 重画所有用旧主题颜色的地方
+                            if (panel != null) { try { panel.ApplyTheme(); } catch { } }
+                            if (onCommit != null) { try { onCommit(); } catch { } }
+
+                            // 刷新三个胶囊的选中态
+                            int idx = 0;
+                            foreach (Ui.ThemeMode each in new Ui.ThemeMode[]
+                                { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
+                            {
+                                Border bc = themeChips[idx++];
+                                bool sel = (each == mm);
+                                bc.Background = sel ? Ui.Accent : Ui.SearchBg;
+                                bc.BorderBrush = sel ? Ui.Accent : Ui.Line;
+                                TextBlock tb = bc.Child as TextBlock;
+                                if (tb != null) tb.Foreground = sel ? Brushes.White : Ui.Fg;
+                            }
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "切换主题"); }
+                    };
+
+                    themeRow.Children.Add(chip);
+                }
+
+                body.Children.Add(themeRow);
 
                 // ===== 预设 =====
                 body.Children.Add(SectionLabel("预设"));

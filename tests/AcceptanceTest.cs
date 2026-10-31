@@ -1216,7 +1216,7 @@ namespace Clover
 
                 try
                 {
-                    AppearanceDialog.Show(panel, Settings.Load(root), null, null);
+                    AppearanceDialog.Show(panel, root, Settings.Load(root), null, null);
                 }
                 catch (Exception ex)
                 {

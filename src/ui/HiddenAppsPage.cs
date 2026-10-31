@@ -207,6 +207,11 @@ namespace Clover
             restoreAll.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
             btns.Children.Add(restoreAll);
 
+            // 「隐藏用不到的」：原右键菜单的级联子菜单迁移至此，做成一个按钮
+            Border hideTools = Chip("隐藏用不到的…", false, delegate { ShowHideTools(); });
+            hideTools.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            btns.Children.Add(hideTools);
+
             Grid.SetColumn(btns, 1);
             footer.Children.Add(btns);
 
@@ -858,6 +863,61 @@ namespace Clover
                 }
             }
             catch (Exception ex) { Ui.LogError(ex, "刷新例外名单"); }
+        }
+
+        /// <summary>
+        /// 「隐藏用不到的」：原右键菜单的级联子菜单，现在是一个按钮 + 弹出选择。
+        ///
+        /// 内容与原菜单一致：
+        ///   · 隐藏全部「系统工具」
+        ///   · 隐藏全部「工具/命令行」
+        ///   · 取消隐藏全部
+        /// </summary>
+        void ShowHideTools()
+        {
+            try
+            {
+                if (panel == null) return;
+
+                ContextMenu cm = new ContextMenu();
+
+                foreach (string cat in new string[] { "系统工具", Catalog.ToolCategory })
+                {
+                    string c = cat;
+                    MenuItem one = new MenuItem();
+                    one.Header = "隐藏全部「" + c + "」";
+                    one.Click += delegate
+                    {
+                        try
+                        {
+                            int n = panel.HideCategory(c);
+                            if (n > 0) Rebuild();
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "批量隐藏分类"); }
+                    };
+                    cm.Items.Add(one);
+                }
+
+                cm.Items.Add(new Separator());
+
+                MenuItem unhideAll = new MenuItem();
+                unhideAll.Header = "取消隐藏全部";
+                unhideAll.IsEnabled = panel.HiddenCount() > 0;
+                unhideAll.Click += delegate
+                {
+                    try
+                    {
+                        int n = panel.UnhideAll();
+                        if (n > 0) Rebuild();
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "取消隐藏全部"); }
+                };
+                cm.Items.Add(unhideAll);
+
+                cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                cm.IsOpen = true;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "显示隐藏工具菜单"); }
         }
 
         // ========== 小工具 ==========

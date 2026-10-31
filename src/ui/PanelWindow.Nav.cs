@@ -2589,6 +2589,61 @@ namespace Clover
                 cm.Items.Add(keep);
             }
 
+            // ---- 显示在任务栏（钉到迷你任务栏）----
+            //
+            // 为什么放在磁贴菜单：面板改成顶部横条布局后，原来那个
+            // "打开的窗口"任务列表不再显示，「显示在任务栏」失去了入口，
+            // 迷你任务栏功能成了死功能。这里把它接到磁贴上。
+            //
+            // 三种状态：
+            //   · 迷你任务栏开关关闭  → 置灰，提示去设置里开
+            //   · 应用未运行          → 置灰，提示"应用未运行"
+            //   · 应用运行中          → 可点，钉上去
+            if (a != null && !string.IsNullOrEmpty(a.Path))
+            {
+                cm.Items.Add(new Separator());
+
+                bool miniOn = settings != null && settings.EffectiveMiniTaskbar;
+                List<TaskWindow> wins = null;
+                if (miniOn) wins = TaskList.GetWindowsOfApp(a.Path, a.Name);
+
+                MenuItem pin = new MenuItem();
+                pin.Header = "显示在任务栏";
+
+                if (!miniOn)
+                {
+                    pin.IsEnabled = false;
+                    pin.ToolTip = Settings.SafeModeActive
+                        ? "安全模式下迷你任务栏已停用"
+                        : "迷你任务栏未启用。先到「设置…」→ 任务栏 → 勾选「迷你任务栏」";
+                }
+                else if (wins == null || wins.Count == 0)
+                {
+                    pin.IsEnabled = false;
+                    pin.ToolTip = "应用未运行（先打开它，再钉到任务栏）";
+                }
+                else
+                {
+                    pin.ToolTip = wins.Count == 1
+                        ? ("钉到迷你任务栏：" + wins[0].Title)
+                        : ("钉 " + wins.Count + " 个窗口到迷你任务栏");
+
+                    List<TaskWindow> captured = wins;
+                    pin.Click += delegate
+                    {
+                        try
+                        {
+                            if (miniBar == null) return;
+                            foreach (TaskWindow w in captured) miniBar.Add(w.Hwnd);
+                            Ui.Log("钉到迷你任务栏: " + a.Name + " (" + captured.Count + " 个窗口)");
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "钉到迷你任务栏"); }
+                    };
+                }
+
+                cm.Items.Add(pin);
+            }
+
             taskMenuOpen = true;
             cm.Closed += delegate { taskMenuOpen = false; };
             cm.Placement = PlacementMode.MousePoint;

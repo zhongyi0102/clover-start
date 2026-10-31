@@ -247,7 +247,15 @@ Invoke-Suite 'ActiveRowTest' $wpfRefs `
 # 右键菜单结构：顶层 8 项、顺序、分隔线、子菜单归属、状态绑定
 Invoke-Suite 'MenuStructureTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'MenuStructureTest.cs')))
+
+# 「整理与隐藏」外壳完整性：切标签不得覆盖宿主窗口的 Content
+Invoke-Suite 'OrganizeShellTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'OrganizeShellTest.cs')))
 # ---------------- 验收测试 ----------------
+
+# 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退
+Invoke-Suite 'WindowPosTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'WindowPosTest.cs')))
 # 真实创建 PanelWindow，检查界面确实画出来了，并输出 JSON 证据报告。
 # 强制使用临时目录，拒绝接触用户真实 config（见 AcceptanceTest.cs 的安全闸）。
 $acceptanceReport = Join-Path $outDir 'acceptance-report.json'

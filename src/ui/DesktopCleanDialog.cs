@@ -23,7 +23,12 @@ namespace Clover
     /// </summary>
     class DesktopCleanPage
     {
-        readonly Window dlg;      // 宿主窗口（用于 MessageBox 的 owner）
+        /// <summary>
+        /// 宿主窗口。**只用作 MessageBox.Show 的 owner**，
+        /// 不得修改它的 `Content` —— 那是 OrganizeDialog 的外壳（标签栏 + pageHost），
+        /// 一旦被覆盖，整个窗口内容会被从视觉树上摘掉（曾经就是这么坏的）。
+        /// </summary>
+        readonly Window dlg;
         readonly Settings settings;
         readonly AppWatcher watcher;
         readonly Action onChanged;
@@ -138,7 +143,6 @@ namespace Clover
 
             sv.Content = col;
             Content = sv;
-            dlg.Content = sv;
 
             RefreshLists();
         }

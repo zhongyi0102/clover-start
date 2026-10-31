@@ -558,7 +558,7 @@ namespace Clover
             {
                 // 统一入口：打开「整理与隐藏」窗口并定位到标签二
                 OrganizeDialog dlg = new OrganizeDialog(
-                    this, settings, watcher, this,
+                    this, baseDir, settings, watcher, this,
                     delegate { RefreshCatalogQuiet(); },
                     OrganizeDialog.Tab.Hidden);
                 dlg.Show();
