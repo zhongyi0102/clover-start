@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -2145,6 +2146,248 @@ namespace Clover
         /// 两个列表互斥：标记时从 Unmarked 里移除、加入 Marked；反之亦然。
         /// 优先级：Unmarked（强制不高）> Marked（强制低）> 自动规则。
         /// </summary>
+        /// <summary>
+        /// 桌面清理器移除快捷方式后的轻提示（不抢焦点）。
+        ///
+        /// 单个：「已移除桌面快捷方式：xxx  [保留] [撤销]」
+        /// 批量：「已移除 N 个桌面快捷方式  [撤销]」（不给「保留」，批量保留语义不清）
+        /// </summary>
+        internal void ShowDesktopRemovedTip(List<Dictionary<string, object>> removed)
+        {
+            try
+            {
+                if (removed == null || removed.Count == 0) return;
+
+                // 提示条宿主：面板底部的 undoHost（和文件页共用样式）
+                if (undoBarForDesktop == null && filesUndoHost != null)
+                {
+                    undoBarForDesktop = new UndoBar(filesUndoHost);
+                    undoBarForDesktop.OnFocusBack = delegate
+                    {
+                        try { if (tilePanel != null) tilePanel.Focus(); } catch { }
+                    };
+                }
+                if (undoBarForDesktop == null) return;
+
+                List<string> paths = new List<string>();
+                foreach (Dictionary<string, object> d in removed)
+                {
+                    string p = d.ContainsKey("lnkPath") ? Convert.ToString(d["lnkPath"]) : null;
+                    if (!string.IsNullOrWhiteSpace(p)) paths.Add(p);
+                }
+                if (paths.Count == 0) return;
+
+                if (removed.Count == 1)
+                {
+                    string name = removed[0].ContainsKey("name")
+                        ? Convert.ToString(removed[0]["name"]) : "";
+
+                    string onePath = paths[0];
+
+                    // 「撤销」：先登记一次性豁免，再还原（否则还原动作又触发 Created 被移除）
+                    Action undo = delegate
+                    {
+                        try
+                        {
+                            if (watcher != null && watcher.DesktopCleaner != null)
+                                watcher.DesktopCleaner.GrantExemption(onePath);
+
+                            UndoBar.RestoreFromRecycleBin(new List<string> { onePath });
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "撤销桌面移除"); }
+                    };
+
+                    // 「保留」：先加名单，再登记豁免，再还原
+                    Action keep = delegate
+                    {
+                        try
+                        {
+                            if (settings != null)
+                            {
+                                DesktopKeep.Add(settings.DesktopKeepTargets, onePath);
+                                settings.Save();
+                            }
+                            if (watcher != null && watcher.DesktopCleaner != null)
+                                watcher.DesktopCleaner.GrantExemption(onePath);
+
+                            UndoBar.RestoreFromRecycleBin(new List<string> { onePath });
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "保留桌面快捷方式"); }
+                    };
+
+                    undoBarForDesktop.Show("已移除桌面快捷方式：" + name, undo, keep);
+                }
+                else
+                {
+                    List<string> all = new List<string>(paths);
+                    Action undo = delegate
+                    {
+                        try
+                        {
+                            if (watcher != null && watcher.DesktopCleaner != null)
+                                foreach (string p in all) watcher.DesktopCleaner.GrantExemption(p);
+
+                            UndoBar.RestoreFromRecycleBin(all);
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "撤销桌面移除"); }
+                    };
+
+                    undoBarForDesktop.Show("已移除 " + removed.Count + " 个桌面快捷方式", undo);
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "显示桌面移除提示"); }
+        }
+        /// <summary>桌面移除提示条（与文件页分开，避免互相覆盖）。</summary>
+        UndoBar undoBarForDesktop;
+        /// <summary>某个目标路径是否已在保留名单里。</summary>
+        bool IsKeptOnDesktop(string targetPath)
+        {
+            try
+            {
+                if (settings == null || settings.DesktopKeepTargets == null) return false;
+                string key = DesktopKeep.NormalizeKey(targetPath);
+                if (string.IsNullOrEmpty(key)) return false;
+
+                foreach (string k in settings.DesktopKeepTargets)
+                    if (string.Equals(k, key, StringComparison.OrdinalIgnoreCase)) return true;
+                return false;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 「保留在桌面 / 取消保留在桌面」的切换。
+        ///
+        /// ── 关键顺序（需求补充第 1 条）──
+        ///
+        /// 加入保留时**先把目标路径写进名单，再创建桌面 .lnk**。
+        /// 顺序反了的话，watcher 会在文件刚创建时把它当新快捷方式移走。
+        /// </summary>
+        void ToggleKeepOnDesktop(AppItem a, string targetPath, bool currentlyKept)
+        {
+            try
+            {
+                if (settings == null) return;
+                if (settings.DesktopKeepTargets == null)
+                    settings.DesktopKeepTargets = new List<string>();
+
+                string key = DesktopKeep.NormalizeKey(targetPath);
+                if (string.IsNullOrEmpty(key)) return;
+
+                if (currentlyKept)
+                {
+                    // ---- 取消保留 ----
+                    DesktopKeep.RemoveKey(settings.DesktopKeepTargets, key);
+                    settings.Save();
+                    Ui.Log("取消保留在桌面: " + targetPath);
+                    return;
+                }
+
+                // ---- 加入保留 ----
+                // ★ 第一步：先登记，再做任何文件操作
+                DesktopKeep.AddKey(settings.DesktopKeepTargets, key);
+                settings.Save();
+
+                // ★ 第二步：桌面上没有就创建一个（此时已在名单里，watcher 不会移走）
+                try
+                {
+                    if (!DesktopShortcutExists(targetPath))
+                        CreateDesktopShortcut(a, targetPath);
+                }
+                catch (Exception ex) { Ui.LogError(ex, "创建桌面快捷方式"); }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "切换保留在桌面"); }
+        }
+
+        /// <summary>桌面上是否已有指向该目标的快捷方式。</summary>
+        bool DesktopShortcutExists(string targetPath)
+        {
+            try
+            {
+                string want = DesktopKeep.NormalizeKey(targetPath);
+                if (string.IsNullOrEmpty(want)) return false;
+
+                foreach (string dir in DesktopKeep.DesktopDirs())
+                {
+                    try
+                    {
+                        if (!Directory.Exists(dir)) continue;
+                        foreach (string f in Directory.GetFiles(dir, "*.*", SearchOption.TopDirectoryOnly))
+                        {
+                            try
+                            {
+                                string ext = (Path.GetExtension(f) ?? "").ToLowerInvariant();
+                                if (ext != ".lnk") continue;
+
+                                string t = DesktopKeep.ResolveTarget(f);
+                                if (string.IsNullOrEmpty(t)) continue;
+                                if (DesktopKeep.NormalizeKey(t) == want) return true;
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+                return false;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>在用户桌面创建指向目标的 .lnk。</summary>
+        void CreateDesktopShortcut(AppItem a, string targetPath)
+        {
+            object shell = null;
+            object shortcut = null;
+            try
+            {
+                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                if (string.IsNullOrWhiteSpace(desktop)) return;
+
+                string name = (a != null && !string.IsNullOrWhiteSpace(a.Name))
+                    ? a.Name : Path.GetFileNameWithoutExtension(targetPath);
+                if (string.IsNullOrWhiteSpace(name)) name = "快捷方式";
+
+                // 去非法字符
+                foreach (char c in Path.GetInvalidFileNameChars())
+                    name = name.Replace(c, '_');
+
+                string lnk = Path.Combine(desktop, name + ".lnk");
+
+                // 已存在同名 → 加序号
+                int n = 2;
+                while (File.Exists(lnk))
+                {
+                    lnk = Path.Combine(desktop, name + " (" + n + ").lnk");
+                    n++;
+                    if (n > 99) break;
+                }
+
+                Type t = Type.GetTypeFromProgID("WScript.Shell");
+                if (t == null) return;
+
+                shell = Activator.CreateInstance(t);
+                if (shell == null) return;
+
+                shortcut = t.InvokeMember("CreateShortcut",
+                    System.Reflection.BindingFlags.InvokeMethod, null, shell,
+                    new object[] { lnk });
+                if (shortcut == null) return;
+
+                shortcut.GetType().InvokeMember("TargetPath",
+                    System.Reflection.BindingFlags.SetProperty, null, shortcut,
+                    new object[] { targetPath });
+                shortcut.GetType().InvokeMember("Save",
+                    System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+
+                Ui.Log("已在桌面创建快捷方式: " + lnk);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "创建桌面快捷方式"); }
+            finally
+            {
+                try { if (shortcut != null && Marshal.IsComObject(shortcut)) Marshal.ReleaseComObject(shortcut); } catch { }
+                try { if (shell != null && Marshal.IsComObject(shell)) Marshal.ReleaseComObject(shell); } catch { }
+            }
+        }
         void SetLowValue(AppItem a, bool low)
         {
             try
@@ -2247,6 +2490,38 @@ namespace Clover
                     mark.Click += delegate { SetLowValue(a, true); };
                     cm.Items.Add(mark);
                 }
+            }
+
+            // ---- 保留在桌面（「全部」「常用」都有，同一位置切换）----
+            //
+            // 总开关关闭时也显示 —— 先设置好，以后开启也生效。
+            if (a != null && !string.IsNullOrEmpty(a.Path))
+            {
+                cm.Items.Add(new Separator());
+
+                // 目标解析不出（UWP / 商店应用）→ 置灰
+                string target = DesktopKeep.ResolveTarget(a.Path);
+                bool resolvable = !string.IsNullOrEmpty(target);
+
+                bool kept = resolvable && IsKeptOnDesktop(target);
+
+                MenuItem keep = new MenuItem();
+                keep.Header = kept ? "取消保留在桌面" : "保留在桌面";
+
+                if (!resolvable)
+                {
+                    keep.IsEnabled = false;
+                    keep.ToolTip = "无法识别目标";
+                }
+                else
+                {
+                    keep.ToolTip = kept
+                        ? "移出保留名单，以后桌面上的这个快捷方式会被自动移除"
+                        : "加入保留名单，桌面上的这个快捷方式不会被移除；桌面上没有就自动创建";
+                    keep.Click += delegate { ToggleKeepOnDesktop(a, target, kept); };
+                }
+
+                cm.Items.Add(keep);
             }
 
             taskMenuOpen = true;

@@ -175,6 +175,62 @@ namespace Clover
         /// </summary>
         public List<string> LowValueUnmarked = new List<string>();
 
+        // ========== 桌面保持无快捷方式 ==========
+
+        /// <summary>总开关：桌面快捷方式自动移到回收站。默认关闭。</summary>
+        public bool DesktopCleanEnabled = false;
+
+        /// <summary>
+        /// 子选项：开启时是否立即清理桌面上**现有**的快捷方式。默认勾选。
+        ///
+        /// 不勾选时，现有快捷方式视为用户自己的 —— 补扫也不碰
+        /// （靠 `DesktopEnabledAt` 区分"开启前就有"和"开启后新增"）。
+        /// </summary>
+        public bool DesktopCleanExisting = true;
+
+        /// <summary>
+        /// 开关被打开的时刻（本地时间字符串，可解析）。
+        ///
+        /// 用途：子选项未勾选时，补扫只处理「创建时间晚于此刻」的快捷方式。
+        /// 空串 = 从未开启过。
+        /// </summary>
+        public string DesktopEnabledAt = "";
+
+        /// <summary>
+        /// 上次补扫/退出时刻。
+        ///
+        /// 用途：每次启动补扫只处理「创建时间晚于此刻」的快捷方式 ——
+        /// 即"应用没运行期间新增的"，不会把用户早就放好的东西清掉。
+        /// </summary>
+        public string DesktopLastScan = "";
+
+        /// <summary>
+        /// **保留名单**：用户想留在桌面的快捷方式。
+        ///
+        /// key 规则（见 DesktopKeep.NormalizeKey）：
+        ///   · 能解析出目标 → 规范化目标路径，如 `c:\...\chrome.exe`
+        ///   · 解析不出（网址/UWP）→ `name:文件名.url`
+        ///
+        /// 名单内的快捷方式，自动移除**永远跳过**。
+        /// </summary>
+        public List<string> DesktopKeepTargets = new List<string>();
+
+        /// <summary>
+        /// 已移除记录（最多 200 条，超出丢最旧）。
+        ///
+        /// 每条是 Dictionary：
+        ///   name / lnkPath / targetPath / removedAt / fromPublic
+        /// </summary>
+        public List<object> DesktopRemoved = new List<object>();
+
+        /// <summary>
+        /// 待处理：公共桌面上被拒绝移除的快捷方式（需要管理员权限）。
+        ///
+        /// 不自动提权、不弹 UAC —— 等用户在设置里主动点「点此处理」。
+        /// 结构同 DesktopRemoved。
+        /// </summary>
+        public List<object> DesktopPendingAdmin = new List<object>();
+
 
 
         /// <summary>
@@ -283,6 +339,15 @@ namespace Clover
                 }
                 s.LowValueMarked = ReadStringList(d, "lowValueMarked");
                 s.LowValueUnmarked = ReadStringList(d, "lowValueUnmarked");
+
+                // ---- 桌面保持无快捷方式 ----
+                s.DesktopCleanEnabled = ReadBool(d, "desktopCleanEnabled", false);
+                s.DesktopCleanExisting = ReadBool(d, "desktopCleanExisting", true);
+                s.DesktopEnabledAt = ReadString(d, "desktopEnabledAt", "", null);
+                s.DesktopLastScan = ReadString(d, "desktopLastScan", "", null);
+                s.DesktopKeepTargets = ReadStringList(d, "desktopKeepTargets");
+                s.DesktopRemoved = ReadObjectList(d, "desktopRemoved");
+                s.DesktopPendingAdmin = ReadObjectList(d, "desktopPendingAdmin");
                 s.FilesSort = ReadFilesSort(d, "filesSort", s.FilesSort);
                 // 文字清晰保底：缺键时用默认 true（老配置也享受保底）
                 if (d.TryGetValue("textContrastGuard", out v) && v != null)
@@ -340,6 +405,13 @@ namespace Clover
                 d["filesSort"] = FilesSort;
                 d["lowValueMarked"] = LowValueMarked;
                 d["lowValueUnmarked"] = LowValueUnmarked;
+                d["desktopCleanEnabled"] = DesktopCleanEnabled;
+                d["desktopCleanExisting"] = DesktopCleanExisting;
+                d["desktopEnabledAt"] = DesktopEnabledAt;
+                d["desktopLastScan"] = DesktopLastScan;
+                d["desktopKeepTargets"] = DesktopKeepTargets;
+                d["desktopRemoved"] = DesktopRemoved;
+                d["desktopPendingAdmin"] = DesktopPendingAdmin;
 
                 JavaScriptSerializer ser = new JavaScriptSerializer();
                 JsonIO.WriteAtomic(path, ser.Serialize(d));
@@ -354,6 +426,48 @@ namespace Clover
         //
         // 共同原则：任何非法值都回退默认 + 写 error.log，绝不抛异常。
         // 用户明确要求「越界/颜色格式错 → 回退默认并写 error.log，不得崩溃」。
+
+        /// <summary>读布尔。缺键 / 类型不对 → 用默认值。</summary>
+        static bool ReadBool(Dictionary<string, object> d, string key, bool def)
+        {
+            try
+            {
+                object v;
+                if (!d.TryGetValue(key, out v) || v == null) return def;
+                if (v is bool) return (bool)v;
+                string s = v as string;
+                if (s != null)
+                {
+                    s = s.Trim().ToLowerInvariant();
+                    if (s == "true" || s == "1") return true;
+                    if (s == "false" || s == "0") return false;
+                }
+                return def;
+            }
+            catch { return def; }
+        }
+
+        /// <summary>读对象数组（每条是 Dictionary）。缺键 / 格式不对 → 空列表。</summary>
+        static List<object> ReadObjectList(Dictionary<string, object> d, string key)
+        {
+            List<object> list = new List<object>();
+            try
+            {
+                object arr;
+                if (!d.TryGetValue(key, out arr) || arr == null) return list;
+
+                System.Collections.IEnumerable en = arr as System.Collections.IEnumerable;
+                if (en == null) return list;
+
+                foreach (object o in en)
+                {
+                    if (o == null) continue;
+                    list.Add(o);
+                }
+            }
+            catch { }
+            return list;
+        }
 
         static string ReadString(Dictionary<string, object> d, string key, string def, string[] allowed)
         {

@@ -480,6 +480,25 @@ namespace Clover
             };
             cm.Items.Add(appearanceItem);
 
+            // ---- 桌面快捷方式…（桌面保持无快捷方式）----
+            MenuItem desktopItem = new MenuItem();
+            desktopItem.Header = "桌面快捷方式…";
+            desktopItem.ToolTip = "桌面保持无快捷方式：开关、保留名单、已移除列表";
+            desktopItem.Click += delegate
+            {
+                try
+                {
+                    DesktopCleanDialog dlg = new DesktopCleanDialog(
+                        this, settings, panel == null ? null : panel.Watcher, delegate { if (panel != null) panel.RefreshCatalogQuiet(); });
+                    dlg.Show();
+                }
+                catch (Exception ex)
+                {
+                    ErrorLog.Warn("打开桌面快捷方式设置失败: " + ex.Message);
+                }
+            };
+            cm.Items.Add(desktopItem);
+
             // ---- 主题 ▸（直达）----
             // 三选一，当前项打勾。切换后立刻生效（颜色刷子是全局的，
             // 改 .Color 整棵界面就变色，不用重建窗口）。

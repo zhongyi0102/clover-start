@@ -20,6 +20,31 @@
 
 ### 新增（Added）
 
+- **桌面保持无快捷方式**（开关，默认关闭）
+  - 开启后桌面上的 `.lnk` / `.url` 自动移到回收站；文件/文件夹/文档/图片一律不碰
+  - 监听用户桌面 + 公共桌面；`Filter = "*.*"` 再自己过滤扩展名（`.url` 不会被漏）
+  - 延迟 2.5 秒 + 被占用重试 3 次 + 3 秒事件去重
+  - **保留名单**：右键「保留在桌面」/ 「已移除」里点恢复 / 设置里手动增删
+    · key 按目标路径规范化（忽略大小写与 `\` `/` 差异），解析不出用 `name:文件名`
+    · 创建快捷方式时**先登记名单再创建**，避免被 watcher 当新文件移走
+    · **跟随用户手动删除失效**：启动补扫 / 开关打开 / 手动「清理失效项」时自动剔除
+  - **启动补扫范围严格限定**：只处理创建时间晚于 `max(desktopEnabledAt, desktopLastScan)` 的
+  - **公共桌面被拒不自动提权**：记为「待处理」，设置里显示「点此处理」，用户点了才提权
+  - 轻提示：`已移除桌面快捷方式：xxx  [保留] [撤销]`，5 秒消失，不抢焦点
+  - 还原前先登记一次性豁免（5 分钟），否则还原会触发 Created 被再次移除
+  - 移除后 `SHChangeNotify` 通知资源管理器刷新
+
+- **3 个新文件**：`DesktopKeep.cs`（保留名单）、`DesktopCleaner.cs`（监听清理）、`DesktopCleanDialog.cs`（设置窗口）
+
+- **7 个新配置键**（键数 23 → **30**）
+  - `desktopCleanEnabled` / `desktopCleanExisting` / `desktopEnabledAt` / `desktopLastScan`
+  - `desktopKeepTargets` / `desktopRemoved` / `desktopPendingAdmin`
+
+- **`UndoBar` 支持双按钮**（保留 + 撤销）+ 焦点归还回调
+
+- **新增测试** `DesktopKeepTest`（50 条）
+
+
 - **「全部」页低价值条目沉底**
   - 识别卸载器 / 帮助文档 / 许可协议 / 更新日志 / 语言设置 / 修复工具 / 失效快捷方式
   - 规则集中在 `src/core/LowValueRules.cs`，增删只改一处

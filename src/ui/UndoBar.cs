@@ -38,10 +38,18 @@ namespace Clover
         readonly Border root;
         readonly TextBlock message;
         readonly Border undoBtn;
+        readonly Border keepBtn;
         readonly StackPanel host;
 
         DispatcherTimer timer;
         Action undoAction;
+        Action keepAction;
+
+        /// <summary>
+        /// 点任一按钮后把焦点还给原处（不跳搜索框、不触发「点击面板外收起」）。
+        /// 由调用方注入 —— UndoBar 不知道自己该还给谁。
+        /// </summary>
+        public Action OnFocusBack;
 
         /// <summary>当前是否可见。</summary>
         public bool IsVisible
@@ -70,6 +78,8 @@ namespace Clover
             g.ColumnDefinitions.Add(new ColumnDefinition());
             g.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
             g.ColumnDefinitions[1].Width = GridLength.Auto;
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions[2].Width = GridLength.Auto;
 
             message = Ui.T("", 11, Ui.Fg);
             message.VerticalAlignment = VerticalAlignment.Center;
@@ -99,12 +109,45 @@ namespace Clover
                     Action a = undoAction;
                     Hide();
                     if (a != null) a();
+                    FocusBack();
                 }
                 catch (Exception ex) { Ui.LogError(ex, "撤销删除"); }
             };
 
+            // ---- 「保留」按钮（仅桌面移除场景显示）----
+            keepBtn = new Border();
+            keepBtn.CornerRadius = new CornerRadius(10);
+            keepBtn.Padding = new Thickness(10, 2, 10, 2);
+            keepBtn.Cursor = System.Windows.Input.Cursors.Hand;
+            keepBtn.Background = Ui.Accent;
+            keepBtn.BorderBrush = Ui.Accent;
+            keepBtn.BorderThickness = new Thickness(1);
+            keepBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            keepBtn.Visibility = Visibility.Collapsed;
+
+            TextBlock kb = Ui.T("保留", 10.5, Brushes.White);
+            kb.VerticalAlignment = VerticalAlignment.Center;
+            keepBtn.Child = kb;
+
+            keepBtn.MouseEnter += delegate { keepBtn.Opacity = 0.85; };
+            keepBtn.MouseLeave += delegate { keepBtn.Opacity = 1.0; };
+            keepBtn.MouseLeftButtonUp += delegate
+            {
+                try
+                {
+                    Action a = keepAction;
+                    Hide();
+                    if (a != null) a();
+                    FocusBack();
+                }
+                catch (Exception ex) { Ui.LogError(ex, "保留桌面快捷方式"); }
+            };
+
             Grid.SetColumn(undoBtn, 1);
             g.Children.Add(undoBtn);
+
+            Grid.SetColumn(keepBtn, 2);
+            g.Children.Add(keepBtn);
 
             root.Child = g;
 
@@ -113,15 +156,30 @@ namespace Clover
 
         /// <summary>
         /// 显示提示。text 例如「已移到回收站：a.txt」。
-        /// undo 为 null 时只显示消息，不显示「撤销」按钮（批量部分失败场景）。
+        ///
+        /// undo 为 null → 不显示「撤销」按钮（批量部分失败场景）。
+        /// keep 为 null → 不显示「保留」按钮（普通删除场景，只有桌面移除才给保留）。
         /// </summary>
         public void Show(string text, Action undo)
+        {
+            Show(text, undo, null);
+        }
+
+        /// <summary>
+        /// 显示提示（三参数版）。
+        ///
+        /// keep = 「保留」按钮的回调（还原 + 加入保留名单）。
+        /// 桌面快捷方式被移除时传它，让用户能一键把东西留下来。
+        /// </summary>
+        public void Show(string text, Action undo, Action keep)
         {
             try
             {
                 message.Text = text ?? "";
                 undoAction = undo;
+                keepAction = keep;
                 undoBtn.Visibility = undo == null ? Visibility.Collapsed : Visibility.Visible;
+                keepBtn.Visibility = keep == null ? Visibility.Collapsed : Visibility.Visible;
 
                 root.Visibility = Visibility.Visible;
                 root.Opacity = 0;
@@ -145,6 +203,22 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "显示撤销提示"); }
         }
 
+        /// <summary>
+        /// 把焦点还给原处。
+        ///
+        /// 不调 `Activate()`、不碰搜索框 —— 否则会跳焦点、还可能触发
+        /// 「点击面板外自动收起」。只调调用方注入的回调（通常是列表的 Focus）。
+        /// </summary>
+        void FocusBack()
+        {
+            try
+            {
+                if (OnFocusBack != null) OnFocusBack();
+            }
+            catch { }
+        }
+
+        /// <summary>立即隐藏。</summary>
         /// <summary>立即隐藏。</summary>
         public void Hide()
         {

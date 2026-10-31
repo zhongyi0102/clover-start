@@ -174,6 +174,10 @@ Invoke-Suite 'FilesTabTest' $baseRefs `
 Invoke-Suite 'LowValueTest' $baseRefs `
     (@((Join-Path $coreDir 'LowValueRules.cs'), (Join-Path $testDir 'LowValueTest.cs')))
 
+
+# 桌面保持无快捷方式：保留名单 / 规范化 / 自动失效
+Invoke-Suite 'DesktopKeepTest' $baseRefs `
+    (@((Join-Path $coreDir 'DesktopKeep.cs'), (Join-Path $coreDir 'DesktopCleaner.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DesktopKeepTest.cs')))
 # 「文件」标签：修改操作（重命名/删除/剪切粘贴/新建，走可注入的假文件系统）
 Invoke-Suite 'FileOpsTest' $baseRefs `
     (@((Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileOpsTest.cs')))

@@ -1475,6 +1475,12 @@ namespace Clover
                     if (undoBar == null && undoHost != null)
                         undoBar = new UndoBar(undoHost);
 
+                    // 点按钮后焦点回到文件列表（不跳搜索框、不触发面板外收起）
+                    undoBar.OnFocusBack = delegate
+                    {
+                        try { if (listPanel != null) listPanel.Focus(); } catch { }
+                    };
+
                     if (undoBar != null)
                     {
                         string name = deleted[0].Name;

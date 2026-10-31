@@ -27,6 +27,15 @@ namespace Clover
         DispatcherTimer periodic;
         bool startMenuDirty;
 
+        /// <summary>桌面保持无快捷方式。懒创建（开关打开时才需要）。</summary>
+        DesktopCleaner desktopCleaner;
+
+        /// <summary>桌面清理器（可能为 null）。</summary>
+        public DesktopCleaner DesktopCleaner
+        {
+            get { return desktopCleaner; }
+        }
+
         public AppWatcher(string baseDir, PanelWindow panel, Settings settings)
         {
             this.baseDir = baseDir;
@@ -68,6 +77,9 @@ namespace Clover
             };
             foreach (string d in startMenus)
                 Watch(d, true, true);
+
+            // ---------- 桌面保持无快捷方式 ----------
+            StartDesktopCleanIfEnabled();
         }
 
 
@@ -101,6 +113,77 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 启动时按开关状态挂桌面监听 + 补扫。
+        ///
+        /// 补扫范围严格限定（见 DesktopCleaner.SweepOnce）：
+        /// 只处理创建时间晚于 max(desktopEnabledAt, desktopLastScan) 的，
+        /// 不会把用户早就放好的快捷方式清掉。
+        /// </summary>
+        void StartDesktopCleanIfEnabled()
+        {
+            try
+            {
+                if (settings == null || !settings.DesktopCleanEnabled) return;
+
+                if (desktopCleaner == null)
+                {
+                    desktopCleaner = new DesktopCleaner(baseDir, settings);
+
+                    // 移除后弹轻提示（面板负责显示「保留 / 撤销」）
+                    desktopCleaner.OnRemoved = delegate(List<Dictionary<string, object>> removed)
+                    {
+                        try
+                        {
+                            if (panel != null) panel.ShowDesktopRemovedTip(removed);
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "桌面移除提示"); }
+                    };
+                }
+
+                desktopCleaner.Start();
+
+                // 后台补扫，不阻塞启动
+                System.Threading.Thread t = new System.Threading.Thread(delegate()
+                {
+                    try { desktopCleaner.SweepOnce("启动补扫"); }
+                    catch (Exception ex) { Ui.LogError(ex, "桌面补扫"); }
+                });
+                t.IsBackground = true;
+                t.Start();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "启动桌面清理"); }
+        }
+
+        /// <summary>
+        /// 开关切换。enabled=true 时记录开启时刻并按子选项清理现有；
+        /// false 时立即停止监听、释放 watcher。
+        /// </summary>
+        public void SetDesktopClean(bool enabled)
+        {
+            try
+            {
+                if (desktopCleaner == null)
+                {
+                    desktopCleaner = new DesktopCleaner(baseDir, settings);
+
+                    // 移除后弹轻提示（面板负责显示「保留 / 撤销」）
+                    desktopCleaner.OnRemoved = delegate(List<Dictionary<string, object>> removed)
+                    {
+                        try
+                        {
+                            if (panel != null) panel.ShowDesktopRemovedTip(removed);
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "桌面移除提示"); }
+                    };
+                }
+
+                if (enabled) desktopCleaner.OnEnabled();
+                else desktopCleaner.OnDisabled();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "切换桌面清理开关"); }
+        }
+
         /// <summary>停止并释放所有文件监听器（退出时调用）。</summary>
         public void Stop()
         {
@@ -117,6 +200,8 @@ namespace Clover
                 catch { }
             }
             watchers.Clear();
+
+            try { if (desktopCleaner != null) desktopCleaner.Stop(); } catch { }
         }
 
         void OnChange(bool isStartMenu)

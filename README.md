@@ -222,8 +222,15 @@ outerLayer（圆角裁剪）
 | `filesSort` | `"modified:desc"` | 排序，格式 `列:方向`（`modified`/`name`/`size` + `asc`/`desc`）。兼容旧值 |
 | `lowValueMarked` | `[]` | **手动标记为低价值**的应用路径（右键「标记为低价值」）|
 | `lowValueUnmarked` | `[]` | **手动取消低价值标记**的应用路径（优先级最高）|
+| `desktopCleanEnabled` | `false` | 桌面保持无快捷方式总开关 |
+| `desktopCleanExisting` | `true` | 开启时是否同时清理现有的快捷方式 |
+| `desktopEnabledAt` | `""` | 开关被打开的时刻（补扫时间下限之一）|
+| `desktopLastScan` | `""` | 上次补扫时刻（补扫时间下限之一）|
+| `desktopKeepTargets` | `[]` | **保留名单**（规范化目标路径 / `name:文件名`）|
+| `desktopRemoved` | `[]` | 已移除记录（最多 200 条）|
+| `desktopPendingAdmin` | `[]` | 待处理（公共桌面被拒，需管理员权限）|
 
-> **共 23 个键**，按用途分五组：
+> **共 30 个键**，按用途分六组：
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
@@ -232,6 +239,7 @@ outerLayer（圆角裁剪）
 > | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `textContrastGuard` | 11 |
 > | **文件标签** | `showFilesTab` / `filesSources` / `filesSource` / `filesSort` | 4 |
 > | **低价值标记** | `lowValueMarked` / `lowValueUnmarked` | 2 |
+> | **桌面清理** | `desktopCleanEnabled` / `desktopCleanExisting` / `desktopEnabledAt` / `desktopLastScan` / `desktopKeepTargets` / `desktopRemoved` / `desktopPendingAdmin` | 7 |
 > | **数据** | （无） | 0 |
 >
 > **界面入口**：
@@ -497,6 +505,111 @@ outerLayer（圆角裁剪）
 
 `Geek Uninstaller` 这类"本身就是工具、但名字含 Uninstall"的程序会被自动判为低价值。
 完全避免需要维护工具白名单，成本高于收益 —— 用右键「取消低价值标记」手动纠正即可。
+## 桌面保持无快捷方式
+
+设置里开启后，桌面上的 `.lnk` / `.url` 会被自动移到回收站，桌面保持干净，应用统一从启动台进入。
+
+> **默认关闭。** 入口：右键四叶草 →「桌面快捷方式…」
+
+### 处理范围
+
+| 项 | 说明 |
+|---|---|
+| 目录 | 用户桌面（`%USERPROFILE%\Desktop`）+ 公共桌面（`C:\Users\Public\Desktop`）|
+| 扩展名 | **只处理 `.lnk` 和 `.url`** |
+| 不碰 | 文件、文件夹、文档、图片 —— 一律不动 |
+| 不再判断 | 不要求"目标是启动台已收录的软件"，桌面上所有快捷方式都处理 |
+
+### 保留名单（核心）
+
+用户想留在桌面的快捷方式记进名单，**自动移除永远跳过**。
+
+**key 规则**（忽略大小写和 `\` `/` 差异）：
+- 能解析出目标 → 规范化目标路径，如 `c:\program files\...\chrome.exe`
+- 解析不出（网址 / UWP）→ `name:文件名.url`
+
+规范化：`GetFullPath` → 统一 `\` → 去尾部斜杠（盘符根保留）→ 小写。
+
+**三种加入方式**：
+
+| 方式 | 位置 |
+|---|---|
+| 右键「保留在桌面」 | 应用磁贴右键菜单（「全部」「常用」都有，已保留则显示「取消保留在桌面」）|
+| 「已移除」列表点「恢复」 | 设置窗口，恢复即加入名单 |
+| 手动增删 | 设置窗口的保留名单区 |
+
+**目标解析不出** → 菜单项置灰 + 提示「无法识别目标」。
+**总开关关闭时菜单项仍可用** —— 先设置好，以后开启也生效。
+
+> ⚠️ **顺序很重要**：「保留在桌面」时**先把目标写进名单，再创建桌面 `.lnk`**。
+> 反过来的话，watcher 会在文件刚创建时把它当新快捷方式移走。
+
+**跟随手动删除失效**：用户自己把名单里的快捷方式移入回收站或永久删除后，该条目自动从名单移除。判定在启动补扫、开关打开、手动点「清理失效项」时执行 —— 只在能成功枚举桌面时才清理，避免权限问题误删整个名单。
+
+### 触发时机
+
+| 时机 | 行为 |
+|---|---|
+| `FileSystemWatcher` 的 `Created` / `Renamed` | 只关心 `.lnk` / `.url` |
+| 延迟 | **2.5 秒**（等安装程序写完），被占用时最多重试 3 次 |
+| 去重 | 同一文件 3 秒内多次事件只处理一次 |
+| 启动补扫 | 见下 |
+
+### 启动补扫的严格范围
+
+补扫**只处理"应用没运行期间新增的"**，不会把用户早放好的东西清掉：
+
+```
+时间下限 = max(desktopEnabledAt, desktopLastScan)
+只处理创建时间晚于这个下限的快捷方式
+```
+
+- 开关从关到开：按子选项 `desktopCleanExisting` 决定是否清理现有的
+- 子选项不勾选：现有的视为用户的，补扫也不碰
+- 两者都没记录：下限 = 现在（等于不处理任何现有文件，最保守）
+
+### 移除方式
+
+| 场景 | 行为 |
+|---|---|
+| 用户桌面 | 移到回收站（`SHFileOperation` + `FOF_ALLOWUNDO`）|
+| **公共桌面** | 需要管理员权限。被拒时**不自动提权、不弹 UAC**，记为「待处理」|
+| 待处理 | 设置里显示「有 N 个公共桌面快捷方式需要管理员权限，点此处理」，用户点了才提权重试 |
+| 提权删除 | **永久删除，不进回收站**，提示里明确写明，默认焦点在「取消」|
+| UAC 取消 | `Win32Exception(1223)` → 静默当作取消 |
+| 批量部分失败 | 只对失败项提示 |
+| 移除后 | 调 `SHChangeNotify` 通知资源管理器刷新桌面 |
+
+### 提示与恢复
+
+每次移除都记录：快捷方式名、原路径、目标路径、时间（最多 200 条）。
+
+**轻提示**（不抢焦点，5 秒后消失）：
+
+```
+已移除桌面快捷方式：Chrome    [保留] [撤销]
+已移除 3 个桌面快捷方式        [撤销]
+```
+
+| 按钮 | 行为 |
+|---|---|
+| **撤销** | 从回收站还原 |
+| **保留** | 还原 **+ 加入保留名单**，以后不再移除 |
+
+> ⚠️ 还原前**先登记一次性豁免**（5 分钟有效），否则还原动作会触发 `Created` 被立刻再次移除。
+
+**「已移除」列表**：可单个恢复（恢复即加入保留名单）。
+
+### 焦点与稳定性
+
+- 提示、菜单操作完成后，焦点回到原来的列表，**不跳搜索框**
+- 不触发「点击面板外自动收起」
+- 所有文件操作 `try/catch`，失败只记日志，不崩溃、不弹错误框
+- 无权限目录直接跳过
+
+### 范围
+
+只影响桌面快捷方式 —— **不影响**启动台里的应用条目、排序、低价值标记，也不影响应用本身。
 ## 目录结构
 
 ```
@@ -590,6 +703,8 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `AppearancePresets.cs` | **毛玻璃预设集中定义**（6 款 × 7 参数）、`Apply` / `Find` / `MarkCustom` / `RestoreDefaults` / `DetectKey` |
 | `Catalog.cs` | 软件清单模型、分类规则、排序 |
 | `LowValueRules.cs` | **低价值条目识别**：名称关键词表 + 目标扩展名 + 失效判定；规则集中在一处便于增删 |
+| `DesktopKeep.cs` | **桌面保留名单**：路径规范化（大小写 / 分隔符 / 尾斜杠）、目标解析（`.lnk` 走 WScript.Shell、`.url` 读 URL=）、名单增删、`Prune` 自动失效 |
+| `DesktopCleaner.cs` | **桌面快捷方式清理**：双桌面 watcher、去重、延迟重试、保留名单跳过、回收站移除、待提权记录、`SHChangeNotify` |
 | `AppPaths.cs` | Shell 路径（`shell:AppsFolder\...`）识别与归一化：`IsShellPath` / `ExtractAumid` / `Normalize` |
 | `AppDedup.cs` | **跨来源去重合并**：真实路径优先 → 名称+发布者 → 名称+同 exe 名（三重证据）|
 | `ShortcutResolver.cs` | `.lnk` 目标解析 + 缓存（去重和图标都要用）|
@@ -1042,7 +1157,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-**二十九个套件，共 1724 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
+**三十个套件，共 1772 个断言**，不依赖测试框架，直接用 `csc` 编成 console exe。
 
 **单元测试**（不需要桌面会话）：
 
@@ -1072,6 +1187,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 | `FilesTabTest` | 118 | 目录列举：**不递归**、过滤规则 12 项（`.lnk`/`desktop.ini`/`~$`/`.tmp`/`.crdownload`/`.part`/`.download` 不显示，`.url`/`.exe`/`.msi` 显示）、隐藏与系统属性、四种排序、拼音过滤、**500 返回上限**、**5000 枚举上限**、错误处理不抛异常、**只读验证**、**后缀分组**（固定组命中/大小写归一化/「其他」判定含无扩展名/自定义后缀移出「其他」/`Passes` 筛选）|
 | `FileOpsTest` | 261 | 修改操作（**假文件系统，不碰真实回收站**）：名称校验 28 项（空/null/9 种非法字符/末尾点空格/8 个保留名/255 字符）、重命名成功与拒绝、**仅大小写变化走两步中转**、来源根不可改、**删除走回收站**（`HardDeleteCalls==0`）、**可移动盘/网络盘拒绝**、受保护目录、**受保护精确性**（用户 Desktop/Documents/Projects 不受保护、`WindowsApps` 不误伤）、剪切不移动、**粘贴不覆盖**、**禁止粘贴到自身子目录**、**同卷/跨卷分别走不同接口且 `CopyCalls==0`**、新建文件夹重名加序号、**失败不重试且不删原文件**、**日志追加与 1000 条裁剪**、**提权工具**（异常判定 / UAC 取消 / cmd 转义）|
 | `LowValueTest` | 59 | 低价值识别：卸载/帮助/许可/语言/修复关键词、6 种扩展名、失效快捷方式、大小写不敏感、`ExeNameOf`、不误伤普通应用 |
+| `DesktopKeepTest` | 47 | 保留名单：路径规范化（大小写/分隔符/尾斜杠/盘符根）、`NameKey`、扩展名过滤（只 `.lnk`/`.url`）、名单增删去重、**自动失效 Prune**、公共桌面判定 |
 
 **外观参数测试**：
 
@@ -1112,7 +1228,7 @@ tests\bin\AcceptanceTest.exe --report report.json
 tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 ```
 
-**最近一次运行结果：29 个套件、1724 个断言全部通过（2026-10-31）**
+**最近一次运行结果：30 个套件、1772 个断言全部通过（2026-10-31）**
 
 > **`FullscreenTest` 是环境相关的**：它需要真的创建一个全屏窗口来测判定逻辑。
 > 某些环境下窗口创建失败时会提前退出（5 → 3 PASS），但 `FAIL` 计数始终为 0、退出码 0，
@@ -1491,6 +1607,13 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 | `filesSort` | `"modified:desc"` | 排序，格式 `列:方向`。列 = `modified`/`name`/`size`，方向 = `asc`/`desc`。兼容旧值（只有列名 → 降序兜底）|
 | `lowValueMarked` | `[]` | **手动标记为低价值**的应用路径（右键「标记为低价值」）|
 | `lowValueUnmarked` | `[]` | **手动取消低价值标记**的应用路径（优先级最高）|
+| `desktopCleanEnabled` | `false` | 桌面保持无快捷方式总开关 |
+| `desktopCleanExisting` | `true` | 开启时是否同时清理现有的快捷方式 |
+| `desktopEnabledAt` | `""` | 开关被打开的时刻（补扫时间下限之一）|
+| `desktopLastScan` | `""` | 上次补扫时刻（补扫时间下限之一）|
+| `desktopKeepTargets` | `[]` | **保留名单**（规范化目标路径 / `name:文件名`）|
+| `desktopRemoved` | `[]` | 已移除记录（最多 200 条）|
+| `desktopPendingAdmin` | `[]` | 待处理（公共桌面被拒，需管理员权限）|
 
 > **不持久化**：后缀筛选、文件夹标签、选中项 —— 都只在会话内保留，重启后恢复默认。
 

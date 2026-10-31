@@ -98,7 +98,7 @@ namespace Clover
                 else if (o is MenuItem) funcs++;
             }
 
-            Check(funcs == 8, "★顶层功能项 = 8", "实际 " + funcs);
+        Check(funcs == 9, "★顶层功能项 = 9（新增「桌面快捷方式…」）", "实际 " + funcs);
             Check(seps == 3, "分隔线 = 3", "实际 " + seps);
             Console.WriteLine();
         }
@@ -115,7 +115,7 @@ namespace Clover
                 if (mi != null) names.Add(mi.Header as string ?? "");
             }
 
-            string[] expect = { "打开面板", "重新扫描应用", "外观…", "主题", "任务栏", "设置", "维护与诊断", "退出" };
+        string[] expect = { "打开面板", "重新扫描应用", "外观…", "桌面快捷方式…", "主题", "任务栏", "设置", "维护与诊断", "退出" };
             Check(names.Count == expect.Length, "顶层项数一致", names.Count + " vs " + expect.Length);
 
             for (int i = 0; i < Math.Min(names.Count, expect.Length); i++)
@@ -152,8 +152,8 @@ namespace Clover
             if (sepPos.Count == 3)
             {
                 Check(sepPos[0] == 2, "第 1 条分隔线在「重新扫描」之后", "索引 " + sepPos[0]);
-                Check(sepPos[1] == 5, "第 2 条分隔线在「主题」之后", "索引 " + sepPos[1]);
-                Check(sepPos[2] == 9, "第 3 条分隔线在「维护与诊断」之后", "索引 " + sepPos[2]);
+        Check(sepPos[1] == 6, "第 2 条分隔线在「主题」之后", "索引 " + sepPos[1]);
+        Check(sepPos[2] == 10, "第 3 条分隔线在「维护与诊断」之后", "索引 " + sepPos[2]);
             }
             Console.WriteLine();
         }

@@ -25,6 +25,12 @@ namespace Clover
         string baseDir;
         TriggerWindow trigger;
         AppWatcher watcher;
+
+        /// <summary>文件监听器（TriggerWindow 打开桌面设置时需要它来切换监听）。</summary>
+        internal AppWatcher Watcher
+        {
+            get { return watcher; }
+        }
         Settings settings;
         Catalog catalog;
         string current = "";
