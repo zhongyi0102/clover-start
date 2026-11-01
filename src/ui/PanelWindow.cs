@@ -66,6 +66,31 @@ namespace Clover
         StackPanel taskStack;
         DispatcherTimer taskTimer;
 
+        // ---- 拖放检测（防止拖拽中途被自动收起）----
+        //
+        // 问题：从资源管理器/桌面拖文件到面板时，焦点离开面板 → Deactivated
+        // → 250ms 后 HidePanel()，拖放目标消失。
+        //
+        // 对策（B 为主 + A 收尾）：
+        //   · B：Deactivated 时若左键仍按住，改用 80ms 轮询，等松手再判断
+        //   · A：DragEnter/DragOver 置 dragOverPanel，Drop/DragLeave 清除
+        //
+        // 为什么要 B：Deactivated 发生在 DragEnter **之前**，
+        // 那时 dragOverPanel 还是 false，光靠 A 挡不住。
+        DispatcherTimer dragWatchTimer;
+
+        /// <summary>拖拽正在面板上方（DragEnter 置位，Drop/DragLeave 清除）。</summary>
+        bool dragOverPanel;
+
+        /// <summary>轮询起点，用于兜底超时。</summary>
+        DateTime dragWatchStart;
+
+        /// <summary>兜底：轮询最多持续这么久，避免标志卡死导致面板再也不收。</summary>
+        static readonly TimeSpan DragWatchLimit = TimeSpan.FromSeconds(30);
+
+        /// <summary>拖拽经过时的虚线高亮层。</summary>
+        Border dropHighlight;
+
         StackPanel navStack;
 
         /// <summary>用户自定义标签（+ 号新建的），持久化在 config\nav-tabs.json。</summary>
@@ -323,32 +348,22 @@ namespace Clover
             Deactivated += delegate(object s, EventArgs e)
             {
                 Ui.Log("Deactivated active=" + IsActive + " everActivated=" + everActivated
-                    + " suppress=" + (DateTime.Now < suppressDeactivate) + " menu=" + taskMenuOpen);
+                    + " suppress=" + (DateTime.Now < suppressDeactivate) + " menu=" + taskMenuOpen
+                    + " lbtn=" + Native.IsLeftButtonDown() + " dragOver=" + dragOverPanel);
                 if (taskMenuOpen) return;
                 if (DateTime.Now < suppressDeactivate) return;
                 if (trigger != null && trigger.IsActive) return;
 
-                // Show()/Activate() 期间可能先派发一次 Deactivated，紧接着又 Activated。
-                // 延迟到本调度周期之后再确认，避免面板“刚弹出就被自己收起来”。
-                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+                // ★ 左键仍按住 → 可能正在拖拽（从桌面/资源管理器拖文件进来），
+                //   不能立刻走隐藏。改为短周期轮询，等松手再判断。
+                if (Native.IsLeftButtonDown())
                 {
-                    try
-                    {
-                        if (!IsVisible) return;
-                        if (taskMenuOpen) return;
-                        if (DateTime.Now < suppressDeactivate) return;
-                        if (trigger != null && trigger.IsActive) return;
-                        // 从来没被激活过（例如前台激活被系统拒绝）就不要自动收起，
-                        // 否则面板会在用户还没看到时自己消失。
-                        if (!everActivated) return;
-                        if (IsActive) return; // 已经重新激活，不收起
-                        HidePanel();
-                    }
-                    catch (Exception ex)
-                    {
-                        Ui.LogError(ex, "自动收起面板");
-                    }
-                }));
+                    Ui.Log("左键按住，启动拖放轮询");
+                    StartDragWatch();
+                    return;
+                }
+
+                ScheduleAutoHide();
             };
             Activated += delegate
             {
@@ -364,6 +379,20 @@ namespace Clover
             // 是按面板在屏幕上的相对位置从大图裁一块。
             // 只听 SizeChanged 的话，拖动面板（尺寸不变）时取景不更新。
             // 250ms 合并：拖动中背景静止，松手约 1/4 秒后跟上。
+            // ---- 拖放接线（A 部分：只做事件与高亮，不处理 Drop 的移动逻辑）----
+            //
+            // 真正的拖入/拖出（移动文件、落点判断）留给第 2 步。
+            // 这里的作用只有一个：在拖拽经过时置 dragOverPanel，
+            // 防止 Deactivated 的自动收起把面板收走。
+            // ---- 拖放接线（A 部分：只做事件与高亮，不处理 Drop 的移动逻辑）----
+            //
+            // 事件挂在**窗口**上，不挂 Content：挂 Content 时拖过不同子元素
+            // 会连续冒泡出 Enter/Leave；挂窗口则整个客户区只有一个拖放目标。
+            AllowDrop = true;
+            DragEnter += delegate(object s, DragEventArgs e) { OnPanelDragEnter(e); };
+            DragOver += delegate(object s, DragEventArgs e) { OnPanelDragOver(e); };
+            DragLeave += delegate(object s, DragEventArgs e) { OnPanelDragLeave(e); };
+            Drop += delegate(object s, DragEventArgs e) { OnPanelDrop(e); };
             SizeChanged += delegate { ScheduleBackdropReframe(); };
             LocationChanged += delegate { ScheduleBackdropReframe(); };
 
@@ -893,6 +922,221 @@ namespace Clover
         TranslateTransform showShift;
         DoubleAnimation showShiftAnim;
         DoubleAnimation hideShiftAnim;
+
+        /// <summary>
+        /// 原来的自动收起：延迟到本调度周期之后确认，仍非激活才收起。
+        /// </summary>
+        void ScheduleAutoHide()
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+            {
+                try
+                {
+                    if (!IsVisible) return;
+                    if (taskMenuOpen) return;
+                    if (DateTime.Now < suppressDeactivate) return;
+                    if (trigger != null && trigger.IsActive) return;
+                    if (!everActivated) return;
+                    if (IsActive) return;
+                    if (dragOverPanel) return;          // 拖拽在面板上，别收
+                    if (Native.IsLeftButtonDown()) { StartDragWatch(); return; }
+                    HidePanel();
+                }
+                catch (Exception ex) { Ui.LogError(ex, "自动收起面板"); }
+            }));
+        }
+
+        /// <summary>
+        /// 左键按住时启动短周期轮询：每 80ms 看一次左键是否松开。
+        ///
+        /// 松手后：面板重新激活 / 鼠标仍在面板内 / 拖拽仍在面板上 → 不收起；
+        /// 否则走原来的隐藏逻辑。
+        ///
+        /// 兜底：轮询超过 DragWatchLimit（30 秒）强制停表并按常规逻辑判断，
+        /// 避免 GetAsyncKeyState 状态异常时面板永远收不起来。
+        /// </summary>
+        void StartDragWatch()
+        {
+            try
+            {
+                if (dragWatchTimer == null)
+                {
+                    dragWatchTimer = new DispatcherTimer();
+                    dragWatchTimer.Interval = TimeSpan.FromMilliseconds(80);
+                    dragWatchTimer.Tick += delegate { OnDragWatchTick(); };
+                }
+
+                dragWatchStart = DateTime.Now;
+                if (!dragWatchTimer.IsEnabled) dragWatchTimer.Start();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "启动拖放轮询"); }
+        }
+
+        void StopDragWatch()
+        {
+            try { if (dragWatchTimer != null) dragWatchTimer.Stop(); } catch { }
+        }
+
+        void OnDragWatchTick()
+        {
+            try
+            {
+                if (!IsVisible) { StopDragWatch(); return; }
+
+                // 兜底超时：标志可能卡住，强制结束轮询
+                if (DateTime.Now - dragWatchStart > DragWatchLimit)
+                {
+                    Ui.Log("拖放轮询超时（" + DragWatchLimit.TotalSeconds + "s），强制结束");
+                    StopDragWatch();
+                    dragOverPanel = false;
+                    ScheduleAutoHide();
+                    return;
+                }
+
+                // 左键还按着 → 继续等
+                if (Native.IsLeftButtonDown()) return;
+
+                // ---- 松手了 ----
+                StopDragWatch();
+
+                // 拖拽标志清掉（Drop 可能没触发，这里兜底）
+                dragOverPanel = false;
+
+                // 面板重新激活 → 不收
+                if (IsActive) { Ui.Log("松手后面板已激活，不收起"); return; }
+
+                // 鼠标仍在面板范围内 → 不收
+                if (IsMouseOverPanel()) { Ui.Log("松手后鼠标仍在面板内，不收起"); return; }
+
+                Ui.Log("松手后鼠标在面板外，收起");
+                HidePanel();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "拖放轮询"); StopDragWatch(); }
+        }
+
+        /// <summary>鼠标光标当前是否落在面板窗口范围内（屏幕坐标）。</summary>
+        /// <summary>
+        /// 拖拽经过时在内容区画一圈虚线，提示"可以放这里"。
+        ///
+        /// 用 Border 而不是改面板边框：面板的边框是玻璃层的一部分，
+        /// 改它会影响圆角与阴影。
+        /// </summary>
+        // ========== 拖放事件处理 ==========
+        //
+        // 全部挂在窗口级（见构造里的接线），所以整个客户区只有一个拖放目标。
+        // 高亮层是常驻的，这里只切 Visibility，不增删子元素。
+
+        void OnPanelDragEnter(DragEventArgs e)
+        {
+            try
+            {
+                dragOverPanel = true;
+                StopDragWatch();          // 已经进来了，不用再轮询
+                e.Effects = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
+                SetDropHighlight(true);
+                e.Handled = true;
+                Ui.Log("DragEnter");
+            }
+            catch (Exception ex) { Ui.LogError(ex, "DragEnter"); }
+        }
+
+        void OnPanelDragOver(DragEventArgs e)
+        {
+            try
+            {
+                dragOverPanel = true;
+                e.Effects = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
+                // 不重复 SetDropHighlight：DragOver 高频触发，反复设属性没必要
+                e.Handled = true;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 拖拽离开。
+        ///
+        /// ★ 不信任事件本身：拖过子元素边界时系统会派发假的 DragLeave。
+        /// 以光标是否真的在窗口矩形内为准 —— 在里面就当没离开。
+        /// </summary>
+        void OnPanelDragLeave(DragEventArgs e)
+        {
+            try
+            {
+                if (IsMouseOverPanel())
+                {
+                    // 还在面板上，忽略这次 Leave
+                    e.Handled = true;
+                    return;
+                }
+
+                // 左键还按着 → 可能只是掠过边界，等松手再说
+                if (Native.IsLeftButtonDown())
+                {
+                    e.Handled = true;
+                    return;
+                }
+
+                dragOverPanel = false;
+                SetDropHighlight(false);
+                Ui.Log("DragLeave（真的离开）");
+            }
+            catch (Exception ex) { Ui.LogError(ex, "DragLeave"); }
+        }
+
+        void OnPanelDrop(DragEventArgs e)
+        {
+            try
+            {
+                dragOverPanel = false;
+                StopDragWatch();
+                SetDropHighlight(false);
+                // 第 2 步在这里做真正的移动；现在只记日志。
+                Ui.Log("Drop（第 1 步仅记录，不移动文件）");
+                e.Handled = true;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "Drop"); }
+        }
+
+        static bool HasFiles(DragEventArgs e)
+        {
+            try
+            {
+                return e.Data != null && e.Data.GetDataPresent(DataFormats.FileDrop);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 切换拖放高亮的可见性。
+        ///
+        /// 高亮层在 BuildUi 里一次性创建（常驻），这里只切 Visibility ——
+        /// 动态 Add/Remove 子元素会改变命中测试区域，导致 Enter/Leave 抖动。
+        /// </summary>
+        void SetDropHighlight(bool on)
+        {
+            try
+            {
+                if (dropHighlight == null) return;
+                dropHighlight.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "拖放高亮"); }
+        }
+        bool IsMouseOverPanel()
+        {
+            try
+            {
+                Native.POINT p;
+                if (!Native.GetCursorPos(out p)) return false;
+
+                Native.RECT r;
+                IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+                if (!Native.GetWindowRect(hwnd, out r)) return false;
+
+                return p.X >= r.Left && p.X <= r.Right
+                    && p.Y >= r.Top && p.Y <= r.Bottom;
+            }
+            catch { return false; }
+        }
 
         public void HidePanel()
         {

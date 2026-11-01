@@ -434,6 +434,24 @@ namespace Clover
             darkOverlay.CornerRadius = new CornerRadius(Ui.R.Lg);
             contentHost.Children.Add(darkOverlay);
 
+            // ---- 拖放高亮层（常驻）----
+            //
+            // 必须常驻且只切 Visibility：早期版本在 DragEnter 里动态 Add
+            // 一个 Border，子元素增删改变了命中测试区域，系统会在边界
+            // 反复派发 Enter/Leave（实测 7~8ms 抖动）。
+            //
+            // IsHitTestVisible = false：高亮层绝不能参与命中测试，
+            // 否则它自己会变成拖放目标，把事件从内容区抢走。
+            dropHighlight = new Border();
+            dropHighlight.BorderBrush = Ui.Accent;
+            dropHighlight.BorderThickness = new Thickness(2);
+            dropHighlight.CornerRadius = new CornerRadius(Ui.R.Lg);
+            dropHighlight.Margin = new Thickness(6);
+            dropHighlight.IsHitTestVisible = false;
+            dropHighlight.Background = new SolidColorBrush(Color.FromArgb(24, 56, 140, 72));
+            dropHighlight.Visibility = Visibility.Collapsed;
+            contentHost.Children.Add(dropHighlight);
+
             glassBackdrop = new GlassBackdrop(this, contentHost, Path.Combine(baseDir, "res"));
             glassBackdrop.OpacityPercent = 0;    // 默认关闭，由设置决定
 

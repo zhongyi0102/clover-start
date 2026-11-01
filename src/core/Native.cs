@@ -100,6 +100,21 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern bool GetCursorPos(out POINT point);
 
+        // ---- 按键状态（拖放检测用）----
+        // GetAsyncKeyState 读物理按键状态，不受窗口焦点影响。
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
+        /// <summary>鼠标左键虚拟键码。</summary>
+        public const int VK_LBUTTON = 0x01;
+
+        /// <summary>左键当前是否被按住（物理状态）。</summary>
+        public static bool IsLeftButtonDown()
+        {
+            try { return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0; }
+            catch { return false; }
+        }
+
         [DllImport("user32.dll")]
         public static extern IntPtr WindowFromPoint(int x, int y);
 
