@@ -70,6 +70,12 @@ namespace Clover
 
         /// <summary>用户自定义标签（+ 号新建的），持久化在 config\nav-tabs.json。</summary>
         NavTabs customTabs;
+
+        // ---- 虚拟桌面（自定义标签）----
+        Canvas deskCanvas;
+        Canvas deskOverlay;
+        VirtualDesks virtualDesks;
+        DesktopView deskView;
         WrapPanel tilePanel;
 
         // ---- 「文件」标签（2-3）----

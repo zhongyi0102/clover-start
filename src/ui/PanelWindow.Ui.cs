@@ -339,6 +339,20 @@ namespace Clover
 
             contentStack.Children.Add(filesPanel);
 
+            // ---- 虚拟桌面层（自定义标签用）----
+            deskCanvas = new Canvas();
+            deskCanvas.Background = Brushes.Transparent;
+            deskCanvas.Visibility = Visibility.Collapsed;
+            deskCanvas.ClipToBounds = true;
+            contentStack.Children.Add(deskCanvas);
+
+            deskOverlay = new Canvas();
+            deskOverlay.IsHitTestVisible = false;
+            deskOverlay.Visibility = Visibility.Collapsed;
+            deskOverlay.HorizontalAlignment = HorizontalAlignment.Stretch;
+            deskOverlay.VerticalAlignment = VerticalAlignment.Stretch;
+            contentStack.Children.Add(deskOverlay);
+
             // ---- 拖拽插入标记（参考 GlassBoard 的 insertMarker）----
             //
             // 拖动磁贴时，在"将要插入的位置"画一根竖条，

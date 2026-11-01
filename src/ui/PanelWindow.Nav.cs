@@ -780,6 +780,8 @@ namespace Clover
             SearchResults,
             /// <summary>「文件」标签面板。</summary>
             Files,
+            /// <summary>虚拟桌面图标层（自定义标签）。</summary>
+            Desks,
         }
 
         /// <summary>
@@ -847,11 +849,82 @@ namespace Clover
                 if (filesPanel != null)
                     filesPanel.Visibility = layer == ContentLayer.Files
                         ? Visibility.Visible : Visibility.Collapsed;
+
+                if (deskCanvas != null)
+                    deskCanvas.Visibility = layer == ContentLayer.Desks
+                        ? Visibility.Visible : Visibility.Collapsed;
+
+                if (deskOverlay != null)
+                    deskOverlay.Visibility = layer == ContentLayer.Desks
+                        ? Visibility.Visible : Visibility.Collapsed;
             }
             catch (Exception ex)
             {
                 Ui.LogError(ex, "切换内容层");
             }
+        }
+
+        /// <summary>
+        /// 当前标签是不是一个虚拟桌面（用户自定义标签）。
+        ///
+        /// 内置三个（常用 / 全部 / 文件）都不是；其余只有确实存在
+        /// customTabs 里的才算 —— 避免旧配置里残留的已删除标签名被当成桌面。
+        /// </summary>
+        bool IsDeskTab(string name)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(name)) return false;
+                if (name == "常用") return false;
+                if (name == FilesCategory) return false;
+                if (customTabs == null) return false;
+                return customTabs.FindIndex(name) >= 0;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 渲染一个虚拟桌面：显示它对应磁盘文件夹里的文件图标。
+        ///
+        /// 首次进入时懒创建 VirtualDesks / DesktopView（和 FilesTabView 一个套路）。
+        /// </summary>
+        void RenderDeskTab(string name)
+        {
+            try
+            {
+                Ui.Log("[DBG] RenderDeskTab 开始: " + name);
+                ShowContentLayer(ContentLayer.Desks);
+                if (searchResults != null) searchResults.Clear();
+
+                if (deskCanvas == null || deskOverlay == null) return;
+
+                // 首次：建存储与视图
+                if (virtualDesks == null)
+                {
+                    virtualDesks = new VirtualDesks(baseDir);
+                    virtualDesks.Load();
+
+                    if (string.IsNullOrEmpty(virtualDesks.Root))
+                        virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
+                }
+
+                if (deskView == null)
+                {
+                    deskView = new DesktopView(this, deskCanvas, deskOverlay, virtualDesks, name);
+                    deskView.OnLayoutChanged = delegate
+                    {
+                        try { if (virtualDesks != null) virtualDesks.Save(); } catch { }
+                    };
+                }
+
+                // 确保磁盘文件夹存在
+                virtualDesks.EnsureDesk(name);
+
+                // 尺寸变了才能算空位，先跑一次布局
+                deskCanvas.UpdateLayout();
+                deskView.Load(name);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "渲染虚拟桌面"); }
         }
 
         void RenderFilesTab()
@@ -895,6 +968,17 @@ namespace Clover
             if (current == FilesCategory)
             {
                 RenderFilesTab();
+                return;
+            }
+
+            // ---- 虚拟桌面（自定义标签）----
+            //
+            // 自定义标签展示的是磁盘上真实文件夹里的文件，不是应用磁贴，
+            // 所以走独立渲染路径。
+            if (IsDeskTab(current))
+            {
+                Ui.Log("[DBG] RenderDeskTab 命中: " + current);
+                RenderDeskTab(current);
                 return;
             }
 

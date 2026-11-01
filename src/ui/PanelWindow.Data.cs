@@ -959,6 +959,16 @@ namespace Clover
                     return;
                 }
 
+                // 自定义标签（虚拟桌面）：只要还在 nav-tabs.json 里就有效。
+                //
+                // 不能走下面「必须还在 catalog.Order 里」那条：自定义标签不是
+                // 应用分类，它对应的是磁盘文件夹，与 catalog 无关。
+                if (customTabs != null && customTabs.FindIndex(cat) >= 0)
+                {
+                    current = cat;
+                    return;
+                }
+
                 // 普通分类：必须还在 Order 里，**且还有可见项**。
                 // 只查 Order 不够——单个隐藏会把某分类掏空，那样也该回退。
                 bool existsInOrder = false;

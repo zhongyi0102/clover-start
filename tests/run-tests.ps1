@@ -172,6 +172,9 @@ Invoke-Suite 'WatcherTest' $baseRefs `
 # 「文件」标签：目录列举（过滤 / 排序 / 上限 / 只读）
 Invoke-Suite 'FilesTabTest' $baseRefs `
     (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
+# 虚拟桌面存储：名称安全 / 坐标 / 桌面增删改名 / 持久化 / 容错
+Invoke-Suite 'VirtualDesksTest' $baseRefs `
+    (@((Join-Path $coreDir 'VirtualDesks.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'VirtualDesksTest.cs')))
 
 # 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
 Invoke-Suite 'NavTabsTest' $baseRefs `
