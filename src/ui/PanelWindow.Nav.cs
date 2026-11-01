@@ -480,32 +480,120 @@ namespace Clover
                 cm.Items.Add(rename);
                 MenuItem del = new MenuItem();
                 del.Header = "删除";
-                del.Click += delegate
-                {
-                    try
-                    {
-                        if (!TextPromptDialog.Confirm(this, "删除标签",
-                            "确定删除标签「" + name + "」？", "删除")) return;
-                        string err = customTabs.Remove(name);
-                        if (err != null)
-                        {
-                            MessageBox.Show(this, err, "四叶草 · 删除标签",
-                                MessageBoxButton.OK, MessageBoxImage.Information);
-                            return;
-                        }
-                        bool wasCurrent = (current == name);
-                        RebuildNav();
-                        if (wasCurrent) SwitchCategory("常用");
-                        Ui.Log("删除标签: " + name);
-                    }
-                    catch (Exception ex) { Ui.LogError(ex, "删除标签"); }
-                };
+                del.Click += delegate { DeleteTabWithFiles(name); };
                 cm.Items.Add(del);
                 cm.PlacementTarget = anchor;
                 cm.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
                 cm.IsOpen = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "标签右键菜单"); }
+        }
+
+        /// <summary>
+        /// 删除一个自定义标签，并处理它文件夹里的文件。
+        ///
+        ///   1. 文件夹为空 / 不存在 → 不弹窗，直接删
+        ///   2. 「放回桌面」→ 搬文件，全成功才删空文件夹与标签
+        ///   3. 「保留在存放文件夹」→ 只删标签与坐标
+        ///
+        /// 有文件搬不走（被占用等）时**不删标签**，汇总提示后保持现状。
+        /// </summary>
+        void DeleteTabWithFiles(string name)
+        {
+            try
+            {
+                if (customTabs == null) return;
+                EnsureVirtualDesks();
+                string dir = virtualDesks == null ? null : virtualDesks.FolderOf(name);
+
+                if (!DeskRemoval.HasContent(dir))
+                {
+                    DoRemoveTab(name);
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)
+                            && Directory.GetFileSystemEntries(dir).Length == 0)
+                            Directory.Delete(dir, false);
+                    }
+                    catch { }
+                    return;
+                }
+
+                DeskDeleteDialog.Choice choice = DeskDeleteDialog.Ask(this, name, dir);
+                if (choice == DeskDeleteDialog.Choice.Cancel) return;
+
+                if (choice == DeskDeleteDialog.Choice.KeepInPlace)
+                {
+                    DoRemoveTab(name);
+                    MessageBox.Show(this,
+                        "标签已删除。\r\n\r\n文件保留在：\r\n" + dir,
+                        "四叶草 · 删除标签",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    Ui.Log("删除标签（保留文件）: " + name + " -> " + dir);
+                    return;
+                }
+
+                DeskRemoval.Result r = DeskRemoval.MoveToDesktop(dir);
+
+                if (!r.AllOk)
+                {
+                    string detail = "";
+                    for (int i = 0; i < r.Failed.Count && i < 5; i++)
+                    {
+                        detail += "\r\n  · " + r.Failed[i];
+                        if (i < r.Reasons.Count && !string.IsNullOrEmpty(r.Reasons[i]))
+                            detail += "（" + r.Reasons[i] + "）";
+                    }
+                    if (r.Failed.Count > 5) detail += "\r\n  · 还有 " + (r.Failed.Count - 5) + " 项…";
+
+                    MessageBox.Show(this,
+                        r.Failed.Count + " 个文件未能放回，仍保留在：\r\n" + dir
+                        + "\r\n" + detail
+                        + "\r\n\r\n标签暂未删除，请关闭占用这些文件的程序后重试。",
+                        "四叶草 · 删除标签",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    Ui.Log("删除标签失败（有文件未放回）: " + name + " 失败 " + r.Failed.Count + " 项");
+                    return;
+                }
+
+                DoRemoveTab(name);
+                Ui.Log("删除标签（已放回桌面 " + r.Moved + " 项）: " + name);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "删除标签"); }
+        }
+
+        /// <summary>只删标签记录与坐标（不动磁盘）。</summary>
+        void DoRemoveTab(string name)
+        {
+            try
+            {
+                string err = customTabs.Remove(name);
+                if (err != null)
+                {
+                    MessageBox.Show(this, err, "四叶草 · 删除标签",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+                if (virtualDesks != null) virtualDesks.ForgetDesk(name);
+                bool wasCurrent = (current == name);
+                RebuildNav();
+                if (wasCurrent) SwitchCategory("常用");
+            }
+            catch (Exception ex) { Ui.LogError(ex, "移除标签记录"); }
+        }
+
+        /// <summary>确保 virtualDesks 已初始化（多处共用）。</summary>
+        void EnsureVirtualDesks()
+        {
+            try
+            {
+                if (virtualDesks != null) return;
+                virtualDesks = new VirtualDesks(baseDir);
+                virtualDesks.Load();
+                if (string.IsNullOrEmpty(virtualDesks.Root))
+                    virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "初始化虚拟桌面存储"); }
         }
 
         void PromptNewTab()
@@ -892,21 +980,13 @@ namespace Clover
         {
             try
             {
-                Ui.Log("[DBG] RenderDeskTab 开始: " + name);
                 ShowContentLayer(ContentLayer.Desks);
                 if (searchResults != null) searchResults.Clear();
 
                 if (deskCanvas == null || deskOverlay == null) return;
 
-                // 首次：建存储与视图
-                if (virtualDesks == null)
-                {
-                    virtualDesks = new VirtualDesks(baseDir);
-                    virtualDesks.Load();
-
-                    if (string.IsNullOrEmpty(virtualDesks.Root))
-                        virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
-                }
+                // 首次：建存储与视图（复用统一初始化）
+                EnsureVirtualDesks();
 
                 if (deskView == null)
                 {
@@ -977,7 +1057,6 @@ namespace Clover
             // 所以走独立渲染路径。
             if (IsDeskTab(current))
             {
-                Ui.Log("[DBG] RenderDeskTab 命中: " + current);
                 RenderDeskTab(current);
                 return;
             }
@@ -1615,6 +1694,29 @@ namespace Clover
                         current = "常用";
                         SaveLastCategory();
                     }
+                    return;
+                }
+
+                // 自定义标签（虚拟桌面）：只要还在 nav-tabs.json 里就算合法。
+                //
+                // 不能把它当成「已不存在的分类」：它不对应 catalog 分类，
+                // 对应的是磁盘文件夹。目录不在就自动建，不要回退到「常用」。
+                if (customTabs != null && customTabs.FindIndex(current) >= 0)
+                {
+                    // 目录丢了（被手删 / 换盘）→ 重建空目录，标签仍然有效
+                    try
+                    {
+                        if (virtualDesks == null)
+                        {
+                            virtualDesks = new VirtualDesks(baseDir);
+                            virtualDesks.Load();
+                        }
+                        if (string.IsNullOrEmpty(virtualDesks.Root))
+                            virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
+
+                        virtualDesks.EnsureDesk(current);
+                    }
+                    catch { }
                     return;
                 }
 

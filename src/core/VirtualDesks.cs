@@ -179,6 +179,8 @@ namespace Clover
                 try { Log.Warn("读取 virtual-desks.json 失败，按空处理: " + ex.Message); } catch { }
                 Desks = new Dictionary<string, Desk>(StringComparer.OrdinalIgnoreCase);
             }
+
+            WarnIfRootLooksLikeDeskFolder();
         }
 
         static void ReadNum(Dictionary<string, object> d, string key, ref double v)
@@ -195,6 +197,48 @@ namespace Clover
                 double parsed;
                 if (double.TryParse(Convert.ToString(o), System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out parsed)) v = parsed;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 只读检查：root 是否被误设成了某个桌面文件夹（而不是存放根目录）。
+        ///
+        /// ── 为什么要检查 ──
+        ///
+        /// root 的语义是「所有桌面的父目录」，`FolderOf` 会在其下拼标签名。
+        /// 若 root 直接指向了某个桌面文件夹，就会多拼一层（
+        /// `...\测试台\测试台`），表现为「载入 0 项」。
+        ///
+        /// ── 为什么只警告不改路径 ──
+        ///
+        /// 静默改用户配置比报错更糟：用户会在不知情的情况下发现文件"换了地方"。
+        /// 这里只记一条警告；真正的提示放在「设置里选目录」的交互中
+        /// （选定前告知 + 确认）。
+        /// </summary>
+        void WarnIfRootLooksLikeDeskFolder()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(Root)) return;
+                if (Desks == null || Desks.Count == 0) return;
+
+                string trimmed = Root.TrimEnd('\\', '/');
+                string leaf = Path.GetFileName(trimmed);
+                if (string.IsNullOrEmpty(leaf)) return;
+
+                // root 的最后一段恰好等于某个桌面名 → 很可能选错层级
+                if (Desks.ContainsKey(leaf))
+                {
+                    try
+                    {
+                        Log.Warn("虚拟桌面存放目录可能选错了层级：root=\"" + Root
+                            + "\" 的最后一段与桌面「" + leaf + "」同名，"
+                            + "实际路径会变成 \"" + Path.Combine(Root, leaf) + "\"。"
+                            + "建议在设置里改为它的上级目录。");
+                    }
+                    catch { }
+                }
             }
             catch { }
         }

@@ -28,3 +28,6 @@ src/core/Version.cs
 *.suo
 Thumbs.db
 .DS_Store
+
+# 工具临时锁文件
+.dsh-ops-update-*.lock
