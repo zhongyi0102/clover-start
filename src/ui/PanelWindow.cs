@@ -1090,13 +1090,67 @@ namespace Clover
                 dragOverPanel = false;
                 StopDragWatch();
                 SetDropHighlight(false);
-                // 第 2 步在这里做真正的移动；现在只记日志。
-                Ui.Log("Drop（第 1 步仅记录，不移动文件）");
+
+                if (!HasFiles(e)) { e.Handled = true; return; }
+
+                // 只在虚拟桌面标签里接收：应用磁贴/文件标签没有"落位"概念
+                if (!IsDeskTab(current) || deskView == null)
+                {
+                    Ui.Log("Drop 忽略：当前不是虚拟桌面标签（" + current + "）");
+                    e.Handled = true;
+                    return;
+                }
+
+                string[] paths = null;
+                try { paths = e.Data.GetData(DataFormats.FileDrop) as string[]; }
+                catch { }
+                if (paths == null || paths.Length == 0) { e.Handled = true; return; }
+
+                EnsureVirtualDesks();
+                string dest = virtualDesks == null ? null : virtualDesks.FolderOf(current);
+                if (string.IsNullOrEmpty(dest)) { e.Handled = true; return; }
+
+                // 松手坐标（相对 canvas，已是 DIP）
+                double dropX = 0, dropY = 0;
+                try
+                {
+                    Point p = e.GetPosition(deskCanvas);
+                    dropX = p.X;
+                    dropY = p.Y;
+                }
+                catch { }
+
+                DeskImporter.Result r = DeskImporter.Import(paths, dest);
+                Ui.Log("Drop 导入: 成功 " + r.ImportedCount
+                    + " / 跳过 " + r.SkippedCount
+                    + " / 失败 " + r.Failed.Count);
+
+                if (r.AnyImported)
+                {
+                    deskView.ReloadAndPlace(current, r.Imported, dropX, dropY);
+                    if (virtualDesks != null) virtualDesks.Save();
+                }
+
+                // 失败才提示；跳过（.exe/.lnk）按需求静默
+                if (!r.AllOk)
+                {
+                    string detail = "";
+                    for (int i = 0; i < r.Failed.Count && i < 5; i++)
+                    {
+                        detail += "\r\n  · " + r.Failed[i];
+                        if (i < r.Reasons.Count && !string.IsNullOrEmpty(r.Reasons[i]))
+                            detail += "（" + r.Reasons[i] + "）";
+                    }
+                    MessageBox.Show(this,
+                        r.Failed.Count + " 个文件未能移入：" + detail,
+                        "四叶草 · 拖入",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+
                 e.Handled = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "Drop"); }
         }
-
         static bool HasFiles(DragEventArgs e)
         {
             try

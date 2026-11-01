@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Clover
 {
@@ -117,6 +118,28 @@ namespace Clover
 
         [DllImport("user32.dll")]
         public static extern IntPtr WindowFromPoint(int x, int y);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+
+        /// <summary>GA_ROOT = 2，取顶层窗口。</summary>
+        public const uint GA_ROOT = 2;
+
+        /// <summary>取窗口类名（失败返回空串）。</summary>
+        public static string ClassNameOf(IntPtr hWnd)
+        {
+            try
+            {
+                if (hWnd == IntPtr.Zero) return "";
+                StringBuilder sb = new StringBuilder(256);
+                int n = GetClassName(hWnd, sb, sb.Capacity);
+                return n > 0 ? sb.ToString() : "";
+            }
+            catch { return ""; }
+        }
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);

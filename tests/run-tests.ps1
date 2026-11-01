@@ -178,6 +178,12 @@ Invoke-Suite 'VirtualDesksTest' $baseRefs `
 # 删除虚拟桌面：放回桌面 / 保留 / 同名冲突 / 占用失败 / 空桌面
 Invoke-Suite 'DeskRemovalTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskRemoval.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRemovalTest.cs')))
+# 拖入导入：过滤 exe/lnk / 移动 / 冲突改名 / 文件夹 / 占用
+Invoke-Suite 'DeskImporterTest' $baseRefs `
+    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+# 拖出落点判定：类名 → 桌面/资源管理器/其他 → 是否移动源
+Invoke-Suite 'DropTargetTest' $baseRefs `
+    (@((Join-Path $coreDir 'DropTarget.cs'), (Join-Path $coreDir 'Native.cs'), (Join-Path $testDir 'DropTargetTest.cs')))
 
 # 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
 Invoke-Suite 'NavTabsTest' $baseRefs `
