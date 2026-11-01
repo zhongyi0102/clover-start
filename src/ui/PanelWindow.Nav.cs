@@ -306,6 +306,17 @@ namespace Clover
             bool hasFilesTab = settings == null || settings.ShowFilesTab;
             if (hasFilesTab) cats.Add(FilesCategory);
 
+            // 用户自定义标签（+ 号建的），排在「文件」之后
+            if (customTabs != null)
+            {
+                foreach (NavTabs.Tab t in customTabs.Items)
+                {
+                    if (t == null || string.IsNullOrEmpty(t.Name)) continue;
+                    if (cats.Contains(t.Name)) continue;
+                    cats.Add(t.Name);
+                }
+            }
+
             foreach (string cat in cats)
             {
                 string c = cat;
@@ -373,7 +384,20 @@ namespace Clover
                     SwitchCategory(c);
                 };
 
-                // 右键分类：两个标签都是虚拟分类，不提供改名/排序菜单
+                // 右键：只有自定义标签能改名/删除，内置三个不给菜单
+                if (NavTabs.IsReserved(c) || c == "")
+                {
+                    item.ToolTip = null;
+                }
+                else
+                {
+                    item.ToolTip = "右键：重命名 / 删除";
+                    item.MouseRightButtonUp += delegate(object s2, MouseButtonEventArgs e2)
+                    {
+                        e2.Handled = true;
+                        ShowTabMenu(c, item);
+                    };
+                }
 
                 navStack.Children.Add(item);
                 navCats.Add(c);
@@ -384,6 +408,127 @@ namespace Clover
             }
 
             UpdateNav();
+
+            // 「+」新建标签：排在所有标签最后
+            navStack.Children.Add(MakeAddTabButton());
+        }
+
+        /// <summary>
+        /// 标签栏末尾的圆形「+」：新建标签。
+        ///
+        /// 样式对齐「文件」页来源行末尾那个 +：圆形（CornerRadius = 高度/2）、
+        /// 半透明浅灰底、悬停变深。
+        /// </summary>
+        Border MakeAddTabButton()
+        {
+            Border b = new Border();
+            b.Width = 30;
+            b.Height = 30;
+            b.CornerRadius = new CornerRadius(b.Height / 2);
+            b.Margin = new Thickness(0, 2, 4, 2);
+            b.Cursor = Cursors.Hand;
+            b.Background = Ui.SearchBg;
+            b.BorderBrush = Ui.Line;
+            b.BorderThickness = new Thickness(1);
+            b.ToolTip = "新建标签";
+
+            TextBlock t = new TextBlock();
+            t.Text = "+";
+            t.FontFamily = Ui.YaHei;
+            t.FontSize = 15;
+            t.Foreground = Ui.Sub;
+            t.HorizontalAlignment = HorizontalAlignment.Center;
+            t.VerticalAlignment = VerticalAlignment.Center;
+            b.Child = t;
+
+            b.MouseEnter += delegate { b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
+            b.MouseLeftButtonUp += delegate { PromptNewTab(); };
+            return b;
+        }
+
+        /// <summary>新建标签：弹小输入框，回车确认。</summary>
+        /// <summary>自定义标签的右键菜单：重命名 / 删除。</summary>
+        void ShowTabMenu(string name, Border anchor)
+        {
+            try
+            {
+                ContextMenu cm = new ContextMenu();
+                MenuItem rename = new MenuItem();
+                rename.Header = "重命名…";
+                rename.Click += delegate
+                {
+                    try
+                    {
+                        string nn = TextPromptDialog.Ask(this, "重命名标签", "新名字（最多 12 字）", name);
+                        if (nn == null) return;
+                        string err = customTabs.Rename(name, nn);
+                        if (err != null)
+                        {
+                            MessageBox.Show(this, err, "四叶草 · 重命名标签",
+                                MessageBoxButton.OK, MessageBoxImage.Information);
+                            return;
+                        }
+                        string renamed = NavTabs.SanitizeName(nn);
+                        bool wasCurrent = (current == name);
+                        RebuildNav();
+                        if (wasCurrent) SwitchCategory(renamed);
+                        Ui.Log("重命名标签: " + name + " -> " + renamed);
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "重命名标签"); }
+                };
+                cm.Items.Add(rename);
+                MenuItem del = new MenuItem();
+                del.Header = "删除";
+                del.Click += delegate
+                {
+                    try
+                    {
+                        if (!TextPromptDialog.Confirm(this, "删除标签",
+                            "确定删除标签「" + name + "」？", "删除")) return;
+                        string err = customTabs.Remove(name);
+                        if (err != null)
+                        {
+                            MessageBox.Show(this, err, "四叶草 · 删除标签",
+                                MessageBoxButton.OK, MessageBoxImage.Information);
+                            return;
+                        }
+                        bool wasCurrent = (current == name);
+                        RebuildNav();
+                        if (wasCurrent) SwitchCategory("常用");
+                        Ui.Log("删除标签: " + name);
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "删除标签"); }
+                };
+                cm.Items.Add(del);
+                cm.PlacementTarget = anchor;
+                cm.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                cm.IsOpen = true;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "标签右键菜单"); }
+        }
+
+        void PromptNewTab()
+        {
+            try
+            {
+                string name = TextPromptDialog.Ask(this, "新建标签", "标签名（最多 12 字）", "");
+                if (name == null) return;   // 用户取消
+
+                string err = customTabs.Add(name);
+                if (err != null)
+                {
+                    MessageBox.Show(this, err, "四叶草 · 新建标签",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                string added = NavTabs.SanitizeName(name);
+                RebuildNav();
+                SwitchCategory(added);
+                Ui.Log("新建标签: " + added);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "新建标签"); }
         }
 
         void UpdateNav()

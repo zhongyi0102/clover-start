@@ -1414,7 +1414,22 @@ namespace Clover
                     foreach (object o in sp.Children)
                     {
                         Border b = o as Border;
-                        if (b != null) items.Add(b);
+                        if (b == null) continue;
+
+                        // 末尾的圆形 + 按钮（新建标签）不是分类胶囊，不计入。
+                        bool isPlus = false;
+                        try
+                        {
+                            if (Math.Abs(b.Width - b.Height) < 0.5)
+                            {
+                                TextBlock tb = b.Child as TextBlock;
+                                if (tb != null && tb.Text == "+") isPlus = true;
+                            }
+                        }
+                        catch { }
+                        if (isPlus) continue;
+
+                        items.Add(b);
                     }
                     best = items;
                 }

@@ -163,11 +163,19 @@ Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
 # 「文件」标签：自定义文件夹清单（路径校验 / 去重 / 上限 / 重命名 / 容错）
 Invoke-Suite 'FileFoldersTest' $baseRefs `
     (@((Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileFoldersTest.cs')))
+
+# 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
+Invoke-Suite 'NavTabsTest' $baseRefs `
+    (@((Join-Path $coreDir 'NavTabs.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'NavTabsTest.cs')))
 Invoke-Suite 'WatcherTest' $baseRefs `
     ($baseRefs + $webRef + @((Join-Path $testDir 'WatcherTest.cs')))
 # 「文件」标签：目录列举（过滤 / 排序 / 上限 / 只读）
 Invoke-Suite 'FilesTabTest' $baseRefs `
     (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
+
+# 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
+Invoke-Suite 'NavTabsTest' $baseRefs `
+    (@((Join-Path $coreDir 'NavTabs.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'NavTabsTest.cs')))
 
 
 # 「全部」页：低价值条目识别规则

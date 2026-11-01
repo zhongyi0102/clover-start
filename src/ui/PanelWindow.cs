@@ -67,6 +67,9 @@ namespace Clover
         DispatcherTimer taskTimer;
 
         StackPanel navStack;
+
+        /// <summary>用户自定义标签（+ 号新建的），持久化在 config\nav-tabs.json。</summary>
+        NavTabs customTabs;
         WrapPanel tilePanel;
 
         // ---- 「文件」标签（2-3）----
@@ -229,6 +232,10 @@ namespace Clover
             lastCatPath = Path.Combine(baseDir, "config", "last-category.json");
             orderPath = Path.Combine(baseDir, "config", "order.json");
             LoadCustomOrders();
+
+            // 用户自定义标签：先加载，RebuildNav 会读它
+            customTabs = new NavTabs(baseDir);
+            customTabs.Load();
             LoadLastCategory();
 
             // 后台预热"应用是否在运行"要用的 .lnk 目标缓存。
