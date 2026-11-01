@@ -45,9 +45,13 @@ namespace Clover
                 dlg.Title = "外观";
                 dlg.Width = 420;
                 dlg.Height = 620;
-                dlg.WindowStyle = WindowStyle.None;
-                dlg.AllowsTransparency = true;
-                dlg.Background = Brushes.Transparent;
+                // ── 用系统边框（同「整理与隐藏」窗口）──
+                //
+                // 之前是 None + AllowsTransparency 自绘标题栏，× 要自己画、
+                // 自己处理鼠标事件，还和边缘缩放热区互相抢事件（点 × 没反应）。
+                // 改用系统 WindowStyle 后，× / 拖动 / 缩放都由系统提供，
+                // 四边四角拖拽由 CanResizeWithGrip + WM_NCHITTEST 钩子保留。
+                dlg.Background = Ui.Bg;
                 // 无边框透明窗口也允许伸缩；右下角另加显式 ResizeGrip，
                 // 四条边另有透明的拖拽热区（见 AttachResizeHotspots）。
                 dlg.ResizeMode = ResizeMode.CanResizeWithGrip;
@@ -142,29 +146,6 @@ namespace Clover
                 layout.RowDefinitions[0].Height = GridLength.Auto;
                 layout.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
                 layout.RowDefinitions[2].Height = GridLength.Auto;
-
-                // ---- 标题（可拖动窗口）----
-                Grid title = new Grid();
-                title.Margin = new Thickness(Ui.S.Xl, Ui.S.Lg, Ui.S.Md, Ui.S.Sm);
-                title.ColumnDefinitions.Add(new ColumnDefinition());
-                title.ColumnDefinitions.Add(new ColumnDefinition());
-                title.ColumnDefinitions[1].Width = GridLength.Auto;
-
-                TextBlock titleText = Ui.T("外观", 15, Ui.Fg, FontWeights.SemiBold);
-                titleText.VerticalAlignment = VerticalAlignment.Center;
-                Grid.SetColumn(titleText, 0);
-                title.Children.Add(titleText);
-
-                Border closeX = MakeIconButton("\uE711", delegate { dlg.Close(); });
-                Grid.SetColumn(closeX, 1);
-                title.Children.Add(closeX);
-
-                title.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
-                {
-                    try { dlg.DragMove(); } catch { }
-                };
-                Grid.SetRow(title, 0);
-                layout.Children.Add(title);
 
                 // ---- 内容（可滚动）----
                 ScrollViewer scroll = new ScrollViewer();
@@ -993,14 +974,27 @@ namespace Clover
 
                 if (w <= 0 || h <= 0) return IntPtr.Zero;
 
-                bool left = p.X <= ResizeBand;
-                bool right = p.X >= w - ResizeBand;
-                bool top = p.Y <= ResizeBand;
-                bool bottom = p.Y >= h - ResizeBand;
+                // ── 让路给系统标题栏 ──
+                //
+                // 系统标题栏（WS_CAPTION + WS_SYSMENU）提供 × / 最小化等，
+                // 其命中区域在顶部 ~30px。若我们在这里返回 HTTOP/HTRIGHT，
+                // 系统 × 就点不到。所以：
+                //   1. 顶部（y < 标题栏高）完全不接管 —— 交给系统；
+                //   2. 其余三边只在窗口最外圈 6px 接管。
+                double titleBarH = 32;   // 系统标题栏高度（含 × 按钮）
+                double relY = p.Y;
+                double relX = p.X;
+                double band = ResizeBand;
+
+                bool left   = relX <= band && relY > titleBarH;
+                bool right  = relX >= w - band && relY > titleBarH;
+                bool top    = false;   // 顶部归系统标题栏
+                bool bottom = relY >= h - band;
+                // 只有点落在「边缘带 ∩ 透明边距区」才接管缩放；
+                // 否则会把贴边控件（如标题栏 ×）的点击也吞掉。
 
                 int ht = 0;
                 if (left && top) ht = Native.HTTOPLEFT;
-                else if (right && top) ht = Native.HTTOPRIGHT;
                 else if (left && bottom) ht = Native.HTBOTTOMLEFT;
                 else if (right && bottom) ht = Native.HTBOTTOMRIGHT;
                 else if (left) ht = Native.HTLEFT;
@@ -1147,6 +1141,16 @@ namespace Clover
 
             b.MouseEnter += delegate { b.Background = Ui.Hover; };
             b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
+
+            // 必须在 Down 阶段就吃掉事件：
+            // 标题栏 Grid 上挂着 MouseLeftButtonDown -> dlg.DragMove()，
+            // 那是冒泡事件。不拦截的话，按下 x 会先冒泡到标题栏触发
+            // DragMove（进入模态拖动循环并捕获鼠标），松手时
+            // MouseLeftButtonUp 就再也到不了这个按钮。
+            b.MouseLeftButtonDown += delegate(object s2, MouseButtonEventArgs e2)
+            {
+                e2.Handled = true;
+            };
             b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
             return b;
         }
