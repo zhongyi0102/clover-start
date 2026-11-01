@@ -1253,7 +1253,20 @@ namespace Clover
                     return "滑块松手没有提交（缺 DragCompleted）";
                 if (text.IndexOf("DispatcherTimer", StringComparison.Ordinal) < 0)
                     return "没有预览防抖";
-                return "ok（预设/滑块/色板/输入框/恢复默认/防抖/松手提交 全在）";
+                if (text.IndexOf("ResizeMode.CanResizeWithGrip", StringComparison.Ordinal) < 0)
+                    return "外观窗口不可伸缩（缺 CanResizeWithGrip）";
+                if (text.IndexOf("new ResizeGrip()", StringComparison.Ordinal) < 0)
+                    return "外观窗口缺右下角 ResizeGrip";
+                if (text.IndexOf("dlg.MinWidth = 360", StringComparison.Ordinal) < 0
+                    || text.IndexOf("dlg.MinHeight = 300", StringComparison.Ordinal) < 0)
+                    return "外观窗口缺最小尺寸保护（360x300）";
+                if (text.IndexOf("ApplyWorkAreaLimits", StringComparison.Ordinal) < 0)
+                    return "外观窗口缺工作区上限（MaxWidth/MaxHeight）";
+                if (text.IndexOf("AttachResizeHotspots", StringComparison.Ordinal) < 0)
+                    return "外观窗口缺四边拖拽热区";
+                if (text.IndexOf("Native.HTLEFT", StringComparison.Ordinal) < 0)
+                    return "边缘热区没发 WM_NCLBUTTONDOWN";
+                return "ok（预设/滑块/色板/输入框/恢复默认/防抖/松手提交/窗口伸缩/边缘拖拽 全在）";
             });
 
             // ---------- 切换预设后 settings 与面板状态一致 ----------

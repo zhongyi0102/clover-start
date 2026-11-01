@@ -274,18 +274,144 @@ namespace Clover
             }
         }
 
-        /// <summary>迷你任务栏：紧挨四叶草后面。</summary>
+        /// <summary>
+        /// 迷你任务栏的贴边基准线（设备无关单位）。
+        ///
+        /// ── 为什么不能写死坐标 ──
+        ///
+        /// 之前是 `Top = 1152`（= 屏幕高 1200 − 任务栏 48），分辨率、DPI、
+        /// 任务栏位置一变就全错。这里按三种情况实时算：
+        ///
+        ///   1. **系统任务栏可见** → 迷你条底边贴任务栏上沿
+        ///      （用 SHAppBarMessage(ABM_GETTASKBARPOS) 取任务栏真实矩形）
+        ///   2. **任务栏被本程序隐藏** → 迷你条底边贴工作区最底部
+        ///      （此时 WorkArea 等于全屏，直接用屏幕底边）
+        ///   3. **任务栏自动隐藏** → 同 2，贴屏幕底部
+        ///
+        /// 返回值是该贴边方向上的「可用区下边界」：底部任务栏时是任务栏上沿，
+        /// 顶部任务栏时是任务栏下沿。
+        /// </summary>
+        /// <param name="bottomEdgeY">底部贴边的 Y 坐标（迷你条应把底边放在这里）</param>
+        /// <returns>成功算出返回 true；失败时调用方用屏幕底部兜底</returns>
+        public static bool MiniBarAnchor(out double bottomEdgeY)
+        {
+            bottomEdgeY = 0;
+            try
+            {
+                double s = ScaleFactor();
+                if (s <= 0) s = 1;
+
+                double screenH = SystemParameters.PrimaryScreenHeight;
+
+                // ---- 情况 2/3：任务栏被隐藏 或 自动隐藏 → 贴屏幕底 ----
+                bool taskbarHidden = !TaskbarVisibleForGeometry();
+                bool autoHide = Native.TaskbarAutoHide();
+
+                if (taskbarHidden || autoHide)
+                {
+                    bottomEdgeY = screenH;
+                    return true;
+                }
+
+                // ---- 情况 1：任务栏可见 → 取它的真实矩形 ----
+                uint edge;
+                Native.RECT rc;
+                if (Native.GetTaskbarPos(out edge, out rc))
+                {
+                    double top = rc.Top / s;
+                    double bottom = rc.Bottom / s;
+                    double left = rc.Left / s;
+                    double right = rc.Right / s;
+
+                    // 只有「贴底部」的任务栏才把迷你条放它上面；
+                    // 其它边（上/左/右）由 MiniBarRect 走另一套排布
+                    if (edge == 3)
+                    {
+                        bottomEdgeY = top;   // 任务栏上沿
+                        return true;
+                    }
+
+                    if (edge == 1)
+                    {
+                        // 顶部任务栏：可用区从任务栏下沿开始
+                        bottomEdgeY = bottom;
+                        return true;
+                    }
+
+                    // 左/右任务栏：竖直方向不受影响，贴屏幕底
+                    bottomEdgeY = screenH;
+                    return true;
+                }
+
+                // ---- 兜底：用 WorkArea 推 ----
+                Rect wa = SystemParameters.WorkArea;
+                bottomEdgeY = (wa.Bottom > 0 && wa.Bottom < screenH - 1) ? wa.Bottom : screenH;
+                return true;
+            }
+            catch
+            {
+                try { bottomEdgeY = SystemParameters.PrimaryScreenHeight; } catch { }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 任务栏当前是否真的可见（用于几何判断）。
+        ///
+        /// 不能只看 `settings.HideTaskbar`：任务栏可能被别的程序隐藏，
+        /// 或者正在自动隐藏。这里直接问窗口本身。
+        /// </summary>
+        static bool TaskbarVisibleForGeometry()
+        {
+            try
+            {
+                IntPtr tray = Native.FindWindow("Shell_TrayWnd", null);
+                if (tray == IntPtr.Zero) return false;
+                return Native.IsWindowVisible(tray);
+            }
+            catch { return true; }
+        }
+
+        /// <summary>
+        /// 迷你任务栏位置。**不再写死坐标**，按任务栏状态自适应。
+        ///
+        /// ── 三种排布 ──
+        ///
+        ///   · **底部任务栏**：紧挨四叶草右侧，底边贴任务栏上沿
+        ///   · **顶部任务栏**：紧挨四叶草右侧，顶边贴任务栏下沿
+        ///   · **左/右任务栏**：竖排，紧挨四叶草下方，底边贴屏幕底
+        ///
+        /// 任务栏被隐藏时（本程序隐藏或自动隐藏），一律按「贴屏幕底部」处理。
+        /// </summary>
         public static Rect MiniBarRect(int count)
         {
-            Rect c = CloverRect();
+            double barH = 48;
             double w = 44 * Math.Max(0, count);
+            Rect c = CloverRect();
+
+            double anchor;
+            MiniBarAnchor(out anchor);
+
             switch (CurrentEdge)
             {
+                case Edge.Top:
+                {
+                    // 顶部任务栏：顶边贴任务栏下沿
+                    return new Rect(c.Right + 4, anchor, w, barH);
+                }
                 case Edge.Left:
                 case Edge.Right:
-                    return new Rect(c.X, c.Bottom + 4, w, 48);
+                {
+                    // 竖任务栏：迷你条在四叶草下方，底边贴可用区底部
+                    double top = anchor - barH;
+                    return new Rect(c.X, top, w, barH);
+                }
                 default:
-                    return new Rect(c.Right + 4, c.Y, w, 48);
+                {
+                    // 底部任务栏（或已隐藏）：底边贴锚点
+                    double top = anchor - barH;
+                    return new Rect(c.Right + 4, top, w, barH);
+                }
             }
         }
     }

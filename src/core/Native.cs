@@ -29,6 +29,26 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern uint GetDpiForSystem();
 
+        // ========== 无边框窗口的边缘拖拽缩放 ==========
+
+        /// <summary>左键按在非客户区（标题栏/边框）上，由系统接管拖动或缩放。</summary>
+        public const int WM_NCLBUTTONDOWN = 0x00A1;
+
+        public const int HTLEFT = 10;
+        public const int HTRIGHT = 11;
+        public const int HTTOP = 12;
+        public const int HTTOPLEFT = 13;
+        public const int HTTOPRIGHT = 14;
+        public const int HTBOTTOM = 15;
+        public const int HTBOTTOMLEFT = 16;
+        public const int HTBOTTOMRIGHT = 17;
+
+        [DllImport("user32.dll")]
+        public static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
         /// <summary>
         /// 窗口所在显示器的 DPI（Win10 1607+）。
         ///
@@ -123,6 +143,43 @@ namespace Clover
             APPBARDATA d = new APPBARDATA();
             d.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
             return SHAppBarMessage(0x04, ref d).ToInt32(); // ABM_GETSTATE
+        }
+        /// <summary>
+        /// 取系统任务栏的真实位置矩形（物理像素）。
+        ///
+        /// `ABM_GETTASKBARPOS` 比 `SystemParameters.WorkArea` 可靠：
+        ///   · WorkArea 只反映"被任务栏占掉的工作区"，任务栏自动隐藏时
+        ///     WorkArea 等于全屏，就推不出任务栏在哪条边、多厚
+        ///   · 任务栏被本程序隐藏后，WorkArea 也会变成全屏
+        /// 而 ABM_GETTASKBARPOS 直接返回任务栏窗口自己的矩形与贴边方向，
+        /// 不受隐藏状态影响。
+        /// </summary>
+        /// <param name="edge">贴哪条边：0=左 1=上 2=右 3=下</param>
+        /// <param name="rc">任务栏矩形（物理像素）</param>
+        /// <returns>取到返回 true</returns>
+        public static bool GetTaskbarPos(out uint edge, out RECT rc)
+        {
+            edge = 3;
+            rc = new RECT();
+            try
+            {
+                APPBARDATA d = new APPBARDATA();
+                d.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+                IntPtr r = SHAppBarMessage(0x05, ref d); // ABM_GETTASKBARPOS
+                if (r == IntPtr.Zero) return false;
+
+                edge = d.uEdge;
+                rc = d.rc;
+                return rc.Right > rc.Left && rc.Bottom > rc.Top;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>任务栏是否处于自动隐藏状态（ABS_AUTOHIDE = 0x1）。</summary>
+        public static bool TaskbarAutoHide()
+        {
+            try { return (GetTaskbarState() & 0x1) != 0; }
+            catch { return false; }
         }
         /// <summary>
         /// 显示系统的「文件属性」对话框（与资源管理器右键 → 属性一致）。

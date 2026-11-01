@@ -48,12 +48,38 @@ namespace Clover
                 dlg.WindowStyle = WindowStyle.None;
                 dlg.AllowsTransparency = true;
                 dlg.Background = Brushes.Transparent;
-                dlg.ResizeMode = ResizeMode.NoResize;
+                // 无边框透明窗口也允许伸缩；右下角另加显式 ResizeGrip，
+                // 四条边另有透明的拖拽热区（见 AttachResizeHotspots）。
+                dlg.ResizeMode = ResizeMode.CanResizeWithGrip;
+                dlg.MinWidth = 360;
+                dlg.MinHeight = 300;
+                // 最大不超过屏幕工作区。初值按主屏算，窗口移动/尺寸变化时
+                // 再按所在屏幕重算（多显示器时上限跟着走）。
+                ApplyWorkAreaLimits(dlg);
                 dlg.ShowInTaskbar = false;
                 dlg.WindowStartupLocation = owner != null
                     ? WindowStartupLocation.CenterOwner
                     : WindowStartupLocation.CenterScreen;
                 if (owner != null) dlg.Owner = owner;
+
+                // 位置记忆：有记录就恢复（此时不要再 CenterOwner）
+                // ── 关键：不允许以最大化状态恢复 ──
+                //
+                // 历史记录里可能有 "maximized": true（早先拖到屏幕顶边被 Aero Snap
+                // 最大化后关窗就存下来了）。最大化窗口在 Windows 里本来就不能
+                // 拖边缘缩放 —— 四边四角全失效，且尺寸等于整个工作区。
+                if (WindowPos.Attach(baseDir, WindowPos.Appearance, dlg))
+                {
+                    dlg.WindowStartupLocation = WindowStartupLocation.Manual;
+                    if (dlg.WindowState == WindowState.Maximized)
+                    {
+                        dlg.WindowState = WindowState.Normal;
+                        Ui.Log("外观窗口记录为最大化，已强制还原（最大化下无法拖边缩放）");
+                    }
+                }
+
+                // 记录里可能存着撑满工作区的尺寸（最大化时存下来的），收回到合理大小。
+                ClampToReasonableSize(dlg);
 
                 // ---- 预览防抖 ----
                 //
@@ -363,6 +389,26 @@ namespace Clover
                     "正值提亮、负值压暗（作用在模糊后的底图上）",
                     schedulePreview, commit, refreshPresetButtons, refreshers));
 
+                // ---- 背景暗度（glassDarkness 0~60）----
+                //
+                // 壁纸偏亮时文字看不清 —— 在背景之上叠一层半透明深色。
+                // 只改一个 Opacity 值，不重算毛玻璃，拖滑块即时见效。
+                body.Children.Add(MakeSlider("背景暗度", 0, 60, 1,
+                    delegate { return settings == null ? 0 : settings.GlassDarkness; },
+                    delegate(double v)
+                    {
+                        if (settings == null) return;
+                        settings.GlassDarkness = Math.Round(v);
+                    },
+                    delegate(double v)
+                    {
+                        int i = (int)Math.Round(v);
+                        return i == 0 ? "关" : (i + "%");
+                    },
+                    "在背景上叠一层深色遮罩，壁纸偏亮时调大它让文字更清楚（所有背景模式通用）",
+                    schedulePreview,
+                    commit, refreshPresetButtons, refreshers));
+
                 // ===== 颜色 =====
                 body.Children.Add(SectionLabel("颜色"));
 
@@ -409,39 +455,45 @@ namespace Clover
 
                 StackPanel modeRow = new StackPanel();
                 modeRow.Orientation = Orientation.Horizontal;
-                modeRow.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Lg);
+                modeRow.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Sm);
                 body.Children.Add(modeRow);
 
-                Border bFixed = null, bScreen = null;
+                Border bScreen = null, bCustom = null;
+                TextBlock customPathText = null;
+                Border btnChange = null, btnClear = null;
+                StackPanel customRow = null;
+
                 Action refreshMode = null;
                 refreshMode = delegate
                 {
                     try
                     {
-                        bool screen = settings != null
-                            && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
-                        if (bFixed != null)
+                        string mode = settings == null ? "screen" : (settings.GlassMode ?? "screen");
+                        bool screen = string.Equals(mode, "screen", StringComparison.OrdinalIgnoreCase);
+                        bool custom = string.Equals(mode, "custom", StringComparison.OrdinalIgnoreCase);
+                        bool we = string.Equals(mode, "we", StringComparison.OrdinalIgnoreCase);
+
+                        SetChipActive(bScreen, screen);
+                        SetChipActive(bCustom, custom);
+                        try { SetChipActive(FindWeChip(modeRow), we); } catch { }
+
+                        // 自定义行只在 custom 模式显示
+                        if (customRow != null)
+                            customRow.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+
+                        if (customPathText != null)
                         {
-                            bFixed.Background = screen ? Ui.SearchBg : Ui.Accent;
-                            ((TextBlock)bFixed.Child).Foreground = screen ? Ui.Fg : Brushes.White;
+                            string f = BackgroundStore.Find(baseDir);
+                            customPathText.Text = string.IsNullOrEmpty(f)
+                                ? "（还没有导入图片）"
+                                : System.IO.Path.GetFileName(f) + "  ·  " + FormatSize(f);
                         }
-                        if (bScreen != null)
-                        {
-                            bScreen.Background = screen ? Ui.Accent : Ui.SearchBg;
-                            ((TextBlock)bScreen.Child).Foreground = screen ? Brushes.White : Ui.Fg;
-                        }
+                        if (btnChange != null) btnChange.IsEnabled = true;
+                        if (btnClear != null) btnClear.IsEnabled = custom && BackgroundStore.Exists(baseDir);
                     }
                     catch { }
                 };
 
-                bFixed = MakeChip("固定图", delegate
-                {
-                    if (settings != null) settings.GlassMode = "fixed";
-                    refreshMode();
-                    commit();
-                });
-                bFixed.ToolTip = "用 res\\background-cyangray.png 这张青灰玻璃图（观感稳定）";
-                modeRow.Children.Add(bFixed);
 
                 bScreen = MakeChip("跟随桌面", delegate
                 {
@@ -451,6 +503,111 @@ namespace Clover
                 });
                 bScreen.ToolTip = "截取桌面壁纸并模糊（透出真实桌面，但亮壁纸会干扰阅读）";
                 modeRow.Children.Add(bScreen);
+
+                bCustom = MakeChip("自定义图片", delegate
+                {
+                    try
+                    {
+                        // 还没导入过 → 直接拉起文件选择
+                        if (!BackgroundStore.Exists(baseDir))
+                        {
+                            if (!DoImportCustom(baseDir, panel)) return;
+                        }
+                        if (settings != null) settings.GlassMode = "custom";
+                        InvalidateCustomCache(panel);
+                        refreshMode();
+                        commit();
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "切换到自定义背景"); }
+                });
+                bCustom.ToolTip = "导入你自己的图片作为面板背景（jpg/png/bmp/gif/webp/tif）";
+                modeRow.Children.Add(bCustom);
+
+                // ---- WE 壁纸（引用模式，与前三项互斥）----
+                bool weInstalled = false;
+                try { weInstalled = WallpaperEngine.FindRoots().Count > 0; } catch { }
+
+                Border bWe = MakeChip("WE 壁纸", delegate
+                {
+                    try
+                    {
+                        WallpaperPickerDialog picker = new WallpaperPickerDialog(
+                            dlg, baseDir, settings, panel, delegate
+                            {
+                                // 选好后 picker 已写好 settings（含 GlassMode = "we"）。
+                                // 不吞异常：让选择窗口显示“应用失败”，避免假成功。
+                                if (panel != null) panel.ApplyGlassSetting();
+                                refreshMode();
+                                commit();
+                            });
+                        picker.Show();
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "打开壁纸选择窗口"); }
+                });
+
+                if (!weInstalled)
+                {
+                    bWe.Opacity = 0.45;
+                    bWe.ToolTip = "没找到 Wallpaper Engine 壁纸目录。"
+                        + "仍可点开窗口后手动选择目录。";
+                }
+                else
+                {
+                    bWe.ToolTip = "从 Wallpaper Engine 的创意工坊 / 本地壁纸里挑一张"
+                        + "（只引用，不复制；与桌面壁纸互相独立）";
+                }
+                modeRow.Children.Add(bWe);
+
+                // ---- 自定义图状态行（[文件名] [更换] [清除]）----
+                customRow = new StackPanel();
+                customRow.Orientation = Orientation.Horizontal;
+                customRow.Margin = new Thickness(0, 0, 0, Ui.S.Lg);
+                customRow.Visibility = Visibility.Collapsed;
+
+                customPathText = Ui.T("", 10.5, Ui.Sub);
+                customPathText.VerticalAlignment = VerticalAlignment.Center;
+                customPathText.TextTrimming = TextTrimming.CharacterEllipsis;
+                customPathText.MaxWidth = 200;
+                customRow.Children.Add(customPathText);
+
+                btnChange = MakeChip("更换", delegate
+                {
+                    try
+                    {
+                        if (!DoImportCustom(baseDir, panel)) return;
+                        if (settings != null) settings.GlassMode = "custom";
+                        InvalidateCustomCache(panel);
+                        refreshMode();
+                        commit();
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "更换自定义背景"); }
+                });
+                btnChange.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+                btnChange.Height = 24;
+                btnChange.Padding = new Thickness(10, 0, 10, 0);
+                customRow.Children.Add(btnChange);
+                btnClear = MakeChip("清除", delegate
+                {
+                    try
+                    {
+                        BackgroundStore.RemoveAll(baseDir);
+                        if (settings != null) settings.GlassMode = "screen";
+                        InvalidateCustomCache(panel);
+                        refreshMode();
+                        commit();
+                        Ui.Log("已清除自定义背景图");
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "清除自定义背景"); }
+                });
+                btnClear.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+                btnClear.Height = 24;
+                btnClear.Padding = new Thickness(10, 0, 10, 0);
+                customRow.Children.Add(btnClear);
+
+                body.Children.Add(customRow);
+
+                refreshMode();
+
 
 
                 // ===== 文字清晰保底 =====
@@ -553,11 +710,50 @@ namespace Clover
                 ((TextBlock)done.Child).Foreground = Brushes.White;
                 footer.Children.Add(done);
 
+                ResizeGrip grip = new ResizeGrip();
+                grip.Width = 16;
+                grip.Height = 16;
+                grip.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+                grip.VerticalAlignment = VerticalAlignment.Bottom;
+                grip.HorizontalAlignment = HorizontalAlignment.Right;
+                grip.ToolTip = "拖动调整窗口大小";
+                footer.Children.Add(grip);
+
                 Grid.SetRow(footer, 2);
                 layout.Children.Add(footer);
 
                 root.Child = layout;
                 dlg.Content = root;
+
+                // ---- 边缘拖拽 ----
+                //
+                // 无边框窗口（WindowStyle.None）没有系统非客户区，
+                // 而且 root 有 14px 外边距 —— 边缘那一圈是空白的透明区，
+                // 里面没有任何 WPF 元素，WPF 热区铺不到那里。
+                //
+                // 所以在 WM_NCHITTEST 里统一判断：命中窗口最外圈 6px 就返回
+                // HTLEFT/HTRIGHT/HTTOP/HTBOTTOM/四角，系统自动接管缩放与光标。
+                AttachResizeHook(dlg);
+
+                // ---- 跨屏后重算上限 ----
+                //
+                // 用户把窗口拖到另一块显示器时，MaxWidth/MaxHeight 要跟着变。
+                // 用延迟合并，避免拖动过程中反复计算。
+                DispatcherTimer limitTimer = new DispatcherTimer();
+                limitTimer.Interval = TimeSpan.FromMilliseconds(120);
+                limitTimer.Tick += delegate
+                {
+                    limitTimer.Stop();
+                    ApplyWorkAreaLimits(dlg);
+                };
+                Action scheduleLimits = delegate
+                {
+                    limitTimer.Stop();
+                    limitTimer.Start();
+                };
+                dlg.LocationChanged += delegate { scheduleLimits(); };
+                dlg.SizeChanged += delegate { scheduleLimits(); };
+                dlg.Closed += delegate { limitTimer.Stop(); };
 
                 // ---- 关窗：写盘一次 ----
                 dlg.Closing += delegate
@@ -597,6 +793,317 @@ namespace Clover
             TextBlock t = Ui.T(text, 12, Ui.Sub, FontWeights.SemiBold);
             t.Margin = new Thickness(0, Ui.S.Md, 0, 0);
             return t;
+        }
+
+        /// <summary>在模式行里找「WE 壁纸」那个胶囊（按文字内容匹配）。</summary>
+        static Border FindWeChip(Panel row)
+        {
+            try
+            {
+                if (row == null) return null;
+                foreach (UIElement e in row.Children)
+                {
+                    Border b = e as Border;
+                    if (b == null) continue;
+                    TextBlock t = b.Child as TextBlock;
+                    if (t != null && t.Text == "WE 壁纸") return b;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// 把窗口的最大尺寸限制到它**所在那块**显示器的工作区。
+        ///
+        /// ── 为什么按所在屏幕算 ──
+        ///
+        /// 主屏 2560 宽、副屏 1920 宽时，固定用主屏尺寸当上限，
+        /// 窗口拖到副屏就能超出边界。这里用 WinForms 的 Screen，
+        /// 从窗口中心点找所在屏幕；找不到就退回主屏。
+        ///
+        /// ── 为什么要减一点余量 ──
+        ///
+        /// 工作区已经排除了任务栏，但无边框窗口的阴影/圆角仍会贴边，
+        /// 留 16px 让视觉上不"顶死"屏幕。
+        /// </summary>
+        /// <summary>默认打开尺寸（记录无效时用）。</summary>
+        const double DefaultW = 420;
+        const double DefaultH = 620;
+
+        /// <summary>
+        /// 把恢复出来的尺寸收回到合理范围。
+        ///
+        /// 记录里可能存着最大化时的尺寸（= 整个工作区）。那种尺寸一打开就满屏，
+        /// 而且看起来"像最大化"，用户会以为窗口不能缩放。
+        /// 超过工作区 80% 就回落到默认大小。
+        /// </summary>
+        static void ClampToReasonableSize(Window w)
+        {
+            try
+            {
+                if (w == null) return;
+
+                double maxW = (w.MaxWidth > 0 && !double.IsInfinity(w.MaxWidth))
+                    ? w.MaxWidth : SystemParameters.WorkArea.Width;
+                double maxH = (w.MaxHeight > 0 && !double.IsInfinity(w.MaxHeight))
+                    ? w.MaxHeight : SystemParameters.WorkArea.Height;
+
+                double limitW = Math.Max(w.MinWidth, maxW * 0.8);
+                double limitH = Math.Max(w.MinHeight, maxH * 0.8);
+
+                if (w.Width <= limitW && w.Height <= limitH) return;
+
+                w.Width = Math.Min(Math.Max(DefaultW, w.MinWidth), limitW);
+                w.Height = Math.Min(Math.Max(DefaultH, w.MinHeight), limitH);
+
+                Ui.Log("外观窗口记录尺寸过大，已回落到 " + w.Width + "x" + w.Height);
+            }
+            catch { }
+        }
+
+        static void ApplyWorkAreaLimits(Window w)
+        {
+            try
+            {
+                if (w == null) return;
+
+                double left = w.Left, top = w.Top;
+                double width = w.Width > 0 ? w.Width : w.MinWidth;
+                double height = w.Height > 0 ? w.Height : w.MinHeight;
+
+                double cx = left + width / 2.0;
+                double cy = top + height / 2.0;
+
+                System.Drawing.Rectangle wa = System.Windows.Forms.Screen.PrimaryScreen.WorkingArea;
+                try
+                {
+                    foreach (System.Windows.Forms.Screen s in System.Windows.Forms.Screen.AllScreens)
+                    {
+                        System.Drawing.Rectangle r = s.WorkingArea;
+                        if (cx >= r.Left && cx <= r.Right && cy >= r.Top && cy <= r.Bottom)
+                        {
+                            wa = r;
+                            break;
+                        }
+                    }
+                }
+                catch { }
+
+                // WPF 用设备无关单位，需要按主屏比例换算一次。
+                double scaleX = 1.0, scaleY = 1.0;
+                try
+                {
+                    double sw = SystemParameters.PrimaryScreenWidth;
+                    double sh = SystemParameters.PrimaryScreenHeight;
+                    System.Drawing.Rectangle pw = System.Windows.Forms.Screen.PrimaryScreen.Bounds;
+                    if (pw.Width > 0 && sw > 0) scaleX = sw / pw.Width;
+                    if (pw.Height > 0 && sh > 0) scaleY = sh / pw.Height;
+                }
+                catch { }
+
+                const double Margin = 16;
+                double maxW = wa.Width * scaleX - Margin;
+                double maxH = wa.Height * scaleY - Margin;
+
+                // 上限不能小于下限，否则 WPF 会抛异常
+                if (maxW < w.MinWidth) maxW = w.MinWidth;
+                if (maxH < w.MinHeight) maxH = w.MinHeight;
+
+                w.MaxWidth = maxW;
+                w.MaxHeight = maxH;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 在 WM_NCHITTEST 里实现四边四角缩放。
+        ///
+        /// ── 为什么必须走钩子，不能用 WPF 热区 ──
+        ///
+        /// WindowStyle.None 的窗口没有系统非客户区；同时 root 有 14px 外边距，
+        /// 窗口最外那一圈是纯透明空白，没有任何 WPF 元素。
+        /// WPF 命中测试在那里什么都不返回，最终落到 HTCLIENT ——
+        /// 所以既没有缩放光标，按下也不会开始缩放。
+        ///
+        /// 实测证据（改之前）：style 含 WS_THICKFRAME、ResizeMode=CanResizeWithGrip，
+        /// 但四边四角的 WM_NCHITTEST 全部返回 1 (HTCLIENT)。
+        ///
+        /// ── 判定 ──
+        ///
+        /// 用屏幕坐标和窗口矩形比较，命中最外圈 6px 就返回对应 HT 码。
+        /// 不依赖任何子元素布局，边距/阴影怎么改都仍然有效。
+        /// </summary>
+        static void AttachResizeHook(Window w)
+        {
+            try
+            {
+                if (w == null) return;
+
+                w.SourceInitialized += delegate
+                {
+                    try
+                    {
+                        IntPtr h = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+                        if (h == IntPtr.Zero) return;
+                        // 去掉 WS_MAXIMIZEBOX：无边框窗口拖到屏幕顶边会被
+                        // Aero Snap 最大化，而最大化后四边四角无法缩放，
+                        // 用户就会觉得"窗口不能调整大小"。
+                        int style = Native.GetWindowLong(h, -16);
+                        style = style & ~0x00010000;   // WS_MAXIMIZEBOX
+                        Native.SetWindowLong(h, -16, style);
+
+                        System.Windows.Interop.HwndSource src =
+                            System.Windows.Interop.HwndSource.FromHwnd(h);
+                        if (src != null) src.AddHook(ResizeHitTest);
+                    }
+                    catch { }
+                };
+            }
+            catch { }
+        }
+
+        /// <summary>窗口最外圈多宽算缩放区（设备无关单位）。</summary>
+        const double ResizeBand = 6;
+
+        static IntPtr ResizeHitTest(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_NCHITTEST = 0x0084;
+            if (msg != WM_NCHITTEST) return IntPtr.Zero;
+
+            try
+            {
+                long lp = lParam.ToInt64();
+                int sx = (short)(lp & 0xFFFF);
+                int sy = (short)((lp >> 16) & 0xFFFF);
+
+                Native.RECT r;
+                if (!Native.GetWindowRect(hwnd, out r)) return IntPtr.Zero;
+
+                System.Windows.Interop.HwndSource src =
+                    System.Windows.Interop.HwndSource.FromHwnd(hwnd);
+                if (src == null || src.RootVisual == null) return IntPtr.Zero;
+
+                System.Windows.Point p = src.RootVisual.PointFromScreen(
+                    new System.Windows.Point(sx, sy));
+
+                FrameworkElement fe = src.RootVisual as FrameworkElement;
+                double w = fe != null ? fe.ActualWidth : (r.Right - r.Left);
+                double h = fe != null ? fe.ActualHeight : (r.Bottom - r.Top);
+
+                if (w <= 0 || h <= 0) return IntPtr.Zero;
+
+                bool left = p.X <= ResizeBand;
+                bool right = p.X >= w - ResizeBand;
+                bool top = p.Y <= ResizeBand;
+                bool bottom = p.Y >= h - ResizeBand;
+
+                int ht = 0;
+                if (left && top) ht = Native.HTTOPLEFT;
+                else if (right && top) ht = Native.HTTOPRIGHT;
+                else if (left && bottom) ht = Native.HTBOTTOMLEFT;
+                else if (right && bottom) ht = Native.HTBOTTOMRIGHT;
+                else if (left) ht = Native.HTLEFT;
+                else if (right) ht = Native.HTRIGHT;
+                else if (top) ht = Native.HTTOP;
+                else if (bottom) ht = Native.HTBOTTOM;
+
+                if (ht == 0) return IntPtr.Zero;
+
+                handled = true;
+                return new IntPtr(ht);
+            }
+            catch { }
+
+            return IntPtr.Zero;
+        }
+
+        /// <summary>设置胶囊的选中态（选中 = 强调色底 + 白字）。</summary>
+        static void SetChipActive(Border chip, bool on)
+        {
+            try
+            {
+                if (chip == null) return;
+                chip.Background = on ? Ui.Accent : Ui.SearchBg;
+                chip.BorderBrush = on ? Ui.Accent : Ui.Line;
+                TextBlock t = chip.Child as TextBlock;
+                if (t != null) t.Foreground = on ? Brushes.White : Ui.Fg;
+            }
+            catch { }
+        }
+
+        /// <summary>文件大小显示（KB / MB）。</summary>
+        static string FormatSize(string path)
+        {
+            try
+            {
+                long len = new System.IO.FileInfo(path).Length;
+                if (len >= 1024 * 1024) return (len / 1024.0 / 1024.0).ToString("0.0") + " MB";
+                if (len >= 1024) return (len / 1024.0).ToString("0") + " KB";
+                return len + " B";
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        /// 拉起文件选择 + 导入。
+        ///
+        /// 导入失败（格式不支持 / 解码失败 / 写盘失败）→ 弹提示，**不改动现有设置**。
+        /// 成功 → 返回 true，调用方负责切到 custom 模式并刷新。
+        /// </summary>
+        static bool DoImportCustom(string baseDir, PanelWindow panel)
+        {
+            try
+            {
+                string picked = null;
+                using (System.Windows.Forms.OpenFileDialog dlg = new System.Windows.Forms.OpenFileDialog())
+                {
+                    dlg.Title = "选择背景图片";
+                    dlg.Filter = "图片文件|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp;*.tif;*.tiff"
+                        + "|所有文件|*.*";
+                    dlg.CheckFileExists = true;
+                    dlg.Multiselect = false;
+
+                    if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return false;
+                    picked = dlg.FileName;
+                }
+
+                if (string.IsNullOrWhiteSpace(picked)) return false;
+
+                string err;
+                string saved = BackgroundStore.Import(baseDir, picked, out err);
+
+                if (string.IsNullOrEmpty(saved))
+                {
+                    MessageBox.Show("无法读取该图片。\r\n\r\n" + (err ?? "未知原因")
+                        + "\r\n\r\n支持的格式：jpg / png / bmp / gif / webp / tif",
+                        "四叶草 · 背景图片", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "导入背景图片");
+                try
+                {
+                    MessageBox.Show("导入失败：" + ex.Message,
+                        "四叶草 · 背景图片", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch { }
+                return false;
+            }
+        }
+
+        /// <summary>让 GlassBackdrop 丢弃已缓存的自定义图（导入/清除后必须调）。</summary>
+        static void InvalidateCustomCache(PanelWindow panel)
+        {
+            try
+            {
+                if (panel != null) panel.InvalidateCustomBackground();
+            }
+            catch { }
         }
 
         static Border MakeChip(string label, Action onClick)

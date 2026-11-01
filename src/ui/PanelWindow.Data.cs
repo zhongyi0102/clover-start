@@ -112,6 +112,309 @@ namespace Clover
             catalog.HideCategories(hiddenCats);
         }
 
+        /// <summary>
+        /// 丢弃 GlassBackdrop 里缓存的自定义背景图，让下次重读。
+        ///
+        /// 导入新图 / 清除后必须调，否则面板还显示旧图。
+        /// </summary>
+        public void InvalidateCustomBackground()
+        {
+            try
+            {
+                if (glassBackdrop != null) glassBackdrop.InvalidateCustomCache();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "刷新自定义背景"); }
+        }
+
+        /// <summary>
+        /// 按设置挂上/卸下视频背景。
+        ///
+        /// 条件：`GlassMode == "custom"` **且** `config\background\custom-video.*` 存在。
+        /// 不满足就卸下（回退到静态图 / 固定图）。
+        ///
+        /// 视频播放失败时 `OnFailed` 会被调 → 这里改成走静态图，
+        /// 用户至少还能看到一张图，而不是黑屏。
+        /// </summary>
+        /// <summary>
+        /// 应用 WE 壁纸背景（`GlassMode == "we"`）。
+        ///
+        /// ── 只引用，不复制 ──
+        ///
+        /// 每次调用按「ID + 相对路径」重新定位文件。Steam 库换盘、加库、
+        /// WE 更新壁纸都能自动跟上；取消订阅则定位失败 → 回退。
+        ///
+        /// ── 失效处理 ──
+        ///
+        /// 目录不存在 / 文件缺失 / 无法播放 → **静默回退内置固定图**，只记日志。
+        /// 设置界面会显示「所选壁纸已不可用，请重新选择」。
+        /// </summary>
+        void ApplyWeBackdrop()
+        {
+            try
+            {
+                if (settings == null) return;
+
+                bool wantWe = string.Equals(settings.GlassMode, "we", StringComparison.OrdinalIgnoreCase)
+                    && settings.GlassOpacity > 0;
+
+                if (!wantWe)
+                {
+                    if (videoBackdrop != null) videoBackdrop.Unload();
+                    if (glassBackdrop != null)
+                    {
+                        glassBackdrop.UseWeImage = false;
+                        glassBackdrop.UseCustomImage = false;
+                    }
+                    return;
+                }
+
+                // ---- 按 ID 定位 ----
+                WallpaperEngine.Resolved res = WallpaperEngine.ResolveById(
+                    settings.WeWallpaperId, settings.WeWallpaperFile, settings.WeWallpaperType);
+
+                if (!res.Ok)
+                {
+                    // 回退到内置固定图；**首次**失效时提示用户（避免反复弹）
+                    Ui.Log("WE 壁纸不可用，回退内置固定图: " + (res.Error ?? "未知"));
+                    if (videoBackdrop != null) videoBackdrop.Unload();
+                    if (glassBackdrop != null)
+                    {
+                        glassBackdrop.UseWeImage = false;
+                        glassBackdrop.UseCustomImage = false;
+                    }
+                    bool firstTime = !weUnavailable;
+                    weUnavailable = true;
+                    if (firstTime) NotifyWeUnavailable(res.Error);
+                    return;
+                }
+
+                weUnavailable = false;
+
+                bool isVideo = string.Equals(res.Type, "video", StringComparison.OrdinalIgnoreCase);
+
+                if (isVideo)
+                {
+                    // ---- video：MediaElement 播原 mp4 ----
+                    if (glassBackdrop != null)
+                    {
+                        glassBackdrop.UseWeImage = false;
+                        glassBackdrop.UseCustomImage = false;
+                    }
+
+                    if (videoBackdrop == null) return;
+
+                    if (videoBackdrop.OnFailed == null)
+                    {
+                        videoBackdrop.OnFailed = delegate
+                        {
+                            try
+                            {
+                                Ui.Log("WE 视频壁纸播放失败，回退内置固定图");
+                                bool wasOk = !weUnavailable;
+                                weUnavailable = true;
+                                if (wasOk) NotifyWeUnavailable("视频无法播放");
+                            }
+                            catch { }
+                        };
+                    }
+
+                    videoBackdrop.SetSource(res.File);
+                    videoBackdrop.ApplyPolicy(IsVisible, OverlayGate.Fullscreen, VideoBackdrop.IsOnBattery());
+                }
+                else
+                {
+                    // ---- scene：优先用 scene.pkg 里的真实贴图 ----
+                    //
+                    // preview.* 只是创意工坊缩略图（实测最大 1024、最小 160），
+                    // 铺到面板上必然马赛克。scene.pkg 里的贴图是 2880x5120 级别。
+                    //
+                    // 提取失败（包损坏 / 格式不认 / 无 scene.pkg）→ 回退 preview。
+                    if (videoBackdrop != null) videoBackdrop.Unload();
+
+                    if (glassBackdrop != null)
+                    {
+                        glassBackdrop.BaseDir = baseDir;
+                        glassBackdrop.UseCustomImage = false;
+
+                        string hdPath = ResolveSceneHdImage(res.Dir, settings.WeWallpaperId);
+                        glassBackdrop.WeImagePath = string.IsNullOrEmpty(hdPath) ? res.File : hdPath;
+                        glassBackdrop.UseWeImage = true;
+                        glassBackdrop.InvalidateWeCache();
+                        glassBackdrop.Refresh();
+                    }
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "应用 WE 壁纸"); }
+        }
+
+        /// <summary>
+        /// 解析 scene 壁纸的高清背景图路径。
+        ///
+        /// 优先从 `scene.pkg` 提取真实贴图（2880×5120 级别）并缓存到
+        /// `config\background\scene-&lt;id&gt;.png`；失败返回 null，
+        /// 调用方回退到同目录的 `preview.*` 缩略图。
+        ///
+        /// **只读 WE 目录**：提取后写的是我们自己的 config，不动原文件。
+        /// </summary>
+        string ResolveSceneHdImage(string wallpaperDir, string wallpaperId)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(wallpaperDir)) return null;
+
+                string pkg = ScenePkg.FindPackage(wallpaperDir);
+                if (string.IsNullOrEmpty(pkg)) return null;
+
+                string cached = ScenePkg.ExtractToCache(baseDir, wallpaperId, pkg);
+                if (!string.IsNullOrEmpty(cached) && System.IO.File.Exists(cached))
+                    return cached;
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "解析 scene 高清图");
+                return null;
+            }
+        }
+        /// <summary>
+        /// 提示「WE 壁纸已不可用」。
+        ///
+        /// **只在首次失效时弹**（`weUnavailable` 从 false 变 true 那一刻）——
+        /// 否则每次 ApplyGlassSetting 都会弹一个框，没法用。
+        ///
+        /// 用面板内的轻提示条（`UndoBar`）而不是 MessageBox：
+        /// 这是"背景悄悄回退了"的通知，不该打断用户当前操作。
+        /// </summary>
+        void NotifyWeUnavailable(string reason)
+        {
+            try
+            {
+                string title = settings == null ? "" : (settings.WeWallpaperTitle ?? "");
+                string msg = string.IsNullOrEmpty(title)
+                    ? "所选壁纸已不可用，已回退内置背景"
+                    : ("所选壁纸「" + title + "」已不可用，已回退内置背景");
+
+                Ui.Log("WE 壁纸失效提示: " + msg + (string.IsNullOrEmpty(reason) ? "" : "（" + reason + "）"));
+
+                // 有面板 → 用轻提示条
+                if (undoBarForDesktop == null && filesUndoHost != null)
+                {
+                    undoBarForDesktop = new UndoBar(filesUndoHost);
+                    undoBarForDesktop.OnFocusBack = delegate
+                    {
+                        try { if (tilePanel != null) tilePanel.Focus(); } catch { }
+                    };
+                }
+
+                if (undoBarForDesktop != null)
+                {
+                    undoBarForDesktop.Show(msg, null);
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "提示 WE 壁纸失效"); }
+        }
+
+        /// <summary>上次应用 WE 壁纸时是否失败（供设置界面显示提示）。</summary>
+        public bool WeWallpaperUnavailable
+        {
+            get { return weUnavailable; }
+        }
+
+        bool weUnavailable;
+
+        /// <summary>
+        /// custom 模式的视频背景（`config\background\custom-video.*`，本地复制的那份）。
+        ///
+        /// 与 WE 引用模式不同：这里的文件已经复制到程序目录，不依赖外部软件。
+        /// </summary>
+        void ApplyVideoBackdrop()
+        {
+            try
+            {
+                if (videoBackdrop == null) return;
+
+                bool wantVideo = settings != null
+                    && string.Equals(settings.GlassMode, "custom", StringComparison.OrdinalIgnoreCase)
+                    && settings.GlassOpacity > 0;
+
+                string vid = wantVideo ? BackgroundStore.FindVideo(baseDir) : null;
+
+                if (string.IsNullOrEmpty(vid))
+                {
+                    videoBackdrop.Unload();
+                    return;
+                }
+
+                if (videoBackdrop.OnFailed == null)
+                {
+                    videoBackdrop.OnFailed = delegate
+                    {
+                        try
+                        {
+                            Ui.Log("视频背景不可用，回退到静态图");
+                            try
+                            {
+                                if (undoBarForDesktop == null && filesUndoHost != null)
+                                {
+                                    undoBarForDesktop = new UndoBar(filesUndoHost);
+                                    undoBarForDesktop.OnFocusBack = delegate
+                                    { try { if (tilePanel != null) tilePanel.Focus(); } catch { } };
+                                }
+                                if (undoBarForDesktop != null)
+                                    undoBarForDesktop.Show("视频背景无法播放，已回退内置背景", null);
+                            }
+                            catch { }
+                            if (videoBackdrop != null) videoBackdrop.Unload();
+                            if (glassBackdrop != null) glassBackdrop.Refresh();
+                        }
+                        catch { }
+                    };
+                }
+
+                videoBackdrop.SetSource(vid);
+                videoBackdrop.ApplyPolicy(IsVisible, OverlayGate.Fullscreen, VideoBackdrop.IsOnBattery());
+            }
+            catch (Exception ex) { Ui.LogError(ex, "应用视频背景"); }
+        }
+
+        /// <summary>
+        /// 应用背景暗度遮罩。
+        ///
+        /// 值域 0~60（%），映射成 Border.Opacity 的 0~0.6。
+        /// **只改一个属性**，不重算毛玻璃 → 拖滑块能即时看到效果。
+        /// </summary>
+        public void ApplyDarkness()
+        {
+            try
+            {
+                if (darkOverlay == null) return;
+
+                double d = settings == null ? 0 : settings.GlassDarkness;
+                if (d < 0) d = 0;
+                if (d > 60) d = 60;
+
+                // 毛玻璃整体关闭时不需要遮罩
+                bool glassOn = settings != null && settings.GlassOpacity > 0;
+
+                darkOverlay.Opacity = glassOn ? (d / 100.0) : 0;
+                darkOverlay.Visibility = (glassOn && d > 0)
+                    ? Visibility.Visible : Visibility.Collapsed;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "应用背景暗度"); }
+        }
+
+        /// <summary>按当前状态刷新视频的播放/暂停（面板显示隐藏、全屏切换时调）。</summary>
+        public void RefreshVideoPolicy()
+        {
+            try
+            {
+                if (videoBackdrop == null) return;
+                videoBackdrop.ApplyPolicy(IsVisible, OverlayGate.Fullscreen, VideoBackdrop.IsOnBattery());
+            }
+            catch { }
+        }
+
         /// <summary>切换“启用迷你任务栏”后调用：关掉时清空并隐藏整条迷你任务栏。</summary>
         public void ApplyMiniTaskbarSetting()
         {
@@ -236,6 +539,30 @@ namespace Clover
                 glassBackdrop.FollowWallpaper = settings != null
                     && string.Equals(settings.GlassMode, "screen", StringComparison.OrdinalIgnoreCase);
 
+                // 自定义图模式：读 config\background\custom.*（缺失会自动回退内置固定图）
+                glassBackdrop.BaseDir = baseDir;
+                glassBackdrop.UseCustomImage = settings != null
+                    && string.Equals(settings.GlassMode, "custom", StringComparison.OrdinalIgnoreCase);
+
+                // ---- 视频背景（模式互斥）----
+                //
+                // WE 模式与 custom 模式必须二选一：
+                // 以前先 ApplyWeBackdrop() 成功挂上 WE 视频，紧接着又无条件
+                // ApplyVideoBackdrop()；后者发现不是 custom 模式便 Unload()，
+                // 于是出现"提示已选用，但背景完全没变化"。
+                if (settings != null
+                    && string.Equals(settings.GlassMode, "we", StringComparison.OrdinalIgnoreCase))
+                {
+                    ApplyWeBackdrop();
+                }
+                else
+                {
+                    ApplyVideoBackdrop();
+                }
+
+                // ---- 背景暗度遮罩（所有模式通用）----
+                ApplyDarkness();
+
                 // 外观参数注入（抽成独立方法，启动/切主题/改设置三条路径都调）
                 InjectGlassParams();
 
@@ -253,11 +580,33 @@ namespace Clover
 
                 // 面板没显示时先记下设置，等 ShowPanel 再取背景
                 if (IsVisible) RefreshGlassSoon(50);
+
+                // 层级保险：GlassBackdrop.Attach 可能把毛玻璃层插到视频前面
+                if (videoBackdrop != null) videoBackdrop.VerifyLayer();
             }
             catch (Exception ex)
             {
                 Ui.LogError(ex, "应用毛玻璃设置");
             }
+        }
+        /// <summary>测试用：当前视频是否被策略暂停。</summary>
+        internal bool TestVideoIsPaused()
+        {
+            try { return videoBackdrop != null && videoBackdrop.IsPaused; }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：直接施加一组可见/全屏/电池策略。</summary>
+        internal void TestApplyVideoPolicy(bool visible, bool fullscreen, bool battery)
+        {
+            try { if (videoBackdrop != null) videoBackdrop.ApplyPolicy(visible, fullscreen, battery); }
+            catch { }
+        }
+        /// <summary>测试用：当前视频背景源路径。</summary>
+        internal string TestVideoBackdropPath()
+        {
+            try { return videoBackdrop == null ? null : videoBackdrop.CurrentPathForTest; }
+            catch { return null; }
         }
         /// <summary>隐藏项数量（供右键菜单显示）。</summary>
         public int HiddenCount()

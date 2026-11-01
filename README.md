@@ -170,7 +170,7 @@ outerLayer（圆角裁剪）
 |---|---|
 | 打开面板 | 同点击按钮 |
 | 重新扫描应用 | 后台重新扫描开始菜单与便携软件 |
-| **启用迷你任务栏** | 勾选项，默认开。关掉后左下角不再显示窗口按钮，`显示在任务栏` 菜单也失效 |
+| **迷你任务栏** | 设置 ▸ 任务栏里的勾选项，**默认关**。开启后左下角显示「显示在任务栏」加入的窗口按钮；关闭后该功能整体停用 |
 | **允许隐藏系统任务栏** | 勾选项，默认开。关掉会立即恢复任务栏，并禁用下面一项 |
 | 隐藏系统任务栏 | 勾选项，默认关。勾上后整条系统任务栏隐藏，左下角只留「开始」+ 四叶草 |
 | **隐藏用不到的** | 子菜单：一键隐藏整类（如「系统工具」「工具/命令行」共 60+ 个从没用过的条目）、整理与隐藏…（标签二）、取消隐藏全部。见下方「减少噪音」 |
@@ -201,7 +201,7 @@ outerLayer（圆角裁剪）
 |---|---|---|
 | `hideTaskbar` | `false` | 隐藏系统任务栏（当前状态） |
 | `taskbarHiding` | `true` | 是否**允许**隐藏系统任务栏这个功能 |
-| `miniTaskbar` | `true` | 迷你任务栏 |
+| `miniTaskbar` | `false` | 迷你任务栏（**默认关闭**）|
 | `hoverReveal` | `true` | 悬停唤出（全屏时鼠标移到按钮位置临时显示） |
 | `fullscreenDetect` | `true` | 全屏检测（全屏时自动隐藏悬浮按钮） |
 | `safeMode` | `false` | 强制安全模式 |
@@ -243,9 +243,10 @@ outerLayer（圆角裁剪）
 > | **数据** | （无） | 0 |
 >
 > **界面入口**：
-> - 右键四叶草直接有：`taskbarHiding` / `miniTaskbar` / `hoverReveal` / `fullscreenDetect` / `theme`
-> - **「设置 ▸ 外观…」窗口**：`glassOpacity` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `glassMode` / `glassPreset`
-> - **「文件」标签界面**：`showFilesTab` / `filesSource` / `filesSort`（点标签切换来源、点排序按钮，自动写回）
+> - **右键四叶草**：`taskbarHiding` / `theme`（经「设置…」/「外观…」窗口）
+> - **「设置…」窗口**：`miniTaskbar` / `hideTaskbar` / `hoverReveal` / `fullscreenDetect`
+> - **「外观…」窗口**：`theme` / `glassOpacity` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `glassMode` / `glassPreset`
+> - **「文件」标签界面**：`showFilesTab` / `filesSources` / `filesSource` / `filesSort`（点标签切换来源、点表头排序，自动写回）
 > - 需要手改文件：`safeMode`（也可用 `--safe-mode`）
 >
 > **出问题可以单独关掉对应功能，不用卸载。**

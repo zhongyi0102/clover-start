@@ -257,7 +257,15 @@ Invoke-Suite 'OrganizeShellTest' $wpfRefs `
 Invoke-Suite 'WindowPosTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'WindowPosTest.cs')))
 # 真实创建 PanelWindow，检查界面确实画出来了，并输出 JSON 证据报告。
+
+# 自定义背景图：导入 / 校验 / 缩放 / 回退 / 清除
+Invoke-Suite 'BackgroundStoreTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'BackgroundStoreTest.cs')))
 # 强制使用临时目录，拒绝接触用户真实 config（见 AcceptanceTest.cs 的安全闸）。
+
+# Wallpaper Engine 集成：目录 / 解析 / 穿越防护 / 视频复制 / 暗度 / 回退
+Invoke-Suite 'WallpaperEngineTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'WallpaperEngineTest.cs')))
 $acceptanceReport = Join-Path $outDir 'acceptance-report.json'
 Write-Host '===== AcceptanceTest =====' -ForegroundColor Cyan
 $accExe = Join-Path $outDir 'AcceptanceTest.exe'

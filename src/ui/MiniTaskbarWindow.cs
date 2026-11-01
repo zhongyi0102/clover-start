@@ -33,13 +33,16 @@ namespace Clover
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
             ShowActivated = false;
+            // Topmost 只用于防止被普通窗口遮挡，**不再靠它压住系统任务栏** ——
+            // 位置由 TaskbarGeometry.MiniBarRect 贴到任务栏上沿算出来。
             Topmost = true;
             Title = "任务栏";
             Height = 48;
             Width = 0;
             WindowStartupLocation = WindowStartupLocation.Manual;
-            Left = 108;
-            Top = SystemParameters.PrimaryScreenHeight - 48;
+            // 初始位置交给 Refresh() 算，不写死（分辨率/DPI/任务栏位置都会变）
+            Left = 0;
+            Top = 0;
 
             stack = new StackPanel();
             stack.Orientation = Orientation.Horizontal;
@@ -47,7 +50,13 @@ namespace Clover
 
             DispatcherTimer t = new DispatcherTimer();
             t.Interval = TimeSpan.FromMilliseconds(1500);
-            t.Tick += delegate { if (!ErrorLog.ShuttingDown) Refresh(); };
+            t.Tick += delegate
+            {
+                if (ErrorLog.ShuttingDown) return;
+
+                // 分辨率 / DPI / 多显示器 / 任务栏位置变化时重算
+                if (GeometryChanged()) Refresh();
+            };
             t.Start();
             refreshTimer = t;   // 存成字段，退出时要停（否则关停期间还会跳）
         }
@@ -94,6 +103,57 @@ namespace Clover
 
         /// <summary>条上的按钮数量（0 时整条不显示）。功能停用时恒为 0。</summary>
         public int Count { get { return Enabled ? items.Count : 0; } }
+
+        /// <summary>
+        /// 上次算位置时的几何快照，用于判断"环境变了没"。
+        ///
+        /// 变化来源：分辨率、DPI 缩放、任务栏贴边方向/厚度、任务栏可见性、多显示器。
+        /// 只在这些值真的变了才重算，避免每 1.5 秒都重排一遍。
+        /// </summary>
+        string lastGeomKey = "";
+
+        /// <summary>
+        /// 几何环境是否变化（分辨率 / DPI / 任务栏位置与可见性）。
+        /// </summary>
+        bool GeometryChanged()
+        {
+            try
+            {
+                string key = BuildGeomKey();
+                if (key == lastGeomKey) return false;
+                lastGeomKey = key;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>把影响位置的因素拼成一个可比较的字符串。</summary>
+        string BuildGeomKey()
+        {
+            try
+            {
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+
+                sb.Append(SystemParameters.PrimaryScreenWidth).Append('x')
+                  .Append(SystemParameters.PrimaryScreenHeight).Append('|');
+
+                Rect wa = SystemParameters.WorkArea;
+                sb.Append(wa.Left).Append(',').Append(wa.Top).Append(',')
+                  .Append(wa.Width).Append(',').Append(wa.Height).Append('|');
+
+                sb.Append(TaskbarGeometry.ScaleFactor()).Append('|');
+
+                uint edge;
+                Native.RECT rc;
+                if (Native.GetTaskbarPos(out edge, out rc))
+                    sb.Append(edge).Append(':').Append(rc.Top).Append(',').Append(rc.Bottom);
+
+                sb.Append('|').Append(Native.TaskbarAutoHide());
+
+                return sb.ToString();
+            }
+            catch { return ""; }
+        }
 
         void Refresh()
         {

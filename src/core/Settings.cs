@@ -15,8 +15,13 @@ namespace Clover
         /// <summary>隐藏系统任务栏（当前状态）。默认 false。</summary>
         public bool HideTaskbar = false;
 
-        /// <summary>是否启用“迷你任务栏”功能（左下角显示窗口按钮）。默认 true。</summary>
-        public bool MiniTaskbar = true;
+        /// <summary>
+        /// 是否启用"迷你任务栏"功能（左下角显示窗口按钮）。
+        ///
+        /// **默认 false** —— 这是个可选功能：绝大多数用户不需要它，
+        /// 开着反而会在任务栏上多占一块地方。需要的人自己去设置里打开。
+        /// </summary>
+        public bool MiniTaskbar = false;
 
         /// <summary>是否允许“隐藏系统任务栏”这个功能。默认 true。</summary>
         public bool TaskbarHiding = true;
@@ -65,14 +70,13 @@ namespace Clover
         /// <summary>
         /// 毛玻璃背景模式。
         ///
-        ///   "fixed"  = 固定图 res\background-cyangray.png（默认，观感稳定）
         ///   "screen" = 跟随桌面壁纸（截屏 + 模糊）
+        ///   "fixed"  = 固定图 res\background-cyangray.png
+        ///   "custom" = 用户导入的 config\background\custom.*
+        ///   "we"     = Wallpaper Engine 壁纸（scene 静态图 / video 播放）
         ///
-        /// 为什么默认 fixed：截屏模式下壁纸上的文字/图案会透过来干扰阅读
-        /// （实测壁纸上的"我们买了50箱泡面"透过 77% 不透明度的面板仍可辨）。
-        /// fixed 则完全可控。想要"透出真实桌面"的观感可以切成 screen。
         /// </summary>
-        public string GlassMode = "fixed";
+        public string GlassMode = "screen";
 
         // ---------- 外观参数（第 1 个提交新增）----------
         //
@@ -141,6 +145,37 @@ namespace Clover
         /// </summary>
         public bool TextContrastGuard = true;
 
+        /// <summary>
+        /// 背景暗度遮罩：0 ~ 60（百分比）。默认 0（不叠遮罩）。
+        ///
+        /// 用途：壁纸偏亮时文字看不清，在背景之上叠一层半透明深色，
+        /// 让前景文字始终可读。**所有背景模式通用**（固定图 / 跟随桌面 / 自定义）。
+        /// </summary>
+        public double GlassDarkness = 0;
+
+        // ---------- Wallpaper Engine 壁纸引用（不复制文件）----------
+
+        /// <summary>
+        /// 选中的 WE 壁纸 ID（创意工坊 ID 或本地目录名）。空 = 没选。
+        ///
+        /// **只存引用，不复制文件** —— 每次启动按 ID 重新定位目录。
+        /// </summary>
+        public string WeWallpaperId = "";
+
+        /// <summary>壁纸标题（仅用于设置界面显示「来自：xxx」）。</summary>
+        public string WeWallpaperTitle = "";
+
+        /// <summary>壁纸类型：video / scene（小写）。</summary>
+        public string WeWallpaperType = "";
+
+        /// <summary>
+        /// 主文件相对路径（相对壁纸文件夹），如 `a.mp4` 或 `preview.jpg`。
+        ///
+        /// 存相对路径而不是绝对路径：Steam 库可能换盘符/换目录，
+        /// 每次启动用「ID + 相对路径」在找到的根目录里重新定位。
+        /// </summary>
+        public string WeWallpaperFile = "";
+
         // ---------- 「文件」标签（2-3 新增）----------
 
         /// <summary>是否显示第三个标签「文件」。关掉后只有「常用」「全部」。</summary>
@@ -181,12 +216,12 @@ namespace Clover
         public bool DesktopCleanEnabled = false;
 
         /// <summary>
-        /// 子选项：开启时是否立即清理桌面上**现有**的快捷方式。默认勾选。
+        /// 子选项：开启时是否立即清理桌面上**现有**的快捷方式。
         ///
         /// 不勾选时，现有快捷方式视为用户自己的 —— 补扫也不碰
         /// （靠 `DesktopEnabledAt` 区分"开启前就有"和"开启后新增"）。
         /// </summary>
-        public bool DesktopCleanExisting = true;
+        public bool DesktopCleanExisting = false;
 
         /// <summary>
         /// 开关被打开的时刻（本地时间字符串，可解析）。
@@ -319,6 +354,13 @@ namespace Clover
                 s.GlassTint = ReadColor(d, "glassTint", s.GlassTint);
                 s.GlassTintStrength = ReadIntClamped(d, "glassTintStrength", s.GlassTintStrength, 0, 100);
                 s.GlassBrightness = ReadIntClamped(d, "glassBrightness", s.GlassBrightness, -50, 50);
+                s.GlassDarkness = ReadDoubleClamped(d, "glassDarkness", s.GlassDarkness, 0.0, 60.0);
+
+                // WE 壁纸引用（缺键 → 空串 = 没选）
+                s.WeWallpaperId = ReadString(d, "weWallpaperId", "", null);
+                s.WeWallpaperTitle = ReadString(d, "weWallpaperTitle", "", null);
+                s.WeWallpaperType = ReadString(d, "weWallpaperType", "", null);
+                s.WeWallpaperFile = ReadString(d, "weWallpaperFile", "", null);
                 s.GlassAccent = ReadColor(d, "glassAccent", s.GlassAccent);
                 // ---- 「文件」标签（缺键用默认值，非法值回退）----
                 if (d.TryGetValue("showFilesTab", out v) && v != null)
@@ -342,7 +384,7 @@ namespace Clover
 
                 // ---- 桌面保持无快捷方式 ----
                 s.DesktopCleanEnabled = ReadBool(d, "desktopCleanEnabled", false);
-                s.DesktopCleanExisting = ReadBool(d, "desktopCleanExisting", true);
+                s.DesktopCleanExisting = ReadBool(d, "desktopCleanExisting", false);
                 s.DesktopEnabledAt = ReadString(d, "desktopEnabledAt", "", null);
                 s.DesktopLastScan = ReadString(d, "desktopLastScan", "", null);
                 s.DesktopKeepTargets = ReadStringList(d, "desktopKeepTargets");
@@ -397,6 +439,11 @@ namespace Clover
                 d["glassTint"] = GlassTint;
                 d["glassTintStrength"] = GlassTintStrength;
                 d["glassBrightness"] = GlassBrightness;
+                d["glassDarkness"] = GlassDarkness;
+                d["weWallpaperId"] = WeWallpaperId;
+                d["weWallpaperTitle"] = WeWallpaperTitle;
+                d["weWallpaperType"] = WeWallpaperType;
+                d["weWallpaperFile"] = WeWallpaperFile;
                 d["glassAccent"] = GlassAccent;
                 d["textContrastGuard"] = TextContrastGuard;
                 d["showFilesTab"] = ShowFilesTab;

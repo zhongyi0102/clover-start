@@ -31,7 +31,7 @@ namespace Clover
             string r1 = NewRoot();
             Settings s1 = Settings.Load(r1);
             Check(s1.HideTaskbar == false, "默认不隐藏任务栏");
-            Check(s1.MiniTaskbar == true, "默认启用迷你任务栏");
+            Check(s1.MiniTaskbar == false, "★默认不启用迷你任务栏");
             Check(s1.TaskbarHiding == true, "默认允许隐藏任务栏");
             // desktopAutoClean / desktopAutoCleanNoticeShown 字段已删除 —— 见下方 1b
             // hiddenCategories 字段已删除（分类系统下线）—— 见下方「已删键作为未知字段保留」
@@ -40,7 +40,7 @@ namespace Clover
             Check(Settings.SafeModeActive == false, "默认不在安全模式");
 
             // 本阶段新增的其它字段默认值
-            Check(s1.GlassMode == "fixed", "默认背景模式=固定图");
+            Check(s1.GlassMode == "screen", "默认背景模式=跟随桌面");
 
             // 「文件」标签 3 个新键（2-3）
             Check(s1.ShowFilesTab == true, "★默认显示「文件」标签");
@@ -176,7 +176,7 @@ namespace Clover
             Settings sCfgOld = Settings.Load(rCfgOld);
             Check(sCfgOld.MiniTaskbar == false, "旧配置：已有字段正常读取");
             Check(sCfgOld.Theme == "dark", "旧配置：已有字段正常读取（theme）");
-            Check(sCfgOld.GlassMode == "fixed", "旧配置：缺 glassMode 时补默认 fixed");
+            Check(sCfgOld.GlassMode == "screen", "旧配置：缺 glassMode 时补默认 screen");
 
             // 保存后旧字段仍在、新字段被写入
             sCfgOld.Save();
@@ -313,7 +313,7 @@ namespace Clover
             {
                 Settings s5 = Settings.Load(r5);
                 Check(s5 != null, "损坏 JSON 不崩溃");
-                Check(s5.MiniTaskbar == true, "损坏 JSON 回退到默认值");
+                Check(s5.MiniTaskbar == false, "损坏 JSON 回退到默认值");
             }
             catch (Exception ex)
             {

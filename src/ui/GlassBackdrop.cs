@@ -57,7 +57,21 @@ namespace Clover
         ///     拉回原尺寸后只剩一片平均色，看不出"透的是壁纸"
         ///   · 1/2 太大 —— 模糊开销翻 4 倍，但没有可见收益
         /// </summary>
-        const int Downscale = 4;
+        /// <summary>
+        /// 截屏降采样倍数。
+        ///
+        /// ── 为什么从 4 改成 2 ──
+        ///
+        /// 4 倍时：面板 912x632 → 截 884x604 → 缩到 221x151 → 再放大 4.1 倍。
+        /// 放大 4 倍必然糊，这是画质的主要瓶颈（模糊只是掩盖了它）。
+        ///
+        /// 2 倍时：442x302 → 放大 2.05 倍，细节保留明显更好，
+        /// 内存/耗时增加约 4 倍，但单帧只有 0.5 MB 级别，可接受。
+        ///
+        /// 副作用：视觉模糊半径 = BlurRadius × Downscale，
+        /// 所以同样的 BlurRadius 看起来会"没那么糊"—— 这正是要的效果。
+        /// </summary>
+        const int Downscale = 2;
 
         /// <summary>
         /// 截屏时向内收缩的边距（DIP）。
@@ -205,12 +219,34 @@ namespace Clover
                 if (w < 56 || h < 56) return;
 
                 int dpi = DpiOf(hwnd);
-                // 截屏条件 key：只含「影响截到的像素」的因素。
-                // 外观参数（模糊/染色/亮度）不在这个 key 里 ——
-                // 它们只影响 Attach 阶段的合成，不需要重新截屏。
+                // 缓存键必须包含背景来源身份。
+                //
+                // 之前只区分 screen / fixed：从固定图切到 WE scene 时，窗口位置、
+                // DPI、主题都没变，便直接命中旧的 fixed 缓存，导致“提示已应用，
+                // 面板仍是青灰背景”。WE 还必须带完整路径，否则两个 scene 之间
+                // 切换也会继续复用上一张预览。
+                string sourceKey;
+                if (UseWeImage)
+                {
+                    string p = "";
+                    try { p = System.IO.Path.GetFullPath(WeImagePath ?? ""); }
+                    catch { p = WeImagePath ?? ""; }
+                    sourceKey = "we:" + p.ToLowerInvariant();
+                }
+                else if (UseCustomImage)
+                {
+                    string p = BackgroundStore.Find(BaseDir) ?? "";
+                    try { p = System.IO.Path.GetFullPath(p); } catch { }
+                    sourceKey = "custom:" + p.ToLowerInvariant();
+                }
+                else
+                {
+                    sourceKey = FollowWallpaper ? "screen" : "fixed";
+                }
+
                 string key = rect.Left + "_" + rect.Top + "_" + w + "_" + h + "_" + dpi
                            + "_" + Ui.AppliedTheme
-                           + "_" + (FollowWallpaper ? "screen" : "fixed");
+                           + "_" + sourceKey;
 
                 if (cached != null && cacheKey == key)
                 {
@@ -311,6 +347,8 @@ namespace Clover
         /// 两种模式（由 settings 的 glassMode 决定）：
         ///   · "fixed"  → 读 res\background-cyangray.png（观感稳定，默认）
         ///   · "screen" → 截取桌面壁纸并模糊（透出真实桌面）
+        ///   · "custom" → 读用户导入的 config\background\custom.*（缺失则回退 fixed）
+        ///   · "we"     → 读 WE 壁纸的静态图（scene 类；video 类由 VideoBackdrop 处理）
         ///
         /// 为什么要两种：固定图的配色完全可控，但"透出桌面"是另一种合理审美
         /// （换壁纸整个面板氛围跟着变）。用户自己选。
@@ -319,6 +357,21 @@ namespace Clover
         {
             try
             {
+                // 自定义图优先：找不到/读不出会回退到内置固定图
+                // WE 壁纸静态图优先（scene 类的 preview.*）
+                if (UseWeImage)
+                {
+                    ImageSource we = CaptureFromWeImage(rect);
+                    if (we != null) return we;
+                }
+
+                if (UseCustomImage)
+                {
+                    ImageSource custom = CaptureFromCustom(rect);
+                    if (custom != null) return custom;
+                    // 回退：继续往下走固定图分支（不 return）
+                }
+
                 if (FollowWallpaper) return CaptureFromScreen(rect, dpi);
                 return CaptureFromFile(rect, dpi);
             }
@@ -336,6 +389,27 @@ namespace Clover
         /// false → 读固定图（CaptureFromFile）
         /// </summary>
         public bool FollowWallpaper = false;
+
+        /// <summary>
+        /// 背景是否用用户导入的自定义图（`config\background\custom.*`）。
+        ///
+        /// true  → 读自定义图（找不到就回退内置固定图，见 Capture）
+        /// false → 走原有逻辑（FollowWallpaper 决定 fixed / screen）
+        /// </summary>
+        public bool UseCustomImage = false;
+
+        /// <summary>程序根目录（找 config\background\custom.* 用）。</summary>
+        public string BaseDir = "";
+
+        /// <summary>
+        /// 背景是否用 WE 壁纸的静态图（scene 类的 preview.*）。
+        ///
+        /// 与 UseCustomImage 互斥：两个都为 false 时走固定图 / 跟随桌面。
+        /// </summary>
+        public bool UseWeImage = false;
+
+        /// <summary>WE 壁纸静态图的绝对路径（每次定位后由上层注入）。</summary>
+        public string WeImagePath = "";
 
         /// <summary>
         /// 截取桌面壁纸（备用方案，当前未调用）。
@@ -404,6 +478,196 @@ namespace Clover
         /// 视觉上像一张固定的壁纸在面板后面（而不是每块面板都显示
         /// 同一块画面，那样移动时会觉得背景"粘"在窗口上）。
         /// </summary>
+        /// <summary>
+        /// 从用户导入的自定义图裁剪一块。
+        ///
+        /// 裁剪逻辑与 `CaptureFromFile` 一致（按面板在屏幕上的相对位置取景），
+        /// 区别只是图源换成了 `config\background\custom.*`。
+        ///
+        /// **失败一律返回 null** —— 调用方会回退到内置固定图，
+        /// 不弹窗、不报错（用户可能手动删了那张图）。
+        /// </summary>
+        /// <summary>
+        /// 从 WE 壁纸的静态图裁剪一块（scene 类的 preview.*）。
+        ///
+        /// 裁剪逻辑与 `CaptureFromCustom` 一致，只是图源换成了
+        /// 上层注入的 `WeImagePath`。
+        ///
+        /// **失败返回 null** → 回退固定图（用户可能取消订阅了）。
+        /// </summary>
+        ImageSource CaptureFromWeImage(Native.RECT rect)
+        {
+            try
+            {
+                string path = WeImagePath;
+
+                // 路径变了就重读（换壁纸 / 首次加载）
+                if (weImage == null
+                    || !string.Equals(weImagePath, path, StringComparison.OrdinalIgnoreCase))
+                {
+                    weImage = null;
+                    weImagePath = path;
+
+                    if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+
+                    BitmapImage bi = new BitmapImage();
+                    bi.BeginInit();
+                    bi.CacheOption = BitmapCacheOption.OnLoad;
+                    bi.UriSource = new Uri(path, UriKind.Absolute);
+                    bi.DecodePixelWidth = 3840;   // 限制解码尺寸
+                    bi.EndInit();
+                    bi.Freeze();
+                    weImage = bi;
+                }
+
+                if (weImage == null) return null;
+
+                BitmapImage cached = weImage;
+
+                // ── 铺满面板（cover），取景锚点对准主体 ──
+                //
+                // 要求是「主体完整可见、多余部分裁掉」：
+                //   · 铺满 → 不留白、不变形（等比放大到覆盖整个面板）
+                //   · 多余裁掉 → 面板比例和图片比例不一致时，裁掉超出的一边
+                //   · 主体优先 → 锚点不是机械居中，而是对准人物所在区域
+                //
+                // 主体位置：实测这张 WE 贴图的人物在纵向 13%~89%，
+                // 中心约 51%。裁切时以这个点为锚，避免把头或脚裁掉。
+                double panelW = Math.Max(1, rect.Right - rect.Left);
+                double panelH = Math.Max(1, rect.Bottom - rect.Top);
+                double panelRatio = panelW / panelH;
+
+                double srcW = cached.PixelWidth;
+                double srcH = cached.PixelHeight;
+                double srcRatio = srcW / srcH;
+
+                double cropW, cropH;
+                if (srcRatio > panelRatio)
+                {
+                    // 源图更宽 → 高度铺满，裁左右
+                    cropH = srcH;
+                    cropW = srcH * panelRatio;
+                }
+                else
+                {
+                    // 源图更高（竖图铺横面板）→ 宽度铺满，裁上下
+                    cropW = srcW;
+                    cropH = srcW / panelRatio;
+                }
+
+                cropW = Math.Max(1, Math.Min(cropW, srcW));
+                cropH = Math.Max(1, Math.Min(cropH, srcH));
+
+                // 锚点：横向居中，纵向对准主体（51%）
+                const double AnchorY = 0.28;
+                double x = (srcW - cropW) / 2.0;
+                double y = srcH * AnchorY - cropH / 2.0;
+
+                x = Math.Max(0, Math.Min(x, srcW - cropW));
+                y = Math.Max(0, Math.Min(y, srcH - cropH));
+
+                Int32Rect src = new Int32Rect(
+                    (int)Math.Round(x), (int)Math.Round(y),
+                    Math.Max(1, (int)Math.Round(cropW)),
+                    Math.Max(1, (int)Math.Round(cropH)));
+
+                CroppedBitmap crop = new CroppedBitmap(cached, src);
+                crop.Freeze();
+                return crop;
+            }            catch (Exception ex)
+            {
+                try { Ui.Log("WE 壁纸静态图读取失败，回退固定图: " + ex.Message); } catch { }
+                return null;
+            }
+        }
+
+        /// <summary>已加载的 WE 静态图。</summary>
+        BitmapImage weImage;
+        string weImagePath = "";
+
+        /// <summary>丢弃 WE 静态图缓存（换壁纸后调）。</summary>
+        public void InvalidateWeCache()
+        {
+            weImage = null;
+            weImagePath = "";
+        }
+
+        ImageSource CaptureFromCustom(Native.RECT rect)
+        {
+            try
+            {
+                if (customImage == null)
+                {
+                    if (string.IsNullOrEmpty(BaseDir)) return null;
+
+                    // 解码宽度限制到 3840：4K 图全解码要几十 MB，
+                    // 而背景最终只显示在面板那么大一块上
+                    customImage = BackgroundStore.Load(BaseDir, BackgroundStore.MaxLongEdge);
+                    if (customImage == null) return null;
+                }
+
+                BitmapImage cached = customImage;
+
+                double scrW = Math.Max(1, SystemParameters.PrimaryScreenWidth);
+                double scrH = Math.Max(1, SystemParameters.PrimaryScreenHeight);
+                double relX = (rect.Left + (rect.Right - rect.Left) / 2.0) / scrW;
+                double relY = (rect.Top + (rect.Bottom - rect.Top) / 2.0) / scrH;
+
+                double panelW = Math.Max(1, rect.Right - rect.Left);
+                double panelH = Math.Max(1, rect.Bottom - rect.Top);
+
+                // 等比映射：面板占屏幕多大比例，就从图里取多大比例。
+                //
+                // 旧公式 `panelW/scrW + 0.35` 有两个毛病：
+                //   1. 凭空多取 35%，面板 640 宽时要裁 68% 的图，取景和面板
+                //      尺寸不成比例 —— 缩放窗口时背景跳变，不像"同一张图在动"
+                //   2. 被 Math.Min(1.0, ...) 钳住：面板宽 ≥ 1248（65% 屏宽）
+                //      后恒为 100%，尺寸再变背景完全不动 —— 这就是"大小不自适应"
+                double cropW = cached.PixelWidth * Math.Min(1.0, panelW / scrW);
+                double cropH = cropW * (panelH / panelW);
+
+                if (cropH > cached.PixelHeight)
+                {
+                    cropH = cached.PixelHeight;
+                    cropW = cropH * (panelW / panelH);
+                }
+                if (cropW > cached.PixelWidth)
+                {
+                    cropW = cached.PixelWidth;
+                    cropH = cropW * (panelH / panelW);
+                }
+
+                double x = cached.PixelWidth * relX - cropW / 2.0;
+                double y = cached.PixelHeight * relY - cropH / 2.0;
+
+                x = Math.Max(0, Math.Min(x, cached.PixelWidth - cropW));
+                y = Math.Max(0, Math.Min(y, cached.PixelHeight - cropH));
+
+                Int32Rect src = new Int32Rect(
+                    (int)Math.Round(x), (int)Math.Round(y),
+                    Math.Max(1, (int)Math.Round(cropW)),
+                    Math.Max(1, (int)Math.Round(cropH)));
+
+                CroppedBitmap crop = new CroppedBitmap(cached, src);
+                crop.Freeze();
+                return crop;
+            }
+            catch (Exception ex)
+            {
+                try { Ui.Log("自定义背景裁剪失败，回退内置图: " + ex.Message); } catch { }
+                return null;
+            }
+        }
+
+        /// <summary>已加载的自定义背景图（只读一次）。</summary>
+        BitmapImage customImage;
+
+        /// <summary>丢弃缓存（导入/清除后调用，让下次重读）。</summary>
+        public void InvalidateCustomCache()
+        {
+            customImage = null;
+        }
+
         ImageSource CaptureFromFile(Native.RECT rect, int dpi)
         {
             try
@@ -435,7 +699,14 @@ namespace Clover
                 double panelH = Math.Max(1, rect.Bottom - rect.Top);
 
                 // 裁剪窗口：以面板中心为锚点，尺寸按面板比例
-                double cropW = cached.PixelWidth * Math.Min(1.0, panelW / scrW + 0.35);
+                // 等比映射：面板占屏幕多大比例，就从图里取多大比例。
+                //
+                // 旧公式 `panelW/scrW + 0.35` 有两个毛病：
+                //   1. 凭空多取 35%，面板 640 宽时要裁 68% 的图，取景和面板
+                //      尺寸不成比例 —— 缩放窗口时背景跳变，不像"同一张图在动"
+                //   2. 被 Math.Min(1.0, ...) 钳住：面板宽 ≥ 1248（65% 屏宽）
+                //      后恒为 100%，尺寸再变背景完全不动 —— 这就是"大小不自适应"
+                double cropW = cached.PixelWidth * Math.Min(1.0, panelW / scrW);
                 double cropH = cropW * (panelH / panelW);
                 if (cropH > cached.PixelHeight)
                 {
@@ -756,6 +1027,10 @@ namespace Clover
                 }
                 catch { }
 
+                // 高质量缩放：默认是 Linear，放大时明显发糊。
+                // HighQuality 用 Fant 重采样，代价是每帧多几毫秒 GPU，
+                // 但背景是静态缓存（只有尺寸/位置变才重算），完全划算。
+                RenderOptions.SetBitmapScalingMode(innerLayer, BitmapScalingMode.HighQuality);
                 innerLayer.Background = new ImageBrush(img) { Stretch = Stretch.Fill };
 
                 // 文字清晰保底：必须放在所有层都设好之后

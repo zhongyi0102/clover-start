@@ -406,6 +406,20 @@ namespace Clover
             // 毛玻璃的宿主是 contentHost（不是 root）：
             // Attach 会 Insert(0, 背景)，插到 contentHost 里才会「在内容之下」；
             // 插到 root 里会变成 root 的第二个 Child（非法，root 只能有一个）。
+            // ---- 视频背景层（最底层，索引 0 之前）----
+            videoBackdrop = new VideoBackdrop(this, contentHost);
+
+            // ---- 背景暗度遮罩 ----
+            //
+            // 叠在"背景之上、内容之下"。用 Border 而不是画进背景图里：
+            // 这样改暗度是改一个 Opacity 值，不用重算毛玻璃，能做到即时生效。
+            darkOverlay = new Border();
+            darkOverlay.Background = Brushes.Black;
+            darkOverlay.Opacity = 0;
+            darkOverlay.IsHitTestVisible = false;
+            darkOverlay.CornerRadius = new CornerRadius(Ui.R.Lg);
+            contentHost.Children.Add(darkOverlay);
+
             glassBackdrop = new GlassBackdrop(this, contentHost, Path.Combine(baseDir, "res"));
             glassBackdrop.OpacityPercent = 0;    // 默认关闭，由设置决定
 

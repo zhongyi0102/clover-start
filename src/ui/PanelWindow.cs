@@ -56,6 +56,12 @@ namespace Clover
         Border rootBorder;
         Border maxBtn;
         bool expanded;
+        /// <summary>
+        /// 面板外边距（root 的 Margin），供 PositionPanel 算展开/还原尺寸。
+        ///
+        /// 注意：缩放命中测试**不再用它** —— 那套判定已改成屏幕坐标
+        /// 直接和 GetWindowRect 比较，见 OnResizeHitTest。
+        /// </summary>
         double edgeMargin = 16;
         StackPanel taskStack;
         DispatcherTimer taskTimer;
@@ -115,6 +121,12 @@ namespace Clover
         /// 由 BuildUi 创建；软件渲染时内部自动禁用。
         /// </summary>
         GlassBackdrop glassBackdrop;
+
+        /// <summary>视频背景层（Wallpaper Engine video 类）。</summary>
+        VideoBackdrop videoBackdrop;
+
+        /// <summary>背景暗度遮罩（叠在背景之上、内容之下）。</summary>
+        Border darkOverlay;
 
         /// <summary>搜索结果列表容器（与 tilePanel 互斥显示）。</summary>
         StackPanel searchResultPanel;
@@ -261,6 +273,14 @@ namespace Clover
                 Ui.LogError(ex, "构建面板界面");
             }
 
+            // ★ 启动时应用一次完整的背景设置。
+            //
+            // 为什么必须有这一步：以前只在「外观…」窗口里调 ApplyGlassSetting()，
+            // 所以重启程序后背景一直是默认状态 —— WE 壁纸/自定义图/视频都不生效，
+            // 用户必须打开一次外观窗口才"活过来"。
+            try { ApplyGlassSetting(); }
+            catch (Exception ex) { Ui.LogError(ex, "启动时应用背景设置"); }
+
             // 校正分类：last-category.json 里可能记着已删除的标签
             // （办公/开发/桌面/壁纸/收藏夹/隐藏的项目…），一律回退到「常用」。
             // 必须在 BuildUi 之后（navItems 已建好）调用。
@@ -325,19 +345,14 @@ namespace Clover
                 // 先把缓存更新好，划过时高亮就是对的（避免读到最多 1.5 秒前的旧值）。
                 RefreshActiveCache();
             };
-            // 窗口大小/位置变了，毛玻璃底图就错位了 —— 重截。
+            // ---- 背景自适应：尺寸或位置变化都要重取景 ----
             //
-            // 为什么用 RefreshSoon（1.2 秒合并）而不是立即：
-            // 拖动窗口边缘会连发几十次 SizeChanged，每次都截屏会卡。
-            // 合并后只在用户松手约 1.2 秒时截一次。
-            //
-            // 注意：最大化/还原也会走这里，所以不用在 ToggleExpand 里单独调。
-            SizeChanged += delegate
-            {
-                if (glassBackdrop == null || settings == null || settings.GlassOpacity <= 0) return;
-                if (!IsVisible) return;
-                glassBackdrop.RefreshSoon();
-            };
+            // 「跟随桌面」截的是窗口底下的桌面；固定图/自定义/WE scene
+            // 是按面板在屏幕上的相对位置从大图裁一块。
+            // 只听 SizeChanged 的话，拖动面板（尺寸不变）时取景不更新。
+            // 250ms 合并：拖动中背景静止，松手约 1/4 秒后跟上。
+            SizeChanged += delegate { ScheduleBackdropReframe(); };
+            LocationChanged += delegate { ScheduleBackdropReframe(); };
 
             PreviewKeyDown += delegate(object s, KeyEventArgs e)
             {
@@ -430,47 +445,72 @@ namespace Clover
             HwndSource.FromHwnd(h).AddHook(OnResizeHitTest);
         }
 
+        /// <summary>
+        /// 面板四边四角缩放。
+        ///
+        /// ── 为什么改用屏幕坐标 ──
+        ///
+        /// 旧实现用 `PointFromScreen` 得到**客户区坐标**，再和 `edgeMargin`
+        /// （窗口外边距 16）比较 —— 坐标系错位：
+        ///   · 真正的窗口边缘客户区坐标 ≈ 0，判断不成立 → HTCLIENT
+        ///   · 只有「客户区坐标 ≈ 16」那一圈碰巧命中
+        /// 实测结果就是「只有左边缘内 16px 能拖，右/上/下全废」。
+        ///
+        /// 现在直接用屏幕坐标和 GetWindowRect 比较，窗口最外圈 6px 就是缩放区，
+        /// 和外观窗口用的是同一套判定。
+        /// </summary>
         IntPtr OnResizeHitTest(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (msg != 0x0084) return IntPtr.Zero;
+            const int WM_NCHITTEST = 0x0084;
+            if (msg != WM_NCHITTEST) return IntPtr.Zero;
+
             try
             {
-                long lp = lParam.ToInt64();
-                short sx = (short)(lp & 0xFFFF);
-                short sy = (short)((lp >> 16) & 0xFFFF);
+                // 最大化/展开状态下不接管，交给系统（那里本来就没有可拖的边框）
                 if (expanded) return IntPtr.Zero;
-                Point p = PointFromScreen(new Point(sx, sy));
-                double m = edgeMargin;
-                const double band = 4;
-                double w = Width, h = Height;
-                bool nearL = p.X >= m - band && p.X <= m + band;
-                bool nearR = p.X >= w - m - band && p.X <= w - m + band;
-                bool nearT = p.Y >= m - band && p.Y <= m + band;
-                bool nearB = p.Y >= h - m - band && p.Y <= h - m + band;
-                bool inX = p.X >= m - band && p.X <= w - m + band;
-                bool inY = p.Y >= m - band && p.Y <= h - m + band;
+
+                long lp = lParam.ToInt64();
+                int sx = (short)(lp & 0xFFFF);
+                int sy = (short)((lp >> 16) & 0xFFFF);
+
+                Native.RECT r;
+                if (!Native.GetWindowRect(hwnd, out r)) return IntPtr.Zero;
+
+                const int Band = 6;   // 缩放热区宽度（物理像素）
+
+                bool left = sx <= r.Left + Band;
+                bool right = sx >= r.Right - Band;
+                bool top = sy <= r.Top + Band;
+                bool bottom = sy >= r.Bottom - Band;
+
+                // 点在窗口外时不接管
+                if (sx < r.Left || sx > r.Right || sy < r.Top || sy > r.Bottom)
+                    return IntPtr.Zero;
+
                 int ht = 0;
-                if (nearL && nearT) ht = 13;
-                else if (nearR && nearT) ht = 14;
-                else if (nearL && nearB) ht = 16;
-                else if (nearR && nearB) ht = 17;
-                else if (nearL && inY) ht = 10;
-                else if (nearR && inY) ht = 11;
-                else if (nearT && inX) ht = 12;
-                else if (nearB && inX) ht = 15;
-                if (ht != 0)
-                {
-                    handled = true;
-                    return new IntPtr(ht);
-                }
+                if (left && top) ht = Native.HTTOPLEFT;
+                else if (right && top) ht = Native.HTTOPRIGHT;
+                else if (left && bottom) ht = Native.HTBOTTOMLEFT;
+                else if (right && bottom) ht = Native.HTBOTTOMRIGHT;
+                else if (left) ht = Native.HTLEFT;
+                else if (right) ht = Native.HTRIGHT;
+                else if (top) ht = Native.HTTOP;
+                else if (bottom) ht = Native.HTBOTTOM;
+
+                if (ht == 0) return IntPtr.Zero;
+
+                handled = true;
+                return new IntPtr(ht);
             }
             catch { }
+
             return IntPtr.Zero;
         }
-
         void PositionPanel()
         {
             Rect wa = SystemParameters.WorkArea;
+            // edgeMargin 参与展开/还原时的尺寸计算（见下方 expanded 分支）
+            double em = edgeMargin;
 
             // 面板位置**跟随四叶草按钮**，而不是硬编码。
             //
@@ -625,6 +665,9 @@ namespace Clover
             // 窗口位置还没稳定，截到的背景会错位。
             // 160 ms 是 showShiftAnim 的时长，加一点余量。
             RefreshGlassSoon(220);
+
+            // 面板已显示：立即按当前环境恢复/保持暂停；后续变化由自适应定时器接管。
+            RefreshVideoPolicy();
         }
 
         /// <summary>
@@ -724,22 +767,23 @@ namespace Clover
 
                 // 底色不透明度 = 多少"面板色"盖在壁纸上。
                 //
-                // 这组数值是**两次实测调出来的**，两个极端都试过：
-                //   · alpha 0.68（壁纸透 32%）→ 太闷：五个采样点差值全是 11，
-                //     背景变成均匀纯色，看不出透的是壁纸
-                //   · alpha 0.52（壁纸透 48%）→ 过曝：纯白占 72.8%
-                //     （壁纸本身很亮时，浅色底 + 亮壁纸 = 全白）
-                // 取 0.60（壁纸透 40%）是中间值：既保留色块层次，又不会全白。
+                // ── 系数为什么从 0.50 提到 0.68 ──
                 //
-                // 注意：这是**与具体壁纸相关**的经验值。壁纸极亮时仍会偏白，
+                // 0.50 时壁纸只透出 22%（glassOpacity=45），叠上 12px 视觉模糊
+                // 和 10% 染色后，背景只剩一层极淡色晕 —— 实测把面板从 471,223
+                // 移到 211,223，背景图确实换了（采样 R255→R204），
+                // 但肉眼完全看不出，用户会以为"自适应没生效"。
+                //
+                // 0.68 后的透过率：
+                //   浓度 20 → 14%    45 → 31%    60 → 41%
+                //   浓度 80 → 54%   100 → 68%
+                // 比 0.50 明显更透，但没到 0.78 那种"亮壁纸全白"的程度。
+                //
+                // 注意：这是与具体壁纸相关的经验值。壁纸极亮时仍会偏白，
                 // 那属于"用户该换个壁纸或调低浓度"的范围，不是代码问题。
-                double alpha = 1.0 - (g / 100.0) * 0.50;
-                // 下限从 0.60 改为 0.40：
-                //   改动前 80 和 100 都触到 0.60，滑块后半段无效。
-                //   改后 80 仍是 0.60（老配置观感不变），100 是 0.50（终于更透）。
-                // 注意：这会让 **glassOpacity > 80 的旧配置**观感变透 ——
-                // 那部分用户本来就没有"调到 100 更透"的能力，属于修正缺陷。
-                if (alpha < 0.40) alpha = 0.40;
+                double alpha = 1.0 - (g / 100.0) * 0.68;
+                // 下限 0.30（透过 70%）：浓度拉到 100 时也不至于完全透明。
+                if (alpha < 0.30) alpha = 0.30;
 
                 // 用 Ui.Bg 的颜色 + 自定义 alpha 建一个新刷子。
                 // 不能直接改 Ui.Bg 的 Color —— 那是全局共享刷子，
@@ -756,6 +800,39 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 背景重取景的合并调度：250ms 内的多次尺寸/位置变化只触发一次刷新。
+        ///
+        /// 与 RefreshGlassSoon(220) 的区别：那个用于弹出动画后的首次取景，
+        /// 这个用于拖动/缩放过程中的持续跟随 —— 间隔更短、且不注入参数
+        /// （外观参数没变，只换背景图）。
+        /// </summary>
+        DispatcherTimer reframeTimer;
+        void ScheduleBackdropReframe()
+        {
+            try
+            {
+                if (glassBackdrop == null || settings == null || settings.GlassOpacity <= 0) return;
+                if (!IsVisible) return;
+
+                if (reframeTimer == null)
+                {
+                    reframeTimer = new DispatcherTimer();
+                    reframeTimer.Interval = TimeSpan.FromMilliseconds(250);
+                    reframeTimer.Tick += delegate
+                    {
+                        reframeTimer.Stop();
+                        // 直接 Refresh()：外层 ScheduleBackdropReframe 已经
+                        // 做过 250ms 合并，再走 RefreshSoon 的 1.2s 定时器会把
+                        // 灵敏度吃掉（拖完后背景要近 1.5 秒才对齐）。
+                        try { glassBackdrop.Refresh(); } catch { }
+                    };
+                }
+                reframeTimer.Stop();
+                reframeTimer.Start();
+            }
+            catch { }
+        }
         /// <summary>
         /// 延迟刷新毛玻璃背景。
         ///
@@ -782,6 +859,10 @@ namespace Clover
                     t.Stop();
                     if (!IsVisible) return;
                     glassBackdrop.Refresh();
+
+                    // ★ 毛玻璃层刚建出来（Refresh 里 Attach），此时它在索引 0，
+                    //   会把之前插好的视频层盖住 —— 立刻重新校正层级
+                    if (videoBackdrop != null) videoBackdrop.VerifyLayer();
                 };
                 t.Start();
             }
@@ -804,6 +885,10 @@ namespace Clover
         {
             Ui.Log("HidePanel, visible=" + IsVisible);
             if (!IsVisible) return;
+
+            // 开始收起就暂停视频，不等淡出完成，也不浪费后台解码。
+            try { if (videoBackdrop != null) videoBackdrop.ApplyPolicy(false, false, VideoBackdrop.IsOnBattery()); }
+            catch { }
             SaveLayout();
             // 复用单个动画对象，避免每次隐藏都新建 DoubleAnimation + Clock
             // （实测反复开关面板会造成托管堆持续增长）。
@@ -854,6 +939,8 @@ namespace Clover
                     // （外层没有 Margin，投影会画在窗口边界之外，看起来像屏幕边缘发黑）
                     SetShadowHostEffect(false);
                     Rect wa = SystemParameters.WorkArea;
+            // edgeMargin 参与展开/还原时的尺寸计算（见下方 expanded 分支）
+            double em = edgeMargin;
                     Left = wa.Left;
                     Top = wa.Top;
                     Width = wa.Width;

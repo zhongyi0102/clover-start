@@ -43,6 +43,7 @@ namespace Clover
             TestFollowWallpaperSwitch();
             TestSettingsDefaults();
             TestCaptureDoesNotThrow();
+            TestWeSceneReplacesFixedBackground();
             TestAccentSettingsPreserved();
 
             Console.WriteLine();
@@ -98,7 +99,7 @@ namespace Clover
                 Settings s = Settings.Load(root);
 
                 Check(s.GlassOpacity == 0, "glassOpacity 默认 0", Convert.ToString(s.GlassOpacity));
-                Check(s.GlassMode == "fixed", "glassMode 默认 fixed", s.GlassMode ?? "null");
+                Check(s.GlassMode == "screen", "glassMode 默认 screen（跟随桌面）", s.GlassMode ?? "null");
 
                 // 往返
                 s.GlassMode = "screen";
@@ -178,7 +179,129 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 4. 已删除的强调色键：作为未知字段保留 ----------
+        // ---------- 4. WE scene 必须替换固定图缓存 ----------
+        static void TestWeSceneReplacesFixedBackground()
+        {
+            Console.WriteLine("--- 4. WE scene 切换会替换固定图缓存 ---");
+
+            string root = NewRoot();
+            string res = Path.Combine(root, "res");
+            Directory.CreateDirectory(res);
+            string fixedPng = Path.Combine(res, "background-cyangray.png");
+            string scenePng = Path.Combine(root, "scene.png");
+            string scene2Png = Path.Combine(root, "scene2.png");
+            WriteSolidPng(fixedPng, 255, 0, 0);     // 红：固定图
+            WriteSolidPng(scenePng, 0, 255, 0);     // 绿：scene 预览 1
+            WriteSolidPng(scene2Png, 0, 0, 255);    // 蓝：scene 预览 2
+
+            Window w = null;
+            GlassBackdrop gb = null;
+            try
+            {
+                System.Windows.Controls.Grid host = new System.Windows.Controls.Grid();
+                w = new Window();
+                w.Width = 240;
+                w.Height = 160;
+                w.Left = 100;
+                w.Top = 100;
+                w.WindowStyle = WindowStyle.None;
+                w.ShowInTaskbar = false;
+                w.Content = host;
+                w.Show();
+                w.UpdateLayout();
+
+                gb = new GlassBackdrop(w, host, res);
+                gb.OpacityPercent = 80;
+                gb.BlurRadius = 0;
+                gb.TintStrength = 0;
+                gb.GrainStrength = 0;
+                gb.HighlightStrength = 0;
+                gb.ContrastGuardEnabled = false;
+
+                gb.UseWeImage = false;
+                gb.FollowWallpaper = false;
+                gb.Refresh();
+                Color first = SampleAttachedColor(host);
+                Check(first.R > 200 && first.G < 40,
+                    "固定模式先挂载红色测试图",
+                    first.R + "," + first.G + "," + first.B);
+
+                gb.UseWeImage = true;
+                gb.WeImagePath = scenePng;
+                gb.Refresh();
+                Color second = SampleAttachedColor(host);
+                Check(second.G > 200 && second.R < 40,
+                    "★切到 WE scene 后实际挂载绿色预览（不得复用固定图缓存）",
+                    second.R + "," + second.G + "," + second.B);
+
+                gb.WeImagePath = scene2Png;
+                gb.Refresh();
+                Color third = SampleAttachedColor(host);
+                Check(third.B > 200 && third.R < 40 && third.G < 40,
+                    "★从一个 WE scene 切到另一个时挂载新预览（路径必须进入缓存键）",
+                    third.R + "," + third.G + "," + third.B);
+            }
+            finally
+            {
+                try { if (gb != null) gb.Stop(); } catch { }
+                try { if (w != null) w.Close(); } catch { }
+                Clean(root);
+            }
+
+            Console.WriteLine();
+        }
+
+        static void WriteSolidPng(string path, byte r, byte g, byte b)
+        {
+            const int W = 96, H = 64;
+            int stride = W * 4;
+            byte[] pixels = new byte[stride * H];
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i] = b;
+                pixels[i + 1] = g;
+                pixels[i + 2] = r;
+                pixels[i + 3] = 255;
+            }
+
+            System.Windows.Media.Imaging.BitmapSource src =
+                System.Windows.Media.Imaging.BitmapSource.Create(
+                    W, H, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+            System.Windows.Media.Imaging.PngBitmapEncoder enc =
+                new System.Windows.Media.Imaging.PngBitmapEncoder();
+            enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(src));
+            using (FileStream fs = File.Create(path)) enc.Save(fs);
+        }
+
+        static Color SampleAttachedColor(System.Windows.Controls.Panel host)
+        {
+            foreach (UIElement e in host.Children)
+            {
+                FrameworkElement fe = e as FrameworkElement;
+                if (fe == null || !"glassBackdrop".Equals(Convert.ToString(fe.Tag))) continue;
+
+                System.Windows.Controls.Border outer = fe as System.Windows.Controls.Border;
+                System.Windows.Controls.Grid stack = outer == null
+                    ? null : outer.Child as System.Windows.Controls.Grid;
+                if (stack == null || stack.Children.Count == 0) break;
+
+                System.Windows.Controls.Border inner =
+                    stack.Children[0] as System.Windows.Controls.Border;
+                ImageBrush brush = inner == null ? null : inner.Background as ImageBrush;
+                System.Windows.Media.Imaging.BitmapSource bmp = brush == null
+                    ? null : brush.ImageSource as System.Windows.Media.Imaging.BitmapSource;
+                if (bmp == null) break;
+
+                int x = Math.Max(0, bmp.PixelWidth / 2);
+                int y = Math.Max(0, bmp.PixelHeight / 2);
+                byte[] px = new byte[4];
+                bmp.CopyPixels(new Int32Rect(x, y, 1, 1), px, 4, 0);
+                return Color.FromArgb(px[3], px[2], px[1], px[0]);
+            }
+            return Colors.Transparent;
+        }
+
+        // ---------- 5. 已删除的强调色键：作为未知字段保留 ----------
         static void TestAccentSettingsPreserved()
         {
             Console.WriteLine("--- 4. 已删键作为未知字段保留 ---");
