@@ -1092,7 +1092,7 @@ namespace Clover
                 dragOverPanel = true;
                 StopDragWatch();          // 已经进来了，不用再轮询
 
-                bool internalDrag = HasInternalDesktopDrag(e);
+                bool internalDrag = HasAnyInternalDrag(e);
                 e.Effects = ResolveDropEffect(e, internalDrag);
 
                 // 只有「这一页真的会接收」时才点亮 DropHint。
@@ -1116,7 +1116,7 @@ namespace Clover
                 // DragOver 在拖放期间每几十毫秒触发一次，**每次赋值 e.Effects
                 // 都会让系统重画光标**。只在结果真的变了时才写 ——
                 // 这是拖放循环里最容易被忽略的一处开销。
-                DragDropEffects want = ResolveDropEffect(e, HasInternalDesktopDrag(e));
+                DragDropEffects want = ResolveDropEffect(e, HasAnyInternalDrag(e));
                 if (e.Effects != want) e.Effects = want;
 
                 // 不重复 SetDropHighlight：那会启动动画，见 SetActive 的说明
@@ -1205,6 +1205,23 @@ namespace Clover
                 SetDropHighlight(false);
 
                 if (!HasFiles(e)) { e.Handled = true; return; }
+
+                // ---- 内部拖动：一律不处理落下 ----
+                //
+                // 两种内部拖动都会带 FileDrop，所以必须在「有文件」之后、
+                // 业务分支之前拦掉，否则：
+                //   · 「文件」页拖出的文件会被当成"新来源文件夹"去校验
+                //     → 弹「没有放入任何文件，跳过 1 个不是文件夹」
+                //   · 桌面页拖出的图标会被 DeskImporter 再搬一次
+                //
+                // 光标在 DragEnter/DragOver 里已经显示禁止了（Effects=None），
+                // 这里只是兜底 —— 某些目标仍可能在 Effects=None 时派发 Drop。
+                if (HasAnyInternalDrag(e))
+                {
+                    Ui.Log("Drop 忽略：内部拖动（" + current + "）");
+                    e.Handled = true;
+                    return;
+                }
 
                 // ---- 「文件」标签：拖文件夹进来加来源 ----
                 //
@@ -1371,6 +1388,33 @@ namespace Clover
                     && e.Data.GetDataPresent(DesktopDragGesture.InternalDataFormat);
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// 是不是「文件」页自己拖出的文件。
+        ///
+        /// 与 <see cref="HasInternalDesktopDrag"/> 分开判：
+        ///   · 桌面页拖出 → 拖出去后面板该收起（StartDragWatch 的逻辑）
+        ///   · 文件页拖出 → 是复制，用户往往还要回来，不该收起
+        ///
+        /// 两者**都算内部拖动**（光标判定时用 IsInternalDrag 合并），
+        /// 但只有桌面页那个会触发 DragLeave 的收起逻辑。
+        /// </summary>
+        static bool HasInternalFilesDrag(DragEventArgs e)
+        {
+            try
+            {
+                return e.Data != null
+                    && e.Data.GetDataPresent(DropCursor.InternalFilesFormat);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>这次拖拽是不是本程序发起的（任一内部标记）。</summary>
+        static bool HasAnyInternalDrag(DragEventArgs e)
+        {
+            return DropCursor.IsInternalDrag(
+                HasInternalDesktopDrag(e), HasInternalFilesDrag(e));
         }
 
         static bool HasFiles(DragEventArgs e)

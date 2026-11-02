@@ -36,11 +36,28 @@ namespace Clover
         }
 
         /// <summary>
+        /// 「文件」标签拖出时写入的内部拖动标记。
+        ///
+        /// ── 为什么不复用 DesktopDragGesture.InternalDataFormat ──
+        ///
+        /// 那个标记被 `PanelWindow.OnPanelDragLeave` 用来触发
+        /// `StartDragWatch()` —— 一个 80ms 轮询，松手后若鼠标在面板外
+        /// 就 `HidePanel()`。它服务于「桌面页拖图标到资源管理器」这个场景
+        /// （拖出去后面板该收起）。
+        ///
+        /// 但「文件」页拖出到资源管理器是**复制**，用户拖完往往还要回来继续
+        /// 操作面板。复用那个标记会让面板在拖完后消失，是行为倒退。
+        ///
+        /// 所以单独一个格式：只用于「光标判定」，不参与拖出后的收起逻辑。
+        /// </summary>
+        public const string InternalFilesFormat = "CloverStart.FilesTabDrag";
+
+        /// <summary>
         /// 算出拖入时该显示的光标效果。
         /// </summary>
         /// <param name="isInternalDrag">
-        /// 是不是内部拖动（磁贴排序、图标拖动）。
-        /// **内部拖动一律返回 None**：它不是文件拖放，不该显示"可放"光标。
+        /// 是不是内部拖动（磁贴排序、图标拖动、「文件」页拖出）。
+        /// **内部拖动一律返回 None**：它不是外部文件拖入，不该显示"可放"光标。
         /// </param>
         /// <param name="hasFiles">拖的东西里有没有文件（FileDrop 格式）</param>
         /// <param name="pageAccepts">
@@ -49,7 +66,7 @@ namespace Clover
         /// </param>
         public static Effect Resolve(bool isInternalDrag, bool hasFiles, bool pageAccepts)
         {
-            // 内部拖动：不是文件拖放，不给"可放"光标
+            // 内部拖动：不是外部文件拖入，不给"可放"光标
             if (isInternalDrag) return Effect.None;
 
             // 没带文件：不是我们能处理的拖放
@@ -59,6 +76,22 @@ namespace Clover
             if (!pageAccepts) return Effect.None;
 
             return Effect.Copy;
+        }
+
+        /// <summary>
+        /// 这个 DataObject 是不是本程序自己发起的拖动。
+        ///
+        /// 两个来源都算：
+        ///   · 桌面页拖出图标（`DesktopDragGesture.InternalDataFormat`）
+        ///   · 「文件」页拖出文件（<see cref="InternalFilesFormat"/>）
+        ///
+        /// **外部程序不可能写入这两个私有格式**，所以外部拖入必然返回 false。
+        /// 这是唯一的可靠判据 —— 不能看有没有 FileDrop，因为内部拖出
+        /// 同样会带 FileDrop（`DesktopView.BeginDragOut` 就设了）。
+        /// </summary>
+        public static bool IsInternalDrag(bool isDesktopDrag, bool isFilesDrag)
+        {
+            return isDesktopDrag || isFilesDrag;
         }
 
         /// <summary>

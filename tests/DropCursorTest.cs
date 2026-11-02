@@ -37,6 +37,8 @@ namespace Clover
                 TestInternalDrag();
                 TestPageAccepts();
                 TestMatrix();
+                TestInternalFormats();
+                TestFilesTabDragBack();
             }
             catch (Exception ex)
             {
@@ -144,6 +146,71 @@ namespace Clover
 
             Check(copyCount == 1, "★8 种里只有 1 种是 Copy", Convert.ToString(copyCount));
             Check(noneCount == 7, "★其余 7 种都是 None", Convert.ToString(noneCount));
+
+            Console.WriteLine();
+        }
+
+        // ---------- 5. 两个内部格式互不干扰 ----------
+        static void TestInternalFormats()
+        {
+            Console.WriteLine("--- 5. 两个内部格式 ---");
+
+            // 「文件」页的格式与桌面页的格式必须是不同的字符串，
+            // 否则 OnPanelDragLeave 的 StartDragWatch 会被误触发。
+            Check(DropCursor.InternalFilesFormat != DesktopDragGesture.InternalDataFormat,
+                "★两个内部格式不同",
+                DropCursor.InternalFilesFormat + " vs " + DesktopDragGesture.InternalDataFormat);
+
+            // 都是私有命名空间前缀（外部程序不可能撞上）
+            Check(DropCursor.InternalFilesFormat.StartsWith("CloverStart.", StringComparison.Ordinal),
+                "★文件页格式用私有前缀", DropCursor.InternalFilesFormat);
+            Check(DesktopDragGesture.InternalDataFormat.StartsWith("CloverStart.", StringComparison.Ordinal),
+                "★桌面页格式用私有前缀", DesktopDragGesture.InternalDataFormat);
+
+            // IsInternalDrag：两个来源任一为 true 就算内部
+            Check(DropCursor.IsInternalDrag(true, false), "★桌面页拖动 → 内部");
+            Check(DropCursor.IsInternalDrag(false, true), "★文件页拖动 → 内部");
+            Check(DropCursor.IsInternalDrag(true, true), "两个都是 → 内部");
+            Check(!DropCursor.IsInternalDrag(false, false), "★外部拖入 → 不是内部");
+
+            Console.WriteLine();
+        }
+
+        // ---------- 6. 文件页拖回自身（本轮修复的场景）----------
+        static void TestFilesTabDragBack()
+        {
+            Console.WriteLine("--- 6. 文件页拖回面板自身 ---");
+
+            // 场景：在「文件」页拖出一个文件，拖回面板自身范围。
+            // 拖动源带 FileDrop + InternalFilesFormat。
+            bool isDesktopDrag = false;
+            bool isFilesDrag = true;
+            bool hasFiles = true;                       // 内部拖出**确实**带 FileDrop
+            bool accepts = DropCursor.PageAcceptsDrop("文件", false);   // 文件页接收
+
+            bool internalDrag = DropCursor.IsInternalDrag(isDesktopDrag, isFilesDrag);
+            DropCursor.Effect e = DropCursor.Resolve(internalDrag, hasFiles, accepts);
+
+            Check(internalDrag, "★被判为内部拖动");
+            Check(hasFiles, "★确实带 FileDrop（证明不能靠它判断）");
+            Check(accepts, "★文件页本身是接收页");
+            Check(e == DropCursor.Effect.None,
+                "★但内部拖动 → 光标禁止（不被当外部拖入）", e.ToString());
+
+            // 对照：外部拖入同一个页面 → Copy
+            DropCursor.Effect ext = DropCursor.Resolve(false, true, accepts);
+            Check(ext == DropCursor.Effect.Copy,
+                "★外部拖入同一页仍是 Copy（修复没影响正常路径）", ext.ToString());
+
+            // 对照：桌面页拖出图标拖回面板自身 → 也是 None
+            bool deskInternal = DropCursor.IsInternalDrag(true, false);
+            Check(DropCursor.Resolve(deskInternal, true, true) == DropCursor.Effect.None,
+                "★桌面页拖回自身 → None");
+
+            // 对照：拖到资源管理器 —— 那是外部程序接收，不经过这里的判定。
+            // 这里只断言本程序的判定不会把内部拖出变成 Copy。
+            Check(DropCursor.Resolve(true, true, true) != DropCursor.Effect.Copy,
+                "★内部拖出在任何页都不是 Copy");
 
             Console.WriteLine();
         }

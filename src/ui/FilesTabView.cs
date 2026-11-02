@@ -1328,6 +1328,24 @@ namespace Clover
                         System.Windows.DataObject data = new System.Windows.DataObject();
                         data.SetFileDropList(sc);
 
+                        // 打内部标记：拖回面板自身时不该被当成"外部文件拖入"。
+                        //
+                        // 不打标记的后果（实测）：在「文件」页拖一个文件、拖回面板
+                        // 自身范围，PanelWindow 判成外部拖入 → 光标显示"可放" →
+                        // 松手走「加来源」分支 → 把文件当文件夹校验 → 弹
+                        // 「没有放入任何文件，跳过 1 个不是文件夹」。
+                        //
+                        // 用 DropCursor.InternalFilesFormat 而不是
+                        // DesktopDragGesture.InternalDataFormat：后者会让
+                        // OnPanelDragLeave 触发 StartDragWatch，拖到资源管理器
+                        // 松手后面板会收起 —— 而"文件"页拖出是复制，用户
+                        // 往往还要回来继续操作。详见该常量的注释。
+                        try
+                        {
+                            data.SetData(DropCursor.InternalFilesFormat, "1");
+                        }
+                        catch (Exception ex) { Ui.Log("设置文件页内部拖动标记失败: " + ex.Message); }
+
                         // ★ 只允许 Copy：拖到资源管理器是"复制"，源文件不动
                         DragDrop.DoDragDrop(b, data, DragDropEffects.Copy);
                     }
