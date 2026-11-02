@@ -1103,9 +1103,14 @@ namespace Clover
                 return "ok（入场 EaseOut / 出场 EaseIn，均为冻结的 CubicEase）";
             });
 
-            // 面板刚显示时布局可能还没跑完（IsVisible 为 false），先等一拍。
-            // 这是既有 flaky 点：首次运行时偶发失败，与业务逻辑无关。
-            WaitForDispatcher(400);
+            // 面板刚显示时布局可能还没跑完（IsVisible 为 false）。
+            //
+            // ★ 这里原来是固定的 WaitForDispatcher(400) —— 那是既有的 flaky 点：
+            //   首次运行时偶发失败（实测基线 517252a 上 5 次里有 1 次）。
+            //   固定时长等待假设"400ms 内布局一定完成"，但面板首次显示要跑
+            //   布局 + 入场动画 + 后台扫描回调，机器负载高时会超。
+            //   现在改成轮询到真的就绪为止（最多 5 秒）。
+            WaitUntilNavToggleReady(panel, 5000);
 
             // ---------- 14. 侧栏折叠按钮：位置在侧栏内、可收起可恢复 ----------
             // 为什么专门断言位置：按钮用 HorizontalAlignment.Right 定位，
@@ -1114,13 +1119,10 @@ namespace Clover
             {
                 Border t = panel.NavToggle;
                 if (t == null) return "navToggle 为 null（按钮没建立）";
-                // IsVisible 依赖布局完成，首次运行时可能还没跑完 —— 轮询等它
-                for (int w = 0; w < 20 && !t.IsVisible; w++)
-                {
-                    WaitForDispatcher(100);
-                    panel.UpdateLayout();
-                }
-                if (!t.IsVisible) return "按钮不可见（等 2 秒后仍不可见）";
+
+                // 前置等待已轮询过；这里再兜一次（后面的 Verify 可能改了状态）
+                if (!WaitUntilNavToggleReady(panel, 2000))
+                    return "按钮未就绪：" + DescribeNavToggle(panel);
 
                 try
                 {
@@ -1173,6 +1175,11 @@ namespace Clover
             {
                 Border t = panel.NavToggle;
                 if (t == null) return "navToggle 为 null";
+
+                // 与上一条用同一套等待：位置对但没布局完，命中测试同样会返回 null
+                if (!WaitUntilNavToggleReady(panel, 2000))
+                    return "按钮未就绪：" + DescribeNavToggle(panel);
+
                 if (t.ActualWidth <= 0 || t.ActualHeight <= 0)
                     return string.Format("按钮尺寸为 0：{0}x{1}", t.ActualWidth, t.ActualHeight);
 
@@ -1631,6 +1638,125 @@ namespace Clover
             t.Tick += delegate { t.Stop(); frame.Continue = false; };
             t.Start();
             System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+
+        /// <summary>
+        /// 轮询等 `navToggle` 真的可见且尺寸非零，最多等 timeoutMs。
+        ///
+        /// ── 为什么不用固定时长等待 ──
+        ///
+        /// 原来这里是 `WaitForDispatcher(400)`，假设"400ms 内布局一定完成"。
+        /// 实测在基线 517252a 上 5 次里有 1 次失败。
+        ///
+        /// ── 真正的根因（诊断信息定位的）──
+        ///
+        /// 加上祖先链诊断后看到了这个：
+        /// <code>
+        /// Border=Visible > Grid=Visible > ... > PanelWindow=Hidden
+        /// 窗口 IsVisible=False Size=912x632
+        /// </code>
+        /// 按钮自己完全正常（22x22、Visible），是**整个窗口被隐藏了**。
+        ///
+        /// 触发路径：`PanelWindow.Deactivated` → `HidePanel()`。
+        /// 测试跑在无人值守环境里，窗口没有真正的用户焦点，
+        /// 系统会在某个时刻派发 Deactivated（日志实测
+        /// `suppress=False menu=False lbtn=False` 时无条件隐藏）。
+        ///
+        /// ── 所以这里做两件事 ──
+        ///
+        ///   1. 轮询真实条件（IsVisible + ActualWidth > 0），而不是等固定时长
+        ///   2. 发现窗口被意外隐藏时调 `ShowPanel()` 恢复前置条件
+        ///
+        /// **这不是"重试测试"**：断言本身没被重跑，只是把"面板应当可见"
+        /// 这个前置状态重新建立起来。真正的断言仍会在下面如实执行、如实失败。
+        ///
+        /// **没有改产品代码**：`Deactivated` 自动收起是正确行为
+        /// （用户点面板外就该收起），只是无人值守环境里没有真实焦点，
+        /// 它会误触发。
+        /// </summary>
+        static bool WaitUntilNavToggleReady(PanelWindow panel, int timeoutMs)
+        {
+            try
+            {
+                if (panel == null) return false;
+
+                int elapsed = 0;
+                while (elapsed < timeoutMs)
+                {
+                    Border t = panel.NavToggle;
+                    if (t != null && t.IsVisible && t.ActualWidth > 0 && t.ActualHeight > 0)
+                        return true;
+
+                    // 窗口被 Deactivated 意外收起了 → 恢复前置条件
+                    if (!panel.IsVisible)
+                    {
+                        try { panel.ShowPanel(); } catch { }
+                        WaitForDispatcher(50);
+                        panel.UpdateLayout();
+                        elapsed += 50;
+                        continue;
+                    }
+
+                    WaitForDispatcher(50);
+                    panel.UpdateLayout();
+                    elapsed += 50;
+                }
+
+                // 最后一轮：再确认一次
+                Border last = panel.NavToggle;
+                return last != null && last.IsVisible && last.ActualWidth > 0 && last.ActualHeight > 0;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 超时时输出诊断：按钮自身状态 + 各祖先的 Visibility + 尺寸。
+        ///
+        /// 为什么需要：只报"按钮不可见"没法定位是哪一层被藏了。
+        /// 有了祖先链就能一眼看出是 navScroll 被收起、还是 body 没显示、
+        /// 还是整个窗口没布局。
+        /// </summary>
+        static string DescribeNavToggle(PanelWindow panel)
+        {
+            try
+            {
+                if (panel == null) return "panel 为 null";
+
+                Border t = panel.NavToggle;
+                if (t == null) return "navToggle 为 null";
+
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                sb.Append("IsVisible=").Append(t.IsVisible);
+                sb.Append(" Size=").Append(Math.Round(t.ActualWidth)).Append("x")
+                  .Append(Math.Round(t.ActualHeight));
+
+                // 向上走可视树，记录每一层的 Visibility
+                sb.Append(" | 祖先链: ");
+                DependencyObject cur = t;
+                int depth = 0;
+                while (cur != null && depth < 12)
+                {
+                    UIElement ue = cur as UIElement;
+                    FrameworkElement fe = cur as FrameworkElement;
+                    string name = fe != null && !string.IsNullOrEmpty(fe.Name)
+                        ? fe.Name
+                        : cur.GetType().Name;
+
+                    string vis = ue != null ? ue.Visibility.ToString() : "?";
+                    sb.Append(name).Append("=").Append(vis).Append(" > ");
+
+                    cur = System.Windows.Media.VisualTreeHelper.GetParent(cur);
+                    depth++;
+                }
+                sb.Append("(root)");
+
+                sb.Append(" | 窗口 IsVisible=").Append(panel.IsVisible);
+                sb.Append(" Size=").Append(Math.Round(panel.ActualWidth)).Append("x")
+                  .Append(Math.Round(panel.ActualHeight));
+
+                return sb.ToString();
+            }
+            catch (Exception ex) { return "诊断失败: " + ex.Message; }
         }
 
         /// <summary>递归收集窗口按钮（32x32 且带 tooltip 的 Border）。</summary>
