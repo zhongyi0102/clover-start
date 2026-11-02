@@ -383,6 +383,143 @@ namespace Clover
                 }
             });
 
+            // ---------- 4c-3. 存放目录可配置（真实面板 + 真实磁盘） ----------
+            //
+            // 这一段是「存放目录可配置」这个需求的验收证据：
+            // 不是测 DeskRootChange 的纯逻辑（那在 DeskRootChangeTest 里），
+            // 而是测**真实 PanelWindow 改完 root 之后，界面确实跟着走**。
+            Verify("★存放目录：默认指向程序目录下的 desks", delegate
+            {
+                string r = panel.DeskRootPath();
+                string want = Path.Combine(root, "desks");
+                if (!string.Equals(r, want, StringComparison.OrdinalIgnoreCase))
+                    return "期望 " + want + "，实际 " + r;
+                return "ok（" + r + "）";
+            });
+
+            Verify("★存放目录：改成新目录后，文件真的搬过去且 root 落盘", delegate
+            {
+                try
+                {
+                    string newRoot = Path.Combine(root, "desks-moved");
+
+                    // 先在当前目录里放一个可识别的文件
+                    string srcDir = Path.Combine(root, "desks", "桌面文件");
+                    Directory.CreateDirectory(srcDir);
+                    string probe = Path.Combine(srcDir, "root-probe.txt");
+                    File.WriteAllText(probe, "probe-content", new UTF8Encoding(false));
+
+                    List<string> names = new List<string> { "桌面文件" };
+                    DeskRootChange.Plan plan = DeskRootChange.Inspect(
+                        Path.Combine(root, "desks"), names);
+                    if (plan.Files < 1) return "盘点没数到文件：" + plan.Files;
+
+                    // 直接走「搬过去」分支（三选一弹窗没法在无人值守里点）
+                    string err = panel.ApplyDeskRootChange(
+                        Path.Combine(root, "desks"), newRoot, names, plan,
+                        DeskRootDialog.Choice.Migrate);
+                    if (err != "") return "切换返回：" + (err.Length == 0 ? "(空)" : err);
+
+                    // 1) 文件到了新位置
+                    string moved = Path.Combine(newRoot, "桌面文件", "root-probe.txt");
+                    if (!File.Exists(moved)) return "文件没搬过去：" + moved;
+                    if (File.ReadAllText(moved, Encoding.UTF8) != "probe-content")
+                        return "搬过去后内容不一致";
+                    // 2) 旧位置已清空
+                    if (File.Exists(probe)) return "旧位置仍有文件：" + probe;
+                    // 3) root 写进了 virtual-desks.json
+                    string json = JsonIO.Read(Path.Combine(root, "config", "virtual-desks.json"));
+                    string full = DeskRootChange.SafeFull(newRoot);
+                    if (!json.Contains(full.Replace("\\", "\\\\")))
+                        return "virtual-desks.json 里没有新 root";
+                    // 4) 面板对外报的路径已更新
+                    if (!string.Equals(panel.DeskRootPath(), full, StringComparison.OrdinalIgnoreCase))
+                        return "DeskRootPath 未更新：" + panel.DeskRootPath();
+
+                    return "ok（文件已搬、" + plan.Files + " 个文件、root 已落盘）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            Verify("★存放目录：切到新目录后桌面页仍能渲染（不是空壳）", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("桌面文件");
+                    WaitForDispatcher(300);
+                    panel.UpdateLayout();
+                    if (!panel.TestDeskPanelVisible()) return "桌面文件页不可见";
+
+                    // 文件还在页面上（画布不是空的）
+                    double[] h = panel.TestDeskHeights();
+                    if (h == null || h.Length < 3 || h[2] < 200)
+                        return "画布尺寸异常";
+
+                    panel.TestSwitchCategory("常用");
+                    return "ok";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            Verify("★存放目录：拒绝把目录设成自己的子目录（防嵌套）", delegate
+            {
+                try
+                {
+                    string cur = panel.DeskRootPath();
+                    DeskRootChange.Check c = DeskRootChange.Validate(
+                        Path.Combine(cur, "sub"), cur);
+                    if (c.Ok) return "子目录被放行了";
+                    if (c.Message.Length == 0) return "拒绝了但没给原因";
+                    return "ok（" + c.Verdict + "）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            Verify("★存放目录：迁移失败时 root 一个字节都不改", delegate
+            {
+                try
+                {
+                    string cur = panel.DeskRootPath();
+                    string target = Path.Combine(root, "desks-blocked");
+                    Directory.CreateDirectory(target);
+
+                    // 在目标里预先占住同名文件夹 → 预检就该拦下
+                    Directory.CreateDirectory(Path.Combine(target, "桌面文件"));
+                    File.WriteAllText(Path.Combine(target, "桌面文件", "占位.txt"),
+                        "z", new UTF8Encoding(false));
+
+                    string before = JsonIO.Read(Path.Combine(root, "config", "virtual-desks.json"));
+
+                    List<string> names = new List<string> { "桌面文件" };
+                    DeskRootChange.Plan plan = DeskRootChange.Inspect(cur, names);
+                    string err = panel.ApplyDeskRootChange(cur, target, names, plan,
+                        DeskRootDialog.Choice.Migrate);
+
+                    if (err.Length == 0) return "冲突时居然报告成功";
+                    if (!err.Contains("保持不变")) return "提示里没说目录保持不变：" + err;
+
+                    string after = JsonIO.Read(Path.Combine(root, "config", "virtual-desks.json"));
+                    if (before != after) return "失败后 virtual-desks.json 被改了";
+                    if (!string.Equals(panel.DeskRootPath(), cur, StringComparison.OrdinalIgnoreCase))
+                        return "失败后 root 变了：" + panel.DeskRootPath();
+
+                    return "ok（已拒绝且 root 未变）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
             // ---------- 4d. 切到「文件」可渲染（不抛异常） ----------
             Verify("★切到「文件」标签可渲染", delegate
             {
@@ -1356,6 +1493,107 @@ namespace Clover
                 return "ok（预设/滑块/色板/输入框/恢复默认/防抖/松手提交/窗口伸缩/边缘拖拽 全在）";
             });
 
+            // ---------- 设置窗口里确实有「桌面文件」区块（源码级）----------
+            //
+            // 三选一弹窗本身没法在无人值守里点，但「入口存在」是可以静态断言的：
+            // 用户必须能在设置里看到当前路径、并能点「更改…」/「打开目录」/「恢复默认」。
+            // 曾经踩过的坑：功能写好了、数据层也测了，但界面上一个入口都没有。
+            Verify("★设置窗口含「桌面文件」区块（路径/更改/打开/恢复默认）", delegate
+            {
+                string srcDir = FindSourceDir();
+                if (srcDir == null) return "找不到 src 目录";
+                string path = Path.Combine(srcDir, "ui", "SettingsWindow.cs");
+                if (!File.Exists(path)) return "找不到 SettingsWindow.cs";
+                string text = File.ReadAllText(path, Encoding.UTF8);
+
+                if (text.IndexOf("SectionHeader(\"桌面文件\"", StringComparison.Ordinal) < 0)
+                    return "设置窗口没有「桌面文件」区块";
+                if (text.IndexOf("InfoRow(\"存放目录\"", StringComparison.Ordinal) < 0)
+                    return "没有显示当前存放目录";
+                if (text.IndexOf("SmallButton(\"更改…\"", StringComparison.Ordinal) < 0)
+                    return "没有「更改…」按钮";
+                if (text.IndexOf("SmallButton(\"打开目录\"", StringComparison.Ordinal) < 0)
+                    return "没有「打开目录」按钮";
+                if (text.IndexOf("SmallButton(\"恢复默认\"", StringComparison.Ordinal) < 0)
+                    return "没有「恢复默认」按钮";
+                if (text.IndexOf("panel.ChangeDeskRoot(", StringComparison.Ordinal) < 0)
+                    return "按钮没接到 ChangeDeskRoot";
+                if (text.IndexOf("DeskRootChange.Validate(", StringComparison.Ordinal) < 0)
+                    return "选完目录没有先校验（会把错误留到迁移时才报）";
+                if (text.IndexOf("sectionAnchors", StringComparison.Ordinal) < 0)
+                    return "区块定位没用锚点（写死像素偏移会错位）";
+
+                // 三选一弹窗：默认项 + 数量文案
+                string dlgPath = Path.Combine(srcDir, "ui", "DeskRootDialog.cs");
+                if (!File.Exists(dlgPath)) return "找不到 DeskRootDialog.cs";
+                string dlg = File.ReadAllText(dlgPath, Encoding.UTF8);
+                if (dlg.IndexOf("DefaultChoice = Choice.Migrate", StringComparison.Ordinal) < 0)
+                    return "三选一弹窗的默认项不是「搬过去」";
+                if (dlg.IndexOf("BuildCountText", StringComparison.Ordinal) < 0)
+                    return "弹窗没有写数量";
+
+                return "ok（区块/路径/三个按钮/接线/校验/锚点/默认项/数量 全在）";
+            });
+
+            // ---------- 设置窗口：「桌面文件」区块真的画出来了（运行时）----------
+            //
+            // 上面那条是源码级（确认有这段代码），这条是运行时（确认控件树里真有）。
+            // 两者缺一不可：源码级防"接线断了"，运行时防"写进去了但没画出来"。
+            Verify("★设置窗口运行时：桌面文件区块 + 三个按钮 + 滚到该区块", delegate
+            {
+                Window dlg = null;
+                try
+                {
+                    dlg = SettingsWindow.BuildForTest(null, Settings.Load(root), panel, root,
+                        SettingsWindow.Section.DeskFiles);
+                    if (dlg == null) return "构造返回 null";
+
+                    dlg.Show();
+                    dlg.Dispatcher.Invoke(new Action(delegate { }), DispatcherPriority.Loaded);
+                    dlg.UpdateLayout();
+                    Pump(500);
+
+                    List<string> texts = new List<string>();
+                    CollectTexts(dlg.Content as DependencyObject, texts);
+
+                    string[] need = new string[]
+                    {
+                        "桌面文件", "存放目录", "更改…", "打开目录", "恢复默认", "搬过去"
+                    };
+                    foreach (string n in need)
+                    {
+                        bool hit = false;
+                        foreach (string x in texts)
+                            if (x.IndexOf(n, StringComparison.Ordinal) >= 0) { hit = true; break; }
+                        if (!hit) return "控件树里找不到「" + n + "」";
+                    }
+
+                    // 当前路径必须真的显示出来（不是占位「—」）
+                    bool hasPath = false;
+                    foreach (string x in texts)
+                        if (x.IndexOf("desks", StringComparison.OrdinalIgnoreCase) >= 0) { hasPath = true; break; }
+                    if (!hasPath) return "路径值没显示";
+
+                    // 打开时自动滚到该区块
+                    ScrollViewer sv = FindScrollViewer(dlg.Content as DependencyObject);
+                    if (sv == null) return "找不到 ScrollViewer";
+                    if (sv.VerticalOffset <= 0)
+                        return "没有滚到「桌面文件」区块（偏移 " + Math.Round(sv.VerticalOffset)
+                            + "，可滚 " + Math.Round(sv.ScrollableHeight) + "）";
+
+                    return "ok（偏移 " + Math.Round(sv.VerticalOffset) + " / "
+                        + Math.Round(sv.ScrollableHeight) + "）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+                finally
+                {
+                    try { if (dlg != null) dlg.Close(); } catch { }
+                }
+            });
+
             // ---------- 切换预设后 settings 与面板状态一致 ----------
             Verify("★切换预设后 settings 与面板状态一致", delegate
             {
@@ -1435,6 +1673,64 @@ namespace Clover
             }
             catch { }
             return null;
+        }
+
+        /// <summary>把控件树里所有 TextBlock 的文字收集起来（判断"真的画出来了"）。</summary>
+        static void CollectTexts(DependencyObject d, List<string> texts)
+        {
+            if (d == null) return;
+            try
+            {
+                TextBlock tb = d as TextBlock;
+                if (tb != null && !string.IsNullOrEmpty(tb.Text)) texts.Add(tb.Text);
+
+                CheckBox cb = d as CheckBox;
+                if (cb != null && cb.Content is string) texts.Add((string)cb.Content);
+
+                int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
+                for (int i = 0; i < n; i++)
+                    CollectTexts(System.Windows.Media.VisualTreeHelper.GetChild(d, i), texts);
+            }
+            catch { }
+        }
+
+        /// <summary>在控件树里找第一个 ScrollViewer。</summary>
+        static ScrollViewer FindScrollViewer(DependencyObject d)
+        {
+            if (d == null) return null;
+            try
+            {
+                ScrollViewer sv = d as ScrollViewer;
+                if (sv != null) return sv;
+
+                int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
+                for (int i = 0; i < n; i++)
+                {
+                    ScrollViewer r = FindScrollViewer(System.Windows.Media.VisualTreeHelper.GetChild(d, i));
+                    if (r != null) return r;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// 泵消息让布局 / 滚动 / 动画真正推进。
+        ///
+        /// **不能用 Thread.Sleep** —— 那会阻塞 UI 线程，动画永远跑不完。
+        /// </summary>
+        static void Pump(int ms)
+        {
+            try
+            {
+                DispatcherFrame frame = new DispatcherFrame();
+                DispatcherTimer t = new DispatcherTimer(DispatcherPriority.Background);
+                t.Interval = TimeSpan.FromMilliseconds(ms);
+                t.Tick += delegate { t.Stop(); frame.Continue = false; };
+                t.Start();
+                Dispatcher.PushFrame(frame);
+            }
+            catch { }
         }
 
         // ---------- 辅助：从测试 exe 往上找 src 目录 ----------

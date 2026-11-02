@@ -712,6 +712,170 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "初始化虚拟桌面存储"); }
         }
 
+        // ========== 存放目录（设置窗口用）==========
+
+        /// <summary>当前「桌面文件」存放根目录；未初始化时返回默认值。</summary>
+        public string DeskRootPath()
+        {
+            try
+            {
+                EnsureVirtualDesks();
+                if (virtualDesks == null) return "";
+                return virtualDesks.Root ?? "";
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>所有已登记的桌面名（内置 + 自定义标签），用于盘点与迁移。</summary>
+        List<string> DeskNamesSnapshot()
+        {
+            List<string> names = new List<string>();
+            try
+            {
+                EnsureVirtualDesks();
+                if (virtualDesks != null)
+                {
+                    foreach (KeyValuePair<string, VirtualDesks.Desk> kv in virtualDesks.Desks)
+                        if (!string.IsNullOrEmpty(kv.Key)) names.Add(kv.Key);
+                }
+
+                // 标签在 nav-tabs 里但还没登记成桌面的，也算 —— 它们的目录同样要跟着走
+                if (customTabs != null)
+                {
+                    foreach (NavTabs.Tab t in customTabs.Items)
+                    {
+                        if (t == null || string.IsNullOrEmpty(t.Name)) continue;
+                        bool exists = false;
+                        foreach (string n in names)
+                        {
+                            if (string.Equals(n, t.Name, StringComparison.OrdinalIgnoreCase))
+                            { exists = true; break; }
+                        }
+                        if (!exists) names.Add(t.Name);
+                    }
+                }
+
+                bool hasBuiltin = false;
+                foreach (string n in names)
+                {
+                    if (string.Equals(n, VirtualDesktopCategory, StringComparison.OrdinalIgnoreCase))
+                    { hasBuiltin = true; break; }
+                }
+                if (!hasBuiltin) names.Add(VirtualDesktopCategory);
+            }
+            catch { }
+            return names;
+        }
+
+        /// <summary>
+        /// 切换「桌面文件」存放目录（带三选一弹窗）。
+        ///
+        /// 流程：校验 → 盘点（几个桌面 / 几个文件）→ 三选一 → 迁移或只改指针 → 刷新。
+        ///
+        /// 返回：
+        ///   null = 用户取消（调用方什么都不用做，不必提示）
+        ///   ""   = 成功
+        ///   其他 = 失败原因（原样给用户看）
+        /// </summary>
+        public string ChangeDeskRoot(Window owner, string newRoot)
+        {
+            try
+            {
+                EnsureVirtualDesks();
+                if (virtualDesks == null) return "存放目录还没初始化，稍后再试。";
+
+                string oldRoot = virtualDesks.Root;
+
+                DeskRootChange.Check check = DeskRootChange.Validate(newRoot, oldRoot);
+                if (!check.Ok) return check.Message;
+
+                List<string> names = DeskNamesSnapshot();
+                DeskRootChange.Plan plan = DeskRootChange.Inspect(oldRoot, names);
+
+                DeskRootDialog.Choice choice = DeskRootDialog.Ask(owner, oldRoot, check.Full, plan);
+                if (choice == DeskRootDialog.Choice.Cancel) return null;
+
+                return ApplyDeskRootChange(oldRoot, check.Full, names, plan, choice);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "切换桌面存放目录");
+                return "切换失败：" + ex.Message;
+            }
+        }
+
+        /// <summary>
+        /// 三选一已经定下来的执行部分（不弹窗，可被测试直接调用）。
+        ///
+        /// 返回约定同 <see cref="ChangeDeskRoot"/>。
+        /// </summary>
+        internal string ApplyDeskRootChange(string oldRoot, string newRoot,
+            List<string> names, DeskRootChange.Plan plan, DeskRootDialog.Choice choice)
+        {
+            try
+            {
+                if (virtualDesks == null) return "存放目录还没初始化，稍后再试。";
+                if (choice == DeskRootDialog.Choice.Cancel) return null;
+                if (plan == null) plan = new DeskRootChange.Plan();
+                if (names == null) names = DeskNamesSnapshot();
+
+                if (choice == DeskRootDialog.Choice.Migrate)
+                {
+                    DeskRootChange.Result r = DeskRootChange.Migrate(oldRoot, newRoot, plan.Desks);
+                    if (!r.AllOk)
+                    {
+                        string msg = "迁移没有完成，存放目录保持不变。";
+                        for (int i = 0; i < r.Failed.Count && i < 6; i++)
+                        {
+                            msg += "\r\n  · " + r.Failed[i];
+                            if (i < r.Reasons.Count && !string.IsNullOrEmpty(r.Reasons[i]))
+                                msg += "（" + r.Reasons[i] + "）";
+                        }
+                        try { Log.Warn("切换桌面存放目录失败: " + msg.Replace("\r\n", " ")); } catch { }
+                        return msg;
+                    }
+                }
+
+                // 到这里才动 root：前面任何一步失败都不会留下「半搬」状态
+                virtualDesks.Root = newRoot;
+                virtualDesks.Save();
+
+                // 新目录下补齐每个桌面的文件夹（迁移时已存在，只改指针时是新建）
+                foreach (string n in names)
+                {
+                    try { virtualDesks.EnsureDesk(n); } catch { }
+                }
+                virtualDesks.Save();
+
+                // 界面刷新：当前若停在某个桌面页，重载图标
+                try
+                {
+                    if (IsDeskTab(current))
+                    {
+                        if (deskView != null) deskView.Load(current);
+                        RebuildDeskToolRow();
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    Log.Info("桌面存放目录已切换: " + oldRoot + " → " + newRoot
+                        + "（" + (choice == DeskRootDialog.Choice.Migrate
+                            ? "已迁移 " + plan.DeskCount + " 个桌面 / " + plan.Files + " 个文件"
+                            : "只改指针，文件留在原处") + "）");
+                }
+                catch { }
+
+                return "";
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "执行桌面存放目录切换");
+                return "切换失败：" + ex.Message;
+            }
+        }
+
         void PromptNewTab()
         {
             try

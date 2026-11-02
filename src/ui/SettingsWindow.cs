@@ -41,7 +41,8 @@ namespace Clover
         {
             General = 0,
             Taskbar = 1,
-            Maintenance = 2,
+            DeskFiles = 2,
+            Maintenance = 3,
         }
 
         Window dlg;
@@ -58,8 +59,16 @@ namespace Clover
 
         TextBlock locationValue;
         TextBlock healthValue;
+        TextBlock deskRootValue;
         ScrollViewer scroll;
         Section pendingSection = Section.General;
+
+        /// <summary>
+        /// 每个区块的锚点元素。滚动定位靠它在滚动内容里的实际位置，
+        /// 而不是写死像素偏移 —— 前面加一行说明就会全错位。
+        /// </summary>
+        readonly Dictionary<Section, FrameworkElement> sectionAnchors =
+            new Dictionary<Section, FrameworkElement>();
 
         // ========== 打开 ==========
 
@@ -135,8 +144,10 @@ namespace Clover
             col.Orientation = Orientation.Vertical;
 
             // ---------- 常规 ----------
-            col.Children.Add(SectionHeader("常规",
-                "控制全屏应用运行时悬浮按钮的行为。"));
+            StackPanel generalHeader = SectionHeader("常规",
+                "控制全屏应用运行时悬浮按钮的行为。");
+            sectionAnchors[Section.General] = generalHeader;
+            col.Children.Add(generalHeader);
 
             chkFullscreen = MakeCheck("全屏时隐藏悬浮按钮",
                 "看视频、玩游戏（全屏）时自动隐藏四叶草按钮，不挡画面",
@@ -178,8 +189,10 @@ namespace Clover
             col.Children.Add(chkAutostart);
 
             // ---------- 任务栏 ----------
-            col.Children.Add(SectionHeader("任务栏",
-                "迷你任务栏显示「显示在任务栏」的窗口；隐藏系统任务栏后由四叶草接管位置。"));
+            StackPanel taskbarHeader = SectionHeader("任务栏",
+                "迷你任务栏显示「显示在任务栏」的窗口；隐藏系统任务栏后由四叶草接管位置。");
+            sectionAnchors[Section.Taskbar] = taskbarHeader;
+            col.Children.Add(taskbarHeader);
 
             chkMiniTaskbar = MakeCheck("迷你任务栏",
                 "左下角显示“显示在任务栏”加入的窗口按钮；关闭后该功能整体停用",
@@ -208,8 +221,46 @@ namespace Clover
             }
             col.Children.Add(chkHideTaskbar);
 
+            // ---------- 桌面文件 ----------
+            StackPanel deskHeader = SectionHeader("桌面文件",
+                "「桌面文件」标签把桌面上的东西收进一个真实文件夹。"
+                + "存放目录可以改到别的盘，改完立即生效。");
+            sectionAnchors[Section.DeskFiles] = deskHeader;
+            col.Children.Add(deskHeader);
+
+            Grid deskRow = InfoRow("存放目录", out deskRootValue,
+                delegate { CopyText(deskRootValue.Text); });
+            col.Children.Add(deskRow);
+
+            StackPanel deskBtns = new StackPanel();
+            deskBtns.Orientation = Orientation.Horizontal;
+            deskBtns.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+
+            Border changeBtn = SmallButton("更改…", delegate { ChangeDeskRoot(); });
+            deskBtns.Children.Add(changeBtn);
+
+            Border openBtn = SmallButton("打开目录", delegate { OpenDeskRoot(); });
+            openBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            deskBtns.Children.Add(openBtn);
+
+            Border resetBtn = SmallButton("恢复默认", delegate { ResetDeskRoot(); });
+            resetBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            deskBtns.Children.Add(resetBtn);
+
+            col.Children.Add(deskBtns);
+
+            TextBlock deskHint = Ui.T(
+                "更改时会问「搬过去」还是「只改指针」，并写明会搬多少个文件。"
+                + "搬过去走核对式移动：全部成功才切换，失败自动搬回原处。",
+                10.5, Ui.Sub);
+            deskHint.TextWrapping = TextWrapping.Wrap;
+            deskHint.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+            col.Children.Add(deskHint);
+
             // ---------- 维护 ----------
-            col.Children.Add(SectionHeader("维护", "诊断信息与恢复"));
+            StackPanel maintHeader = SectionHeader("维护", "诊断信息与恢复");
+            sectionAnchors[Section.Maintenance] = maintHeader;
+            col.Children.Add(maintHeader);
 
             col.Children.Add(SubHeader("诊断信息"));
 
@@ -445,8 +496,174 @@ namespace Clover
                 if (chkAutostart != null) chkAutostart.IsChecked = AutostartEnabled();
                 if (chkMiniTaskbar != null) chkMiniTaskbar.IsChecked = settings.MiniTaskbar;
                 if (chkHideTaskbar != null) chkHideTaskbar.IsChecked = settings.HideTaskbar;
+                if (deskRootValue != null) deskRootValue.Text = CurrentDeskRoot();
             }
             catch (Exception ex) { Ui.LogError(ex, "刷新设置窗口"); }
+        }
+
+        // ========== 桌面存放目录 ==========
+
+        /// <summary>当前存放目录；panel 没起来时回退到默认值。</summary>
+        string CurrentDeskRoot()
+        {
+            try
+            {
+                if (panel != null)
+                {
+                    string r = panel.DeskRootPath();
+                    if (!string.IsNullOrEmpty(r)) return r;
+                }
+                return VirtualDesks.DefaultRoot(baseDir);
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>「更改…」：选目录 → 交给 panel 校验 / 盘点 / 三选一 / 迁移。</summary>
+        void ChangeDeskRoot()
+        {
+            try
+            {
+                if (panel == null)
+                {
+                    MessageBox.Show(dlg, "主面板还没准备好，稍后再试。", "四叶草 · 桌面文件",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                string picked = PickFolder(CurrentDeskRoot());
+                if (string.IsNullOrEmpty(picked)) return;   // 用户取消
+
+                // 提前校验一次：选错层级（比如选成了某个桌面文件夹本身）当场说清，
+                // 不要等到三选一弹窗之后再报错。
+                DeskRootChange.Check pre = DeskRootChange.Validate(picked, CurrentDeskRoot());
+                if (!pre.Ok)
+                {
+                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面文件",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                string err = panel.ChangeDeskRoot(dlg, picked);
+                if (err == null) return;            // 用户取消了三选一，不必提示
+
+                if (err.Length == 0)
+                {
+                    RefreshValues();
+                    MessageBox.Show(dlg, "存放目录已改为：\r\n" + CurrentDeskRoot(),
+                        "四叶草 · 桌面文件", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(dlg, err, "四叶草 · 桌面文件",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    RefreshValues();
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "更改桌面存放目录"); }
+        }
+
+        /// <summary>「打开目录」：在资源管理器里打开当前存放根目录。</summary>
+        void OpenDeskRoot()
+        {
+            try
+            {
+                string root = CurrentDeskRoot();
+                if (string.IsNullOrEmpty(root)) return;
+
+                if (!Directory.Exists(root))
+                {
+                    Directory.CreateDirectory(root);
+                }
+                System.Diagnostics.Process.Start("explorer.exe", "\"" + root + "\"");
+            }
+            catch (Exception ex) { Ui.LogError(ex, "打开桌面存放目录"); }
+        }
+
+        /// <summary>「恢复默认」：回到程序目录下的 desks（同样走三选一）。</summary>
+        void ResetDeskRoot()
+        {
+            try
+            {
+                string def = VirtualDesks.DefaultRoot(baseDir);
+                if (string.IsNullOrEmpty(def)) return;
+
+                if (string.Equals(DeskRootChange.SafeFull(def),
+                    DeskRootChange.SafeFull(CurrentDeskRoot()),
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(dlg, "已经是默认目录了。", "四叶草 · 桌面文件",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                ChangeDeskRootTo(def);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "恢复默认桌面存放目录"); }
+        }
+
+        /// <summary>与 ChangeDeskRoot 相同，但目标目录已确定（「恢复默认」用）。</summary>
+        void ChangeDeskRootTo(string target)
+        {
+            try
+            {
+                if (panel == null) return;
+
+                DeskRootChange.Check pre = DeskRootChange.Validate(target, CurrentDeskRoot());
+                if (!pre.Ok)
+                {
+                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面文件",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                string err = panel.ChangeDeskRoot(dlg, target);
+                if (err == null) return;
+
+                if (err.Length == 0)
+                {
+                    RefreshValues();
+                    MessageBox.Show(dlg, "存放目录已改为：\r\n" + CurrentDeskRoot(),
+                        "四叶草 · 桌面文件", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(dlg, err, "四叶草 · 桌面文件",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    RefreshValues();
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "更改桌面存放目录"); }
+        }
+
+        /// <summary>系统自带选目录对话框，从当前存放目录的位置打开。</summary>
+        string PickFolder(string startAt)
+        {
+            try
+            {
+                using (System.Windows.Forms.FolderBrowserDialog fbd =
+                    new System.Windows.Forms.FolderBrowserDialog())
+                {
+                    fbd.Description = "选择「桌面文件」的存放目录（所有桌面文件夹会建在它下面）";
+                    fbd.ShowNewFolderButton = true;
+
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(startAt) && Directory.Exists(startAt))
+                            fbd.SelectedPath = startAt;
+                    }
+                    catch { }
+
+                    if (fbd.ShowDialog() != System.Windows.Forms.DialogResult.OK) return null;
+                    return fbd.SelectedPath;
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "选目录对话框");
+                MessageBox.Show(dlg, "打不开选目录对话框：" + ex.Message,
+                    "四叶草 · 桌面文件", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return null;
+            }
         }
 
         string BuildLocationSummary()
@@ -645,19 +862,85 @@ namespace Clover
             try
             {
                 if (scroll == null) return;
-                // 简单实现：按区块位置粗略滚动
-                double offset = 0;
-                if (section == Section.Taskbar) offset = 260;
-                else if (section == Section.Maintenance) offset = 460;
-                scroll.ScrollToVerticalOffset(offset);
+
+                FrameworkElement anchor;
+                if (!sectionAnchors.TryGetValue(section, out anchor) || anchor == null)
+                {
+                    scroll.ScrollToTop();
+                    return;
+                }
+
+                if (section == Section.General)
+                {
+                    scroll.ScrollToTop();
+                    return;
+                }
+
+                // 排到布局之后再滚。
+                //
+                // 为什么不能在 Loaded 里直接 BringIntoView：那时布局还没跑完，
+                // 元素的最终位置未知，ScrollViewer 会把请求算成 0 —— 实测
+                // 「点设置 ▸ 诊断」打开后仍停在顶部，看不到维护区块。
+                dlg.Dispatcher.BeginInvoke(new Action(delegate { DoScrollTo(anchor); }),
+                    System.Windows.Threading.DispatcherPriority.Loaded);
             }
             catch { }
+        }
+
+        /// <summary>按锚点在滚动内容里的实际位置滚过去（不依赖 BringIntoView 的时序）。</summary>
+        void DoScrollTo(FrameworkElement anchor)
+        {
+            try
+            {
+                if (scroll == null || anchor == null) return;
+
+                anchor.UpdateLayout();
+
+                GeneralTransform t = anchor.TransformToAncestor(scroll);
+                Point p = t.Transform(new Point(0, 0));
+
+                double target = scroll.VerticalOffset + p.Y - Ui.S.Xs;
+                if (target < 0) target = 0;
+
+                scroll.ScrollToVerticalOffset(target);
+
+                // 兜底：目标位置在视口里但被裁掉一点时，让 WPF 自己微调
+                anchor.BringIntoView();
+            }
+            catch
+            {
+                try { if (anchor != null) anchor.BringIntoView(); } catch { }
+            }
         }
 
         void ShowDialog()
         {
             try { dlg.ShowDialog(); }
             catch (Exception ex) { Ui.LogError(ex, "显示设置窗口"); }
+        }
+
+        // ========== 测试钩子 ==========
+
+        /// <summary>
+        /// 构造一个设置窗口并返回它（**不 ShowDialog**），供验收测试检查控件树。
+        ///
+        /// 为什么不直接 `SettingsWindow.Open`：那是模态阻塞的，无人值守跑不了。
+        /// 为什么不反射私有构造：私有签名一改，测试就静默失效 —— 宁可多一个
+        /// `internal` 钩子，让它跟着编译一起报错。
+        /// </summary>
+        internal static Window BuildForTest(TriggerWindow owner, Settings settings,
+            PanelWindow panel, string baseDir, Section section)
+        {
+            try
+            {
+                SettingsWindow w = new SettingsWindow(owner, settings, panel, baseDir, section);
+                return w.dlg;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "构造设置窗口（测试）");
+                return null;
+            }
         }
     }
 }

@@ -175,6 +175,9 @@ Invoke-Suite 'FilesTabTest' $baseRefs `
 # 虚拟桌面存储：名称安全 / 坐标 / 桌面增删改名 / 持久化 / 容错
 Invoke-Suite 'VirtualDesksTest' $baseRefs `
     (@((Join-Path $coreDir 'VirtualDesks.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'VirtualDesksTest.cs')))
+# 桌面存放目录切换：校验 / 盘点 / 全有或全无迁移 / 回滚 / 路径越界
+Invoke-Suite 'DeskRootChangeTest' $baseRefs `
+    (@((Join-Path $coreDir 'DeskRootChange.cs'), (Join-Path $coreDir 'VirtualDesks.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRootChangeTest.cs')))
 # 删除虚拟桌面：放回桌面 / 保留 / 同名冲突 / 占用失败 / 空桌面
 Invoke-Suite 'DeskRemovalTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskRemoval.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRemovalTest.cs')))
@@ -283,6 +286,10 @@ Invoke-Suite 'MenuStructureTest' $wpfRefs `
 # 「整理与隐藏」外壳完整性：切标签不得覆盖宿主窗口的 Content
 Invoke-Suite 'OrganizeShellTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'OrganizeShellTest.cs')))
+
+# 更改存放目录对话框：默认项必须是「搬过去」+ 文案必须写明会搬多少个文件
+Invoke-Suite 'DeskRootDialogTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'DeskRootDialogTest.cs')))
 # ---------------- 验收测试 ----------------
 
 # 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退
