@@ -353,14 +353,15 @@ namespace Clover
                 string oldDir = FolderOf(oldName);
                 string newDir = FolderOf(newName);
 
-                // 文件夹存在就一起改名（不存在则只改记录）
+                // 文件夹存在就一起改名（不存在则只改记录）。
+                // 使用核对式移动：目标完整发布后才删除源；失败保留旧目录与记录。
                 if (!string.IsNullOrEmpty(oldDir) && Directory.Exists(oldDir))
                 {
                     if (!string.IsNullOrEmpty(newDir) && Directory.Exists(newDir))
                         return "目标文件夹已存在，无法改名。";
 
-                    try { Directory.Move(oldDir, newDir); }
-                    catch (Exception ex) { return "文件夹改名失败：" + ex.Message; }
+                    VerifiedFileMove.Result moved = VerifiedFileMove.Move(oldDir, newDir);
+                    if (!moved.Ok) return "文件夹改名失败：" + moved.Message;
                 }
 
                 Desks.Remove(oldName);

@@ -14,7 +14,7 @@ namespace Clover
     /// ── 判定规则 ──
     ///
     ///   · 桌面        Progman / WorkerW / SysListView32(桌面图标层)
-    ///                → 对方是移动，源文件已不在；若还在则补删
+    ///                → 只核对系统是否已经移动；程序不补删源文件
     ///   · 资源管理器  CabinetWClass / ExploreWClass
     ///                → 同上
     ///   · 其他程序    QQ / 微信 / 浏览器…
@@ -83,6 +83,21 @@ namespace Clover
         public static bool ShouldMove(Kind k)
         {
             return k == Kind.Desktop || k == Kind.Explorer;
+        }
+
+        /// <summary>当前光标下的顶层窗口句柄（失败返回零）。</summary>
+        public static IntPtr RootWindowAtCursor()
+        {
+            try
+            {
+                Native.POINT p;
+                if (!Native.GetCursorPos(out p)) return IntPtr.Zero;
+                IntPtr h = Native.WindowFromPoint(p.X, p.Y);
+                if (h == IntPtr.Zero) return IntPtr.Zero;
+                IntPtr root = Native.GetAncestor(h, Native.GA_ROOT);
+                return root == IntPtr.Zero ? h : root;
+            }
+            catch { return IntPtr.Zero; }
         }
 
         /// <summary>

@@ -178,7 +178,7 @@ namespace Clover
 
         // ---------- 「文件」标签（2-3 新增）----------
 
-        /// <summary>是否显示第三个标签「文件」。关掉后只有「常用」「全部」。</summary>
+        /// <summary>是否显示内置「文件」标签。关掉后仍保留「常用」「全部」「虚拟桌面」。</summary>
         public bool ShowFilesTab = true;
 
         /// <summary>

@@ -174,16 +174,28 @@ Invoke-Suite 'FilesTabTest' $baseRefs `
     (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
 # 虚拟桌面存储：名称安全 / 坐标 / 桌面增删改名 / 持久化 / 容错
 Invoke-Suite 'VirtualDesksTest' $baseRefs `
-    (@((Join-Path $coreDir 'VirtualDesks.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'VirtualDesksTest.cs')))
+    (@((Join-Path $coreDir 'VirtualDesks.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'VirtualDesksTest.cs')))
 # 删除虚拟桌面：放回桌面 / 保留 / 同名冲突 / 占用失败 / 空桌面
 Invoke-Suite 'DeskRemovalTest' $baseRefs `
-    (@((Join-Path $coreDir 'DeskRemoval.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRemovalTest.cs')))
+    (@((Join-Path $coreDir 'DeskRemoval.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRemovalTest.cs')))
 # 拖入导入：过滤 exe/lnk / 移动 / 冲突改名 / 文件夹 / 占用
 Invoke-Suite 'DeskImporterTest' $baseRefs `
-    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+# 用户文件安全移动：临时副本核对 / 原子发布 / 失败保留源
+Invoke-Suite 'VerifiedFileMoveTest' $baseRefs `
+    (@((Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $testDir 'VerifiedFileMoveTest.cs')))
+# 收纳桌面 / 放回桌面 / 撤销（含持久化）
+Invoke-Suite 'DeskCollectorTest' $baseRefs `
+    (@((Join-Path $coreDir 'DeskCollector.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskCollectorTest.cs')))
+# 旧桌面迁移冲突提示：同一冲突只弹一次，重启后仍记住
+Invoke-Suite 'DeskMigrationNoticeTest' $baseRefs `
+    (@((Join-Path $coreDir 'DeskMigrationNotice.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'DeskMigrationNoticeTest.cs')))
 # 拖出落点判定：类名 → 桌面/资源管理器/其他 → 是否移动源
 Invoke-Suite 'DropTargetTest' $baseRefs `
     (@((Join-Path $coreDir 'DropTarget.cs'), (Join-Path $coreDir 'Native.cs'), (Join-Path $testDir 'DropTargetTest.cs')))
+# 虚拟桌面拖动手势：画布内自由摆放 / 边缘无缝切系统拖放
+Invoke-Suite 'DesktopDragGestureTest' $baseRefs `
+    (@((Join-Path $coreDir 'DesktopDragGesture.cs'), (Join-Path $testDir 'DesktopDragGestureTest.cs')))
 
 # 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
 Invoke-Suite 'NavTabsTest' $baseRefs `

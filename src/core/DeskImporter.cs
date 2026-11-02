@@ -36,6 +36,9 @@ namespace Clover
             /// <summary>成功移入的文件名（用于落位）。</summary>
             public List<string> Imported = new List<string>();
 
+            /// <summary>成功移入的原路径 → 新路径记录（供日志追溯）。</summary>
+            public List<DeskUndo.Entry> Moved = new List<DeskUndo.Entry>();
+
             /// <summary>被过滤掉的（.exe/.lnk 等），不提示。</summary>
             public List<string> Skipped = new List<string>();
 
@@ -151,17 +154,16 @@ namespace Clover
             try
             {
                 string target = MakeUniqueTarget(destDir, name, isFolder);
+                VerifiedFileMove.Result moved = VerifiedFileMove.Move(src, target);
+                if (!moved.Ok) throw new IOException(moved.Message);
 
-                if (isFolder)
-                {
-                    MoveFolder(src, target);
-                }
-                else
-                {
-                    MoveFile(src, target);
-                }
+                r.Imported.Add(Path.GetFileName(moved.Target));
 
-                r.Imported.Add(Path.GetFileName(target));
+                DeskUndo.Entry rec = new DeskUndo.Entry();
+                rec.From = src;
+                rec.To = moved.Target;
+                rec.Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                r.Moved.Add(rec);
             }
             catch (IOException ex)
             {
@@ -178,58 +180,6 @@ namespace Clover
                 r.Failed.Add(name);
                 r.Reasons.Add(ex.Message);
             }
-        }
-
-        /// <summary>
-        /// 移动文件。同盘 File.Move 就是 rename；跨盘 .NET 会抛异常，
-        /// 这时退化为「复制 + 删源」。
-        /// </summary>
-        static void MoveFile(string src, string target)
-        {
-            try
-            {
-                File.Move(src, target);
-            }
-            catch (IOException)
-            {
-                // 跨盘（或目标已存在）：先复制再删
-                File.Copy(src, target, false);
-                try { File.Delete(src); }
-                catch
-                {
-                    // 复制成功但删不掉源：保留副本，抛出让人知道源还在
-                    throw new IOException("已复制到目标，但源文件删除失败（可能被占用）");
-                }
-            }
-        }
-
-        /// <summary>移动文件夹，跨盘时递归复制后删源。</summary>
-        static void MoveFolder(string src, string target)
-        {
-            try
-            {
-                Directory.Move(src, target);
-            }
-            catch (IOException)
-            {
-                CopyDir(src, target);
-                try { Directory.Delete(src, true); }
-                catch
-                {
-                    throw new IOException("已复制到目标，但源文件夹删除失败（可能被占用）");
-                }
-            }
-        }
-
-        static void CopyDir(string src, string dst)
-        {
-            Directory.CreateDirectory(dst);
-
-            foreach (string f in Directory.GetFiles(src))
-                File.Copy(f, Path.Combine(dst, Path.GetFileName(f)), false);
-
-            foreach (string d in Directory.GetDirectories(src))
-                CopyDir(d, Path.Combine(dst, Path.GetFileName(d)));
         }
 
         /// <summary>同名时生成「名称 (1)」「名称 (2)」…，绝不覆盖。</summary>

@@ -306,7 +306,11 @@ namespace Clover
             bool hasFilesTab = settings == null || settings.ShowFilesTab;
             if (hasFilesTab) cats.Add(FilesCategory);
 
-            // 用户自定义标签（+ 号建的），排在「文件」之后
+            // 默认内置「虚拟桌面」：始终存在，不需要用户点 + 创建。
+            // 放在「文件」之后、所有额外自定义桌面之前。
+            cats.Add(VirtualDesktopCategory);
+
+            // 用户自定义标签（+ 号建的），排在内置「虚拟桌面」之后
             if (customTabs != null)
             {
                 foreach (NavTabs.Tab t in customTabs.Items)
@@ -320,8 +324,8 @@ namespace Clover
             foreach (string cat in cats)
             {
                 string c = cat;
-                // 文件标签不算数量（见上面的注释）
-                int count = c == FilesCategory ? -1
+                // 文件与虚拟桌面标签不显示应用数量
+                int count = (c == FilesCategory || IsDeskTab(c)) ? -1
                           : (c == "常用" ? CommonApps().Count
                           : (catalog.Apps.Count - catalog.HiddenItems().Count));
 
@@ -384,7 +388,7 @@ namespace Clover
                     SwitchCategory(c);
                 };
 
-                // 右键：只有自定义标签能改名/删除，内置三个不给菜单
+                // 右键：只有额外自定义桌面能改名/删除；内置四个不给菜单
                 if (NavTabs.IsReserved(c) || c == "")
                 {
                     item.ToolTip = null;
@@ -430,7 +434,7 @@ namespace Clover
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(1);
-            b.ToolTip = "新建标签";
+            b.ToolTip = "新建桌面";
 
             TextBlock t = new TextBlock();
             t.Text = "+";
@@ -582,6 +586,118 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "移除标签记录"); }
         }
 
+        /// <summary>
+        /// 把历史名称的桌面安全迁移为内置「桌面文件」。
+        ///
+        /// 依次尝试「虚拟桌面」「桌面」两个旧名。
+        /// 只有在目标目录/记录都不存在时才改名；若目标已存在且非空，
+        /// 不合并、不覆盖，保留旧目录并记录冲突原因（供面板提示一次）。
+        /// </summary>
+        void MigrateLegacyVirtualDesktop()
+        {
+            try
+            {
+                if (customTabs == null || virtualDesks == null) return;
+
+                string targetDir = virtualDesks.FolderOf(VirtualDesktopCategory);
+                bool targetHasContent = !string.IsNullOrEmpty(targetDir)
+                    && Directory.Exists(targetDir)
+                    && Directory.GetFileSystemEntries(targetDir).Length > 0;
+
+                foreach (string legacy in LegacyDesktopNames)
+                {
+                    bool asCustom = customTabs.FindIndex(legacy) >= 0;
+                    bool asDesk = virtualDesks.Desks.ContainsKey(legacy);
+                    if (!asCustom && !asDesk) continue;
+
+                    string oldDir = virtualDesks.FolderOf(legacy);
+                    bool oldHasContent = !string.IsNullOrEmpty(oldDir)
+                        && Directory.Exists(oldDir)
+                        && Directory.GetFileSystemEntries(oldDir).Length > 0;
+
+                    // 目标已有内容 → 绝不合并。保留旧目录与旧标签，并留下提示。
+                    if (targetHasContent && oldHasContent)
+                    {
+                        string signature = legacy + "|" + oldDir + "|" + targetDir;
+                        bool show = deskMigrationNoticeStore == null
+                            || deskMigrationNoticeStore.ShouldShow(signature);
+                        if (show)
+                        {
+                            deskMigrationNotice =
+                                "「" + legacy + "」和「" + VirtualDesktopCategory + "」里都有文件，"
+                                + "为避免覆盖没有自动合并。\r\n\r\n"
+                                + "旧文件保留在：\r\n" + oldDir;
+                        }
+                        Ui.Log("旧标签「" + legacy + "」未迁移：目标「" + VirtualDesktopCategory
+                            + "」非空，保留旧目录 " + oldDir
+                            + (show ? "（本次提示）" : "（已提示过，不再弹窗）"));
+                        continue;
+                    }
+
+                    bool targetExists = virtualDesks.Desks.ContainsKey(VirtualDesktopCategory)
+                        || (!string.IsNullOrEmpty(targetDir) && Directory.Exists(targetDir));
+
+                    if (targetExists && !targetHasContent)
+                    {
+                        // 目标目录/记录存在但为空：可以安全接管旧目录。
+                        // RenameDesk 会因目标记录已存在而拒绝，因此先移除空记录和空目录。
+                        try
+                        {
+                            virtualDesks.ForgetDesk(VirtualDesktopCategory);
+                            if (Directory.Exists(targetDir)
+                                && Directory.GetFileSystemEntries(targetDir).Length == 0)
+                                Directory.Delete(targetDir, false);
+                        }
+                        catch (Exception ex)
+                        {
+                            deskMigrationNotice =
+                                "自动迁移失败：无法清理空的目标目录。\r\n\r\n" + targetDir
+                                + "\r\n" + ex.Message;
+                            Ui.Log("旧标签「" + legacy + "」迁移失败：清空目标目录失败 " + ex.Message);
+                            continue;
+                        }
+                    }
+
+                    // 旧版本可能只有磁盘目录、尚未写入 virtual-desks.json；先纳入记录。
+                    if (virtualDesks.EnsureDesk(legacy) == null)
+                    {
+                        Ui.Log("旧标签「" + legacy + "」迁移失败：无法读取旧目录，保留原数据");
+                        continue;
+                    }
+
+                    string err = virtualDesks.RenameDesk(legacy, VirtualDesktopCategory);
+                    if (err != null)
+                    {
+                        Ui.Log("旧标签「" + legacy + "」迁移失败（保留原数据）: " + err);
+                        continue;
+                    }
+
+                    // 只有目标确认存在、源确认消失后，才移除旧标签记录。
+                    bool moved = !string.IsNullOrEmpty(targetDir) && Directory.Exists(targetDir)
+                        && (string.IsNullOrEmpty(oldDir) || !Directory.Exists(oldDir));
+                    if (!moved)
+                    {
+                        Ui.Log("旧标签「" + legacy + "」迁移后核对失败：保留旧标签记录，请检查 " + targetDir);
+                        continue;
+                    }
+
+                    if (asCustom)
+                    {
+                        err = customTabs.Remove(legacy);
+                        if (err != null)
+                        {
+                            Ui.Log("旧标签记录迁移失败（文件已迁到桌面文件）: " + err);
+                            continue;
+                        }
+                    }
+
+                    targetHasContent = true;
+                    Ui.Log("旧标签「" + legacy + "」已迁移为内置「" + VirtualDesktopCategory + "」");
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "迁移旧虚拟桌面"); }
+        }
+
         /// <summary>确保 virtualDesks 已初始化（多处共用）。</summary>
         void EnsureVirtualDesks()
         {
@@ -600,13 +716,13 @@ namespace Clover
         {
             try
             {
-                string name = TextPromptDialog.Ask(this, "新建标签", "标签名（最多 12 字）", "");
+                string name = TextPromptDialog.Ask(this, "新建桌面", "桌面名称（最多 12 字）", "");
                 if (name == null) return;   // 用户取消
 
                 string err = customTabs.Add(name);
                 if (err != null)
                 {
-                    MessageBox.Show(this, err, "四叶草 · 新建标签",
+                    MessageBox.Show(this, err, "四叶草 · 新建桌面",
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -614,7 +730,7 @@ namespace Clover
                 string added = NavTabs.SanitizeName(name);
                 RebuildNav();
                 SwitchCategory(added);
-                Ui.Log("新建标签: " + added);
+                Ui.Log("新建桌面: " + added);
             }
             catch (Exception ex) { Ui.LogError(ex, "新建标签"); }
         }
@@ -874,7 +990,7 @@ namespace Clover
 
         /// <summary>
         /// <summary>
-        /// 切换分类（常用 / 全部 / 文件）。**所有切换入口都走这里**，
+        /// 切换分类（常用 / 全部 / 文件 / 虚拟桌面 / 额外桌面）。**所有切换入口都走这里**，
         /// 不要各自写 `current = x; RenderApps();` —— 那样必然漏掉状态隔离。
         ///
         /// 做三件事：
@@ -938,6 +1054,10 @@ namespace Clover
                     filesPanel.Visibility = layer == ContentLayer.Files
                         ? Visibility.Visible : Visibility.Collapsed;
 
+                if (deskPanel != null)
+                    deskPanel.Visibility = layer == ContentLayer.Desks
+                        ? Visibility.Visible : Visibility.Collapsed;
+
                 if (deskCanvas != null)
                     deskCanvas.Visibility = layer == ContentLayer.Desks
                         ? Visibility.Visible : Visibility.Collapsed;
@@ -953,22 +1073,355 @@ namespace Clover
         }
 
         /// <summary>
-        /// 当前标签是不是一个虚拟桌面（用户自定义标签）。
+        /// 当前标签是不是一个虚拟桌面（内置「桌面文件」或用户额外创建的桌面）。
         ///
-        /// 内置三个（常用 / 全部 / 文件）都不是；其余只有确实存在
-        /// customTabs 里的才算 —— 避免旧配置里残留的已删除标签名被当成桌面。
+        /// 「常用 / 全部 / 文件」不是；内置「桌面文件」永远是；
+        /// 其余只有确实存在 customTabs 里的才算。
         /// </summary>
         bool IsDeskTab(string name)
         {
             try
             {
                 if (string.IsNullOrEmpty(name)) return false;
+                if (name == VirtualDesktopCategory) return true;
                 if (name == "常用") return false;
                 if (name == FilesCategory) return false;
                 if (customTabs == null) return false;
                 return customTabs.FindIndex(name) >= 0;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// 重建「桌面文件」页顶部的按钮行。
+        ///
+        /// 按钮：收纳桌面 / 放回桌面 / 撤销上一批。
+        /// 撤销按钮只在有历史时出现。
+        /// </summary>
+        void RebuildDeskToolRow()
+        {
+            try
+            {
+                if (deskToolRow == null) return;
+                deskToolRow.Children.Clear();
+
+                deskToolRow.Children.Add(MakeDeskToolButton(
+                    "收纳桌面", "把桌面上的文件收进这个桌面", delegate { CollectDesktop(); }));
+
+                deskToolRow.Children.Add(MakeDeskToolButton(
+                    "放回桌面", "把选中（或全部）文件移回桌面", delegate { PutBackToDesktopBatch(); }));
+
+                DeskUndo.Batch latest = deskUndo == null ? null : deskUndo.Latest;
+                if (latest != null)
+                {
+                    string label = "撤销「" + latest.Action + "」(" + latest.Entries.Count + ")";
+                    deskToolRow.Children.Add(MakeDeskToolButton(
+                        label, "把上一批文件移回原位置", delegate { UndoLastBatch(); }));
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "重建桌面工具行"); }
+        }
+
+        Border MakeDeskToolButton(string label, string tip, Action onClick)
+        {
+            Border b = new Border();
+            b.Height = 26;
+            b.CornerRadius = new CornerRadius(b.Height / 2);
+            b.Padding = new Thickness(12, 0, 12, 0);
+            b.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+            b.Cursor = Cursors.Hand;
+            b.Background = Ui.SearchBg;
+            b.BorderBrush = Ui.Line;
+            b.BorderThickness = new Thickness(1);
+            b.ToolTip = tip;
+
+            TextBlock t = Ui.T(label, 11.5, Ui.Sub);
+            t.VerticalAlignment = VerticalAlignment.Center;
+            b.Child = t;
+
+            b.MouseEnter += delegate { b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
+            b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
+            return b;
+        }
+
+        void SetDeskNotice(string text)
+        {
+            try
+            {
+                if (deskNotice == null) return;
+                deskNotice.Text = text ?? "";
+                deskNotice.Visibility = string.IsNullOrEmpty(text)
+                    ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch { }
+        }
+
+        /// <summary>当前桌面标签对应的磁盘目录。</summary>
+        string CurrentDeskFolder()
+        {
+            try
+            {
+                EnsureVirtualDesks();
+                if (virtualDesks == null) return null;
+                return virtualDesks.FolderOf(current);
+            }
+            catch { return null; }
+        }
+
+        /// <summary>收纳桌面：先扫描并弹窗确认，再搬运。</summary>
+        void CollectDesktop()
+        {
+            try
+            {
+                string dest = CurrentDeskFolder();
+                if (string.IsNullOrEmpty(dest))
+                {
+                    MessageBox.Show(this, "当前桌面没有可用的存放目录。", "四叶草 · 收纳桌面",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                DeskCollector.ScanResult scan = DeskCollector.Scan();
+                if (scan.Items.Count == 0)
+                {
+                    string msg = "桌面上没有可收纳的文件。";
+                    if (scan.Skipped.Count > 0)
+                        msg += "\r\n\r\n已跳过 " + scan.Skipped.Count + " 个应用类文件。";
+                    MessageBox.Show(this, msg, "四叶草 · 收纳桌面",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                if (!ConfirmCollect(scan, dest)) return;
+
+                List<string> paths = new List<string>();
+                foreach (DeskCollector.Candidate c in scan.Items) paths.Add(c.Path);
+
+                DeskCollector.MoveResult r = DeskCollector.Collect(paths, dest);
+
+                if (r.AnyMoved && deskUndo != null)
+                    deskUndo.Push("收纳桌面", r.Moved);
+
+                ReportMoveResult("收纳桌面", r, dest);
+                RefreshDeskAfterMove();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "收纳桌面"); }
+        }
+
+        /// <summary>确认弹窗：列出将被收纳的文件名。</summary>
+        bool ConfirmCollect(DeskCollector.ScanResult scan, string dest)
+        {
+            try
+            {
+                Window dlg = new Window();
+                dlg.Title = "收纳桌面";
+                dlg.Width = 520;
+                dlg.Height = 460;
+                dlg.Owner = this;
+                dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                dlg.ResizeMode = ResizeMode.CanResize;
+                dlg.ShowInTaskbar = false;
+                dlg.Background = Ui.Bg;
+
+                Grid root = new Grid();
+                root.Margin = new Thickness(Ui.S.Xl);
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                root.RowDefinitions.Add(new RowDefinition());
+                root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                TextBlock title = Ui.T("将收纳 " + scan.Items.Count + " 个文件到「"
+                    + VirtualDesktopCategory + "」", 14, Ui.Fg, FontWeights.SemiBold);
+                Grid.SetRow(title, 0);
+                root.Children.Add(title);
+
+                TextBlock path = Ui.T("目标位置：" + dest, 10.5, Ui.Sub);
+                path.TextWrapping = TextWrapping.Wrap;
+                path.Margin = new Thickness(0, Ui.S.Xs, 0, Ui.S.Sm);
+                Grid.SetRow(path, 1);
+                root.Children.Add(path);
+
+                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                foreach (DeskCollector.Candidate c in scan.Items)
+                    sb.AppendLine("· " + Path.GetFileName(c.Path) + "   （" + c.Source + "）");
+
+                if (scan.Skipped.Count > 0)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine("以下应用类文件会跳过（" + scan.Skipped.Count + " 个）：");
+                    int n = 0;
+                    foreach (string s in scan.Skipped)
+                    {
+                        if (n++ >= 8) { sb.AppendLine("  …"); break; }
+                        sb.AppendLine("· " + s);
+                    }
+                }
+
+                TextBox list = new TextBox();
+                list.Text = sb.ToString();
+                list.IsReadOnly = true;
+                list.TextWrapping = TextWrapping.NoWrap;
+                list.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+                list.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+                list.FontFamily = Ui.YaHei;
+                list.FontSize = 11.5;
+                list.Background = Ui.SearchBg;
+                list.Foreground = Ui.Fg;
+                list.BorderBrush = Ui.Line;
+                list.Padding = new Thickness(Ui.S.Sm);
+                Grid.SetRow(list, 2);
+                root.Children.Add(list);
+
+                bool ok = false;
+                StackPanel btns = new StackPanel();
+                btns.Orientation = Orientation.Horizontal;
+                btns.HorizontalAlignment = HorizontalAlignment.Right;
+                btns.Margin = new Thickness(0, Ui.S.Md, 0, 0);
+
+                Border cancel = MakeDeskToolButton("取消", "不做任何改动", delegate { dlg.Close(); });
+
+                Border confirm = MakeDeskToolButton("确认收纳",
+                    "把这些文件移进当前桌面文件夹", delegate { ok = true; dlg.Close(); });
+                confirm.Background = Ui.Accent;
+                TextBlock ct = confirm.Child as TextBlock;
+                if (ct != null) ct.Foreground = Brushes.White;
+
+                btns.Children.Add(cancel);
+                btns.Children.Add(confirm);
+                Grid.SetRow(btns, 3);
+                root.Children.Add(btns);
+
+                dlg.Content = root;
+                dlg.ShowDialog();
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "收纳确认弹窗");
+                return false;
+            }
+        }
+
+        /// <summary>放回桌面：有选中就放选中的，没有就放全部。</summary>
+        void PutBackToDesktopBatch()
+        {
+            try
+            {
+                string dir = CurrentDeskFolder();
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                {
+                    MessageBox.Show(this, "当前桌面没有可用的存放目录。", "四叶草 · 放回桌面",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                List<string> paths = new List<string>();
+
+                List<string> sel = deskView == null ? null : deskView.SelectedPaths();
+                if (sel != null && sel.Count > 0)
+                {
+                    paths.AddRange(sel);
+                }
+                else
+                {
+                    foreach (string f in Directory.GetFiles(dir)) paths.Add(f);
+                    foreach (string d in Directory.GetDirectories(dir)) paths.Add(d);
+                }
+
+                if (paths.Count == 0)
+                {
+                    MessageBox.Show(this, "这个桌面里没有文件。", "四叶草 · 放回桌面",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                DeskCollector.MoveResult r = DeskCollector.PutBack(paths, desktop);
+
+                if (r.AnyMoved && deskUndo != null)
+                    deskUndo.Push("放回桌面", r.Moved);
+
+                ReportMoveResult("放回桌面", r, desktop);
+                RefreshDeskAfterMove();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "放回桌面"); }
+        }
+
+        /// <summary>撤销最近一批。</summary>
+        void UndoLastBatch()
+        {
+            try
+            {
+                if (deskUndo == null) return;
+
+                DeskUndo.Batch latest = deskUndo.Latest;
+                if (latest == null) return;
+
+                if (!TextPromptDialog.Confirm(this, "撤销",
+                    "把上一批（" + latest.Action + "，" + latest.Entries.Count
+                    + " 个文件）移回原位置？\r\n\r\n原位置已被占用的文件会跳过，不会覆盖。",
+                    "撤销")) return;
+
+                DeskUndo.UndoResult r = deskUndo.UndoLatest();
+
+                string msg = "已撤销 " + r.Restored + " 个文件。";
+                if (!r.AllOk)
+                {
+                    msg += "\r\n\r\n" + r.Failed.Count + " 个未能撤销：";
+                    for (int i = 0; i < r.Failed.Count && i < 5; i++)
+                    {
+                        msg += "\r\n  · " + r.Failed[i];
+                        if (i < r.Reasons.Count && !string.IsNullOrEmpty(r.Reasons[i]))
+                            msg += "（" + r.Reasons[i] + "）";
+                    }
+                }
+
+                MessageBox.Show(this, msg, "四叶草 · 撤销",
+                    MessageBoxButton.OK,
+                    r.AllOk ? MessageBoxImage.Information : MessageBoxImage.Warning);
+
+                RefreshDeskAfterMove();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "撤销上一批"); }
+        }
+
+        /// <summary>搬运结果汇总提示。</summary>
+        void ReportMoveResult(string action, DeskCollector.MoveResult r, string where)
+        {
+            try
+            {
+                string msg = action + "：成功 " + r.MovedCount + " 个。";
+                if (!r.AllOk)
+                {
+                    msg += "\r\n\r\n" + r.Failed.Count + " 个跳过：";
+                    for (int i = 0; i < r.Failed.Count && i < 6; i++)
+                    {
+                        msg += "\r\n  · " + r.Failed[i];
+                        if (i < r.Reasons.Count && !string.IsNullOrEmpty(r.Reasons[i]))
+                            msg += "（" + r.Reasons[i] + "）";
+                    }
+                }
+                if (!string.IsNullOrEmpty(where)) msg += "\r\n\r\n位置：" + where;
+
+                MessageBox.Show(this, msg, "四叶草 · " + action,
+                    MessageBoxButton.OK,
+                    r.AllOk ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            }
+            catch { }
+        }
+
+        /// <summary>搬运后刷新图标列表与工具行。</summary>
+        void RefreshDeskAfterMove()
+        {
+            try
+            {
+                if (deskView != null) deskView.Load(current);
+                if (virtualDesks != null) virtualDesks.Save();
+                RebuildDeskToolRow();
+                SetDeskNotice("");
+            }
+            catch (Exception ex) { Ui.LogError(ex, "刷新桌面"); }
         }
 
         /// <summary>
@@ -1003,6 +1456,22 @@ namespace Clover
                 // 尺寸变了才能算空位，先跑一次布局
                 deskCanvas.UpdateLayout();
                 deskView.Load(name);
+
+                RebuildDeskToolRow();
+
+                // 旧标签迁移冲突：进这个页时提示一次，说明为什么没合并。
+                if (!string.IsNullOrEmpty(deskMigrationNotice))
+                {
+                    SetDeskNotice(deskMigrationNotice);
+                    string notice = deskMigrationNotice;
+                    deskMigrationNotice = null;
+                    try
+                    {
+                        MessageBox.Show(this, notice, "四叶草 · 旧桌面未自动合并",
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    catch { }
+                }
             }
             catch (Exception ex) { Ui.LogError(ex, "渲染虚拟桌面"); }
         }
@@ -1653,6 +2122,28 @@ namespace Clover
             catch { return false; }
         }
 
+        /// <summary>测试用：桌面页是否可见。</summary>
+        internal bool TestDeskPanelVisible()
+        {
+            try { return deskPanel != null && deskPanel.Visibility == Visibility.Visible; }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：桌面页与图标画布的实际高度。</summary>
+        internal double[] TestDeskHeights()
+        {
+            try
+            {
+                return new double[]
+                {
+                    contentScroll == null ? 0 : contentScroll.ViewportHeight,
+                    deskPanel == null ? 0 : deskPanel.ActualHeight,
+                    deskCanvas == null ? 0 : deskCanvas.ActualHeight
+                };
+            }
+            catch { return new double[] { 0, 0, 0 }; }
+        }
+
         /// <summary>测试用：读搜索框文字。</summary>
         internal string TestSearchText()
         {
@@ -1694,6 +2185,18 @@ namespace Clover
                         current = "常用";
                         SaveLastCategory();
                     }
+                    return;
+                }
+
+                // 默认内置「虚拟桌面」永远合法；目录不在就自动重建。
+                if (current == VirtualDesktopCategory)
+                {
+                    try
+                    {
+                        EnsureVirtualDesks();
+                        if (virtualDesks != null) virtualDesks.EnsureDesk(VirtualDesktopCategory);
+                    }
+                    catch { }
                     return;
                 }
 

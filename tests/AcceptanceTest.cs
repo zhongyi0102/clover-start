@@ -161,6 +161,32 @@ namespace Clover
                 AppendManualApps(root, filler);
             }
 
+            // 旧版本兼容夹具：手动创建的「桌面」标签 + 真实文件。
+            // PanelWindow 构造时应安全迁移为内置「桌面文件」，不丢文件。
+            string legacyDeskDir = Path.Combine(root, "desks", "桌面");
+            string legacyFile = Path.Combine(legacyDeskDir, "legacy-note.txt");
+            Directory.CreateDirectory(legacyDeskDir);
+            File.WriteAllText(legacyFile, "legacy-content", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(root, "config", "nav-tabs.json"),
+                "{\"tabs\":[{\"name\":\"桌面\"}]}", new UTF8Encoding(false));
+            {
+                Dictionary<string, object> oldRoot = new Dictionary<string, object>();
+                oldRoot["root"] = Path.Combine(root, "desks");
+                Dictionary<string, object> oldDesks = new Dictionary<string, object>();
+                Dictionary<string, object> oldDesk = new Dictionary<string, object>();
+                oldDesk["items"] = new object[]
+                {
+                    new Dictionary<string, object>
+                    {
+                        { "name", "legacy-note.txt" }, { "x", 24 }, { "y", 32 }
+                    }
+                };
+                oldDesks["桌面"] = oldDesk;
+                oldRoot["desks"] = oldDesks;
+                File.WriteAllText(Path.Combine(root, "config", "virtual-desks.json"),
+                    new JavaScriptSerializer().Serialize(oldRoot), new UTF8Encoding(false));
+            }
+
             // ---------- 2. 真实创建 PanelWindow ----------
             PanelWindow panel = null;
 
@@ -265,20 +291,20 @@ namespace Clover
             panel.ShowPanel();
             WaitForDispatcher(400);
 
-            // ---------- 4. 分类栏：默认三个标签（常用/全部/文件）----------
+            // ---------- 4. 分类栏：默认四个标签（常用/全部/文件/桌面文件）----------
             //
-            // 2-3 加了第三个「文件」标签。showFilesTab=false 时回到两个。
-            Verify("★分类栏默认三个标签（常用/全部/文件）", delegate
+            // 「桌面文件」是内置默认标签，不需要用户手动创建。
+            Verify("★分类栏默认四个标签（常用/全部/文件/桌面文件）", delegate
             {
                 List<Border> navItems = FindNavItems(panel);
                 if (navItems == null) return "找不到分类栏容器";
-                if (navItems.Count != 3)
-                    return "分类标签应恰好 3 个，实际 " + navItems.Count;
-                return "ok（3 个）";
+                if (navItems.Count != 4)
+                    return "分类标签应恰好 4 个，实际 " + navItems.Count;
+                return "ok（4 个）";
             });
 
-            // ---------- 4b. showFilesTab=false → 只有两个标签 ----------
-            Verify("★showFilesTab=false 时只有两个标签", delegate
+            // ---------- 4b. showFilesTab=false → 仍有三个标签 ----------
+            Verify("★showFilesTab=false 时仍有常用/全部/桌面文件", delegate
             {
                 try
                 {
@@ -286,9 +312,9 @@ namespace Clover
                     panel.TestSetShowFilesTab(false);
                     List<Border> navItems = FindNavItems(panel);
                     if (navItems == null) return "找不到分类栏容器";
-                    if (navItems.Count != 2)
-                        return "应恰好 2 个，实际 " + navItems.Count;
-                    return "ok（2 个）";
+                    if (navItems.Count != 3)
+                        return "应恰好 3 个，实际 " + navItems.Count;
+                    return "ok（3 个）";
                 }
                 finally
                 {
@@ -296,7 +322,68 @@ namespace Clover
                 }
             });
 
-            // ---------- 4c. 切到「文件」可渲染（不抛异常） ----------
+            // ---------- 4c. 内置「桌面文件」可渲染，并自动创建目录 ----------
+            Verify("★旧手动桌面带文件安全迁移到内置桌面文件", delegate
+            {
+                string migrated = Path.Combine(root, "desks", "桌面文件", "legacy-note.txt");
+                string old = Path.Combine(root, "desks", "桌面", "legacy-note.txt");
+                if (!File.Exists(migrated)) return "迁移目标不存在：" + migrated;
+                if (File.Exists(old)) return "旧文件仍存在：" + old;
+                if (File.ReadAllText(migrated, Encoding.UTF8) != "legacy-content")
+                    return "迁移后内容不一致";
+
+                string navJson = JsonIO.Read(Path.Combine(root, "config", "nav-tabs.json"));
+                if (navJson.Contains("\"桌面\"")) return "旧桌面标签记录仍存在";
+                return "ok（文件与标签均迁移）";
+            });
+
+            Verify("★内置桌面文件默认存在且自动创建目录", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("桌面文件");
+                    WaitForDispatcher(200);
+                    string folder = Path.Combine(root, "desks", "桌面文件");
+                    if (!Directory.Exists(folder)) return "目录未自动创建：" + folder;
+                    panel.TestSwitchCategory("常用");
+                    return "ok（目录已创建）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            Verify("★桌面文件图标区占满剩余内容页", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("桌面文件");
+                    WaitForDispatcher(300);
+                    panel.UpdateLayout();
+
+                    if (!panel.TestDeskPanelVisible()) return "桌面文件页不可见";
+
+                    double[] h = panel.TestDeskHeights();
+                    if (h == null || h.Length < 3) return "读不到桌面页尺寸";
+                    double viewport = h[0], page = h[1], canvas = h[2];
+
+                    if (viewport < 300) return "内容视口异常：" + viewport;
+                    if (page < viewport - 12)
+                        return "桌面页没有占满视口：page=" + page + " viewport=" + viewport;
+                    if (canvas < viewport - 90)
+                        return "图标画布过矮（旧 bug）：canvas=" + canvas + " viewport=" + viewport;
+
+                    panel.TestSwitchCategory("常用");
+                    return "ok（viewport=" + viewport + ", canvas=" + canvas + "）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            // ---------- 4d. 切到「文件」可渲染（不抛异常） ----------
             Verify("★切到「文件」标签可渲染", delegate
             {
                 try

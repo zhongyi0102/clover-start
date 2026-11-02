@@ -959,6 +959,24 @@ namespace Clover
                     return;
                 }
 
+                // 历史名称（「虚拟桌面」「桌面」）→ 映射到当前内置名。
+                //
+                // 标签改名后，last-category.json 里可能还记着旧名；
+                // 不映射就会误判成「已不存在」并回退到「全部」。
+                foreach (string legacyName in LegacyDesktopNames)
+                {
+                    if (string.Equals(cat, legacyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        current = VirtualDesktopCategory;
+                        Ui.Log("上次分类「" + cat + "」已改名为「"
+                            + VirtualDesktopCategory + "」，沿用新名");
+                        return;
+                    }
+                }
+
+                // 默认内置「桌面文件」永远有效。
+                if (cat == VirtualDesktopCategory) { current = VirtualDesktopCategory; return; }
+
                 // 自定义标签（虚拟桌面）：只要还在 nav-tabs.json 里就有效。
                 //
                 // 不能走下面「必须还在 catalog.Order 里」那条：自定义标签不是
@@ -1106,6 +1124,16 @@ namespace Clover
         /// LoadLastCategory 都要判它，散落字面量迟早写错一个。
         /// </summary>
         public const string FilesCategory = "文件";
+
+        /// <summary>
+        /// 默认内置虚拟桌面的内部名。启动即存在，不需要用户手动创建；
+        /// 也不允许改名或删除。
+        /// </summary>
+        public const string VirtualDesktopCategory = "桌面文件";
+
+        /// <summary>该内置标签的历史名称，用于自动迁移旧数据。</summary>
+        public static readonly string[] LegacyDesktopNames =
+            new string[] { "虚拟桌面", "桌面" };
 
         /// <summary>存盘时把内部标识转成文件里的键名。</summary>
         public static string FileCatKey(string internalKey)

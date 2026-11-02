@@ -116,8 +116,8 @@ namespace Clover
                 string name = Path.GetFileName(source);
                 string target = MakeUniqueTarget(desktop, name, isFolder);
 
-                if (isFolder) Directory.Move(source, target);
-                else File.Move(source, target);
+                VerifiedFileMove.Result moved = VerifiedFileMove.Move(source, target);
+                if (!moved.Ok) throw new IOException(moved.Message);
 
                 r.Moved++;
             }

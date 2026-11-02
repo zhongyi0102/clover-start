@@ -92,6 +92,7 @@ namespace Clover
             Check(NavTabs.IsReserved("常用"), "常用 是内置");
             Check(NavTabs.IsReserved("全部"), "全部 是内置");
             Check(NavTabs.IsReserved("文件"), "文件 是内置");
+            Check(NavTabs.IsReserved("虚拟桌面"), "★虚拟桌面 是内置");
             Check(!NavTabs.IsReserved("游戏"), "游戏 不是内置");
             Check(!NavTabs.IsReserved(""), "空串不是内置");
             Check(!NavTabs.IsReserved(null), "null 不是内置");
@@ -133,6 +134,8 @@ namespace Clover
                 Check(e5 != null, "★内置名被拒绝", e5 ?? "");
                 string e6 = t.Add("文件");
                 Check(e6 != null, "★文件 被拒绝", e6 ?? "");
+                string e6b = t.Add("虚拟桌面");
+                Check(e6b != null, "★虚拟桌面 被拒绝", e6b ?? "");
 
                 // 空名
                 string e7 = t.Add("   ");
@@ -151,6 +154,8 @@ namespace Clover
                 // 删除内置
                 string e10 = t.Remove("常用");
                 Check(e10 != null, "★内置标签不能删除", e10 ?? "");
+                string e11 = t.Remove("虚拟桌面");
+                Check(e11 != null, "★虚拟桌面不能删除", e11 ?? "");
 
                 Console.WriteLine();
             }

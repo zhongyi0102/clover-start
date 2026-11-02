@@ -96,12 +96,22 @@ namespace Clover
         /// <summary>用户自定义标签（+ 号新建的），持久化在 config\nav-tabs.json。</summary>
         NavTabs customTabs;
 
+        /// <summary>旧标签迁移冲突提示（面板首次显示时弹一次）。</summary>
+        string deskMigrationNotice;
+        DeskMigrationNotice deskMigrationNoticeStore;
+
+        /// <summary>收纳/放回桌面的撤销历史（最近 5 批，持久化）。</summary>
+        DeskUndo deskUndo;
+
         // ---- 虚拟桌面（自定义标签）----
         Canvas deskCanvas;
         Canvas deskOverlay;
         VirtualDesks virtualDesks;
         DesktopView deskView;
         WrapPanel tilePanel;
+        StackPanel deskToolRow;        // 「桌面文件」页顶部按钮行
+        TextBlock deskNotice;          // 该页的提示行
+        Grid deskPanel;                // 该页整体容器（按钮 + 提示 + 画布）
 
         // ---- 「文件」标签（2-3）----
         StackPanel filesPanel;         // 整个文件标签的容器
@@ -267,6 +277,30 @@ namespace Clover
             // 用户自定义标签：先加载，RebuildNav 会读它
             customTabs = new NavTabs(baseDir);
             customTabs.Load();
+
+            // 默认内置「桌面文件」启动即存在：不等用户首次点击标签才建目录。
+            try
+            {
+                virtualDesks = new VirtualDesks(baseDir);
+                virtualDesks.Load();
+                if (string.IsNullOrEmpty(virtualDesks.Root))
+                    virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
+
+                deskMigrationNoticeStore = new DeskMigrationNotice(baseDir);
+                deskMigrationNoticeStore.Load();
+
+                // 兼容历史名称（「虚拟桌面」「桌面」）：安全迁移到内置「桌面文件」。
+                // 目标非空时绝不合并，只记录冲突提示。
+                MigrateLegacyVirtualDesktop();
+
+                virtualDesks.EnsureDesk(VirtualDesktopCategory);
+                virtualDesks.Save();
+
+                deskUndo = new DeskUndo(baseDir);
+                deskUndo.Load();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "初始化默认虚拟桌面"); }
+
             LoadLastCategory();
 
             // 后台预热"应用是否在运行"要用的 .lnk 目标缓存。
@@ -1032,10 +1066,12 @@ namespace Clover
             {
                 dragOverPanel = true;
                 StopDragWatch();          // 已经进来了，不用再轮询
+
+                bool internalDrag = HasInternalDesktopDrag(e);
                 e.Effects = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
-                SetDropHighlight(true);
+                SetDropHighlight(!internalDrag);
                 e.Handled = true;
-                Ui.Log("DragEnter");
+                Ui.Log(internalDrag ? "DragEnter（内部拖出，不高亮）" : "DragEnter");
             }
             catch (Exception ex) { Ui.LogError(ex, "DragEnter"); }
         }
@@ -1069,7 +1105,19 @@ namespace Clover
                     return;
                 }
 
-                // 左键还按着 → 可能只是掠过边界，等松手再说
+                // 内部拖出一旦离开窗口，马上清理自己的拖放状态；
+                // 后续由 80ms 轮询等松手，面板不会中途消失。
+                if (HasInternalDesktopDrag(e) && !IsMouseOverPanel())
+                {
+                    dragOverPanel = false;
+                    SetDropHighlight(false);
+                    StartDragWatch();
+                    Ui.Log("DragLeave（内部拖出）");
+                    e.Handled = true;
+                    return;
+                }
+
+                // 左键还按着 → 外部拖入可能只是掠过边界，等松手再说
                 if (Native.IsLeftButtonDown())
                 {
                     e.Handled = true;
@@ -1129,6 +1177,14 @@ namespace Clover
                 {
                     deskView.ReloadAndPlace(current, r.Imported, dropX, dropY);
                     if (virtualDesks != null) virtualDesks.Save();
+
+                    // 上次事故暴露的缺口：每个成功移入的项都写「原路径 → 新路径」。
+                    try
+                    {
+                        foreach (DeskUndo.Entry entry in r.Moved)
+                            Ui.Log("拖入: " + entry.From + " → " + entry.To);
+                    }
+                    catch { }
                 }
 
                 // 失败才提示；跳过（.exe/.lnk）按需求静默
@@ -1151,6 +1207,16 @@ namespace Clover
             }
             catch (Exception ex) { Ui.LogError(ex, "Drop"); }
         }
+        static bool HasInternalDesktopDrag(DragEventArgs e)
+        {
+            try
+            {
+                return e.Data != null
+                    && e.Data.GetDataPresent(DesktopDragGesture.InternalDataFormat);
+            }
+            catch { return false; }
+        }
+
         static bool HasFiles(DragEventArgs e)
         {
             try

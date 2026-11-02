@@ -76,6 +76,11 @@ namespace Clover
             new Dictionary<string, Point>(StringComparer.OrdinalIgnoreCase);
         Item dragAnchor;                  // 按下的那个图标
         bool dragMoved;
+        double dragPreviewDx;
+        double dragPreviewDy;
+
+        /// <summary>按下时刻（用于「按住超时即拖出」判定）。</summary>
+        DateTime dragPressTime;
 
         /// <summary>本次拖动已经转成系统拖出（防止重复发起）。</summary>
         bool dragOutStarted;
@@ -93,6 +98,7 @@ namespace Clover
             public bool IsFolder;
             public double X, Y;
             public Border Host;           // 整个格子（可点区域）
+            public TranslateTransform DragTransform; // 拖动预览：不触发布局
             public bool IsSelected;
         }
 
@@ -304,6 +310,9 @@ namespace Clover
             Canvas.SetLeft(cell, it.X);
             Canvas.SetTop(cell, it.Y);
 
+            it.DragTransform = new TranslateTransform(0, 0);
+            cell.RenderTransform = it.DragTransform;
+
             it.Host = cell;
             return cell;
         }
@@ -357,6 +366,9 @@ namespace Clover
                 dragging = true;
                 dragMoved = false;
                 dragOutStarted = false;
+                dragPreviewDx = 0;
+                dragPreviewDy = 0;
+                dragPressTime = DateTime.Now;
                 dragAnchor = hit;
                 dragStart = e.GetPosition(canvas);
                 dragOrigins.Clear();
@@ -388,75 +400,110 @@ namespace Clover
                 double dx = p.X - dragStart.X;
                 double dy = p.Y - dragStart.Y;
 
-                if (!dragMoved && (Math.Abs(dx) > 3 || Math.Abs(dy) > 3)) dragMoved = true;
+                double minDx = SystemParameters.MinimumHorizontalDragDistance;
+                double minDy = SystemParameters.MinimumVerticalDragDistance;
+                if (!dragMoved && (Math.Abs(dx) >= minDx || Math.Abs(dy) >= minDy))
+                    dragMoved = true;
                 if (!dragMoved) return;
 
-                // ---- 拖出：鼠标离开图标格子且左键仍按住 → 发起系统拖拽 ----
+                // ---- 面板内自由摆放 → 拖出（B 方案）----
                 //
-                // 面板内的自由移动已由上面的代码处理，只有拖到格子外面
-                // 才可能是想拖出面板。DoDragDrop 会阻塞到拖拽结束。
-                if (dragMoved && !dragOutStarted && IsOutsideCell(p))
+                // 触发条件（二选一，均为常量，便于调参）：
+                //   1. 指针离开「按下时的格子」超过半格
+                //   2. 按住超过 0.3 秒仍未松手
+                //
+                // 必须用「按下时的格子」：图标会跟着指针移动，
+                // 拿图标当前位置判定永远判不出来 —— 这正是旧 bug 的根因。
+                bool leftCell = DesktopDragGesture.HasLeftOriginCell(
+                    dragStart.X, dragStart.Y, p.X, p.Y,
+                    CellW, CellH, DesktopDragGesture.LeaveCellRatio);
+
+                bool heldLong = DesktopDragGesture.HasHeldLongEnough(
+                    dragPressTime, DateTime.Now, DesktopDragGesture.HoldSeconds);
+
+                if (!dragOutStarted && (leftCell || heldLong))
                 {
                     dragOutStarted = true;
+
+                    // 保留当前预览偏移，让图标停在当前位置；系统拖放结束后再恢复。
+                    dragPreviewDx = dx;
+                    dragPreviewDy = dy;
+                    ApplyDragPreview(dx, dy);
+                    SetDraggedOpacity(0.55);
+
                     try { canvas.ReleaseMouseCapture(); } catch { }
                     BeginDragOut();
+
+                    SetDraggedOpacity(1.0);
+                    ClearDragPreview();
+                    ResetDragState();
                     return;
                 }
-
-                // 多选时整体平移
-                foreach (Item it in items)
-                {
-                    if (!it.IsSelected) continue;
-
-                    Point o;
-                    if (!dragOrigins.TryGetValue(it.Name, out o)) continue;
-
-                    it.X = Math.Max(0, o.X + dx);
-                    it.Y = Math.Max(0, o.Y + dy);
-
-                    if (it.Host != null)
-                    {
-                        Canvas.SetLeft(it.Host, it.X);
-                        Canvas.SetTop(it.Host, it.Y);
-                    }
-                }
+                // 面板内部仍是自由摆放，但只更新 RenderTransform：
+                // 它在布局之后由合成层处理，不会像 Canvas.SetLeft/Top 一样每帧重排。
+                dragPreviewDx = dx;
+                dragPreviewDy = dy;
+                ApplyDragPreview(dx, dy);
             }
             catch (Exception ex) { Ui.LogError(ex, "桌面拖动"); }
         }
 
-        /// <summary>
-        /// 鼠标是否已离开"选中图标"的格子范围。
-        ///
-        /// 用格子而不是图标本体：图标本体只有 48px，用户很容易
-        /// 在格子内的空白处移动，那不应该是拖出。
-        /// </summary>
-        bool IsOutsideCell(Point p)
+        /// <summary>只更新合成层位移，不触发布局重排。</summary>
+        void ApplyDragPreview(double dx, double dy)
         {
             try
             {
-                if (dragAnchor == null) return false;
-
                 foreach (Item it in items)
                 {
-                    if (!it.IsSelected) continue;
-                    if (p.X >= it.X && p.X <= it.X + CellW &&
-                        p.Y >= it.Y && p.Y <= it.Y + CellH)
-                        return false;
+                    if (!it.IsSelected || it.DragTransform == null) continue;
+                    it.DragTransform.X = dx;
+                    it.DragTransform.Y = dy;
                 }
-                return true;
             }
-            catch { return false; }
+            catch { }
         }
 
-        /// <summary>
-        /// 发起系统拖拽（拖出面板）。
-        ///
-        /// DoDragDrop 的返回值不可靠（目标接受 FileDrop 时，复制和移动
-        /// 都可能返回 Copy），所以拖完看落点窗口是谁：
-        ///   桌面 / 资源管理器 → 确保真移动（源还在就补删）
-        ///   其他程序（QQ 等） → 只当发送，源文件保留，图标不动
-        ///   Unknown（取消）    → 什么都不做
-        /// </summary>
+        /// <summary>系统拖放期间淡化原位图标，表示它正在被拖走。</summary>
+        void SetDraggedOpacity(double opacity)
+        {
+            try
+            {
+                foreach (Item it in items)
+                {
+                    if (!it.IsSelected || it.Host == null) continue;
+                    it.Host.Opacity = opacity;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>清除所有选中图标的合成层拖动预览。</summary>
+        void ClearDragPreview()
+        {
+            try
+            {
+                foreach (Item it in items)
+                {
+                    if (it.DragTransform == null) continue;
+                    it.DragTransform.X = 0;
+                    it.DragTransform.Y = 0;
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>结束一次拖动，防止 DoDragDrop 返回后 MouseUp 再提交旧坐标。</summary>
+        void ResetDragState()
+        {
+            dragging = false;
+            dragMoved = false;
+            dragOutStarted = false;
+            dragPreviewDx = 0;
+            dragPreviewDy = 0;
+            dragAnchor = null;
+            dragOrigins.Clear();
+        }
+
         /// <summary>
         /// 发起系统拖拽（拖出面板）。
         ///
@@ -479,18 +526,22 @@ namespace Clover
             {
                 List<string> paths = new List<string>();
                 List<string> names = new List<string>();
+                List<long> sizes = new List<long>();
                 foreach (Item it in items)
                 {
                     if (!it.IsSelected) continue;
                     if (!File.Exists(it.FullPath) && !Directory.Exists(it.FullPath)) continue;
                     paths.Add(it.FullPath);
                     names.Add(it.Name);
+                    try { sizes.Add(it.IsFolder ? -1 : new FileInfo(it.FullPath).Length); }
+                    catch { sizes.Add(-2); }
                 }
 
                 if (paths.Count == 0) return;
 
                 DataObject data = new DataObject();
                 data.SetData(DataFormats.FileDrop, paths.ToArray());
+                data.SetData(DesktopDragGesture.InternalDataFormat, "1");
 
                 // 告诉目标"这是移动"：桌面和资源管理器读到 Preferred DropEffect
                 // 会自己执行移动。缺了这一项，系统不知道该复制还是移动。
@@ -504,12 +555,19 @@ namespace Clover
                 }
                 catch (Exception ex) { Ui.Log("设置 Preferred DropEffect 失败: " + ex.Message); }
 
+                // DoDragDrop 返回后光标仍停在目标上。记录窗口句柄，便于解析资源管理器目录。
+                IntPtr targetHwnd = IntPtr.Zero;
+
+                Ui.Log("拖出开始: 文件数=" + paths.Count + "（半格/0.3秒触发）");
                 DragDropEffects eff = DragDrop.DoDragDrop(canvas, data,
                     DragDropEffects.Copy | DragDropEffects.Move);
 
+                targetHwnd = DropTarget.RootWindowAtCursor();
                 DropTarget.Kind kind = DropTarget.KindAtCursor();
+                string targetDir = DropTargetPath.Resolve(kind, targetHwnd);
                 Ui.Log("拖出结束: effects=" + eff + " 落点=" + kind
-                    + " 文件数=" + paths.Count);
+                    + " 文件数=" + paths.Count
+                    + (string.IsNullOrEmpty(targetDir) ? " 目标路径未知" : " 目标目录=" + targetDir));
 
                 // ---- 只核对，绝不删源 ----
                 int goneCount = 0;
@@ -528,9 +586,17 @@ namespace Clover
                         continue;
                     }
 
+                    string targetPath = string.IsNullOrEmpty(targetDir)
+                        ? "" : Path.Combine(targetDir, name);
+                    bool targetVerified = VerifyMovedTarget(targetPath, sizes[i]);
+
                     desks.RemovePos(deskName, name);
                     goneCount++;
-                    Ui.Log("源文件已被移走，移除图标: " + name);
+
+                    if (targetVerified)
+                        Ui.Log("拖出移动: " + path + " → " + targetPath);
+                    else
+                        Ui.Log("拖出移动: " + path + " → （目标路径未知，落点=" + kind + "）");
                 }
 
                 if (goneCount > 0)
@@ -541,6 +607,22 @@ namespace Clover
             }
             catch (Exception ex) { Ui.LogError(ex, "拖出面板"); }
         }
+        /// <summary>
+        /// 核对系统拖放后的目标：文件存在且大小一致；文件夹存在。
+        /// expectedSize = -1 表示文件夹；-2 表示源大小读取失败，此时不宣称已核对。
+        /// </summary>
+        static bool VerifyMovedTarget(string targetPath, long expectedSize)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(targetPath)) return false;
+                if (expectedSize == -1) return Directory.Exists(targetPath);
+                if (expectedSize < 0) return false;
+                return File.Exists(targetPath) && new FileInfo(targetPath).Length == expectedSize;
+            }
+            catch { return false; }
+        }
+
         void OnCanvasUp(object s, MouseButtonEventArgs e)
         {
             try
@@ -560,25 +642,34 @@ namespace Clover
                     dragging = false;
                     try { canvas.ReleaseMouseCapture(); } catch { }
 
-                    if (dragMoved)
+                    if (dragMoved && !dragOutStarted)
                     {
-                        // 写坐标
+                        // RenderTransform 只负责预览；松手时一次性写入真实 Canvas 坐标。
                         foreach (Item it in items)
                         {
                             if (!it.IsSelected) continue;
+
+                            Point origin;
+                            if (!dragOrigins.TryGetValue(it.Name, out origin)) continue;
+
+                            it.X = Math.Max(0, origin.X + dragPreviewDx);
+                            it.Y = Math.Max(0, origin.Y + dragPreviewDy);
+                            if (it.Host != null)
+                            {
+                                Canvas.SetLeft(it.Host, it.X);
+                                Canvas.SetTop(it.Host, it.Y);
+                            }
                             desks.SetPos(deskName, it.Name, it.X, it.Y);
                         }
                         if (OnLayoutChanged != null) { try { OnLayoutChanged(); } catch { } }
                     }
-                    else if (dragAnchor != null)
+                    else if (dragAnchor != null && !dragMoved)
                     {
-                        // 单击（没拖动）→ 打开
-                        // 双击由 MouseLeftButtonDown 的 ClickCount 处理更准，
-                        // 这里只在明确是双击时打开。
+                        // 单击（没拖动）—— 保留选择，不执行额外动作。
                     }
 
-                    dragAnchor = null;
-                    dragOrigins.Clear();
+                    ClearDragPreview();
+                    ResetDragState();
                     e.Handled = true;
                 }
             }
@@ -995,50 +1086,22 @@ namespace Clover
                 // 1. 目标同名时自动改名，绝不覆盖
                 string target = DeskRemoval.MakeUniqueTarget(desktop, it.Name, it.IsFolder);
 
-                long srcSize = 0;
-                try
+                // 2. 安全移动：先复制并核对目标，再删除源
+                VerifiedFileMove.Result moved = VerifiedFileMove.Move(it.FullPath, target);
+                if (!moved.Ok)
                 {
-                    if (!it.IsFolder && File.Exists(it.FullPath))
-                        srcSize = new FileInfo(it.FullPath).Length;
-                }
-                catch { }
-
-                // 2. 移动
-                try
-                {
-                    if (it.IsFolder) Directory.Move(it.FullPath, target);
-                    else File.Move(it.FullPath, target);
-                }
-                catch (Exception ex)
-                {
-                    Ui.Log("放回桌面失败: " + it.Name + " / " + ex.Message);
+                    Ui.Log("放回桌面失败: " + it.Name + " / " + moved.Message);
                     MessageBox.Show(owner,
-                        "放回桌面失败：" + ex.Message + "\r\n\r\n文件仍在原处：" + it.FullPath,
+                        "放回桌面失败：" + moved.Message + "\r\n\r\n"
+                        + (moved.SourceStillExists
+                            ? "文件仍在原处：" + it.FullPath
+                            : "请检查目标：" + moved.Target),
                         "四叶草 · 放回桌面",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
-                // 3. 核对：目标真的存在且大小一致
-                bool ok = false;
-                try
-                {
-                    if (it.IsFolder) ok = Directory.Exists(target);
-                    else ok = File.Exists(target) && new FileInfo(target).Length == srcSize;
-                }
-                catch { ok = false; }
-
-                if (!ok)
-                {
-                    Ui.Log("放回桌面核对失败: " + it.Name + " -> " + target);
-                    MessageBox.Show(owner,
-                        "移动后核对未通过，图标保留。\r\n\r\n请检查：" + target,
-                        "四叶草 · 放回桌面",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                // 4. 核对通过才移除图标
+                // 3. 核对式移动成功后才移除图标
                 desks.RemovePos(deskName, it.Name);
                 if (OnLayoutChanged != null) { try { OnLayoutChanged(); } catch { } }
                 Load(deskName);
@@ -1100,6 +1163,23 @@ namespace Clover
                 Load(deskName);
             }
             catch (Exception ex) { Ui.LogError(ex, "拖入后落位"); }
+        }
+
+        /// <summary>当前选中的完整路径（供「放回桌面」使用）。</summary>
+        public List<string> SelectedPaths()
+        {
+            List<string> r = new List<string>();
+            try
+            {
+                foreach (Item it in items)
+                {
+                    if (!it.IsSelected) continue;
+                    if (string.IsNullOrEmpty(it.FullPath)) continue;
+                    r.Add(it.FullPath);
+                }
+            }
+            catch { }
+            return r;
         }
 
         /// <summary>当前桌面名。</summary>

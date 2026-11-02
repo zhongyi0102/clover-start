@@ -6,7 +6,8 @@ using System.Web.Script.Serialization;
 namespace Clover
 {
     /// <summary>
-    /// 用户自定义标签的持久化清单（主标签栏「常用 / 全部 / 文件 / +」里由用户新建的那些）。
+    /// 用户自定义桌面的持久化清单（主标签栏内置「常用 / 全部 / 文件 / 虚拟桌面」，
+    /// 用户通过末尾「+」新建的额外桌面记录在这里）。
     ///
     /// ── 职责边界 ──
     ///
@@ -41,7 +42,7 @@ namespace Clover
 
         /// <summary>内置标签名，不允许用户新建同名、也不允许重命名成它们。</summary>
         public static readonly string[] Reserved =
-            new string[] { "常用", "全部", "文件" };
+            new string[] { "常用", "全部", "文件", "桌面文件", "虚拟桌面" };
 
         /// <summary>一个自定义标签。</summary>
         public class Tab

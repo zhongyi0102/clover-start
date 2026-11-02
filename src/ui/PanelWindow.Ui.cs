@@ -340,11 +340,41 @@ namespace Clover
             contentStack.Children.Add(filesPanel);
 
             // ---- 虚拟桌面层（自定义标签用）----
+            //
+            // 结构：Grid 三行（按钮 Auto / 提示 Auto / 图标画布 Star）。
+            // ★ 不能用纵向 StackPanel：StackPanel 不会把剩余高度分给 Canvas，
+            // 实测视口 449px 时画布永远只有 MinHeight=240px，图标拖到下半页就被裁掉。
+            deskPanel = new Grid();
+            deskPanel.Visibility = Visibility.Collapsed;
+            deskPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+            deskPanel.VerticalAlignment = VerticalAlignment.Stretch;
+            deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            deskPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            deskToolRow = new StackPanel();
+            deskToolRow.Orientation = Orientation.Horizontal;
+            deskToolRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            Grid.SetRow(deskToolRow, 0);
+            deskPanel.Children.Add(deskToolRow);
+
+            deskNotice = Ui.T("", 10.5, Ui.Sub);
+            deskNotice.TextWrapping = TextWrapping.Wrap;
+            deskNotice.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            deskNotice.Visibility = Visibility.Collapsed;
+            Grid.SetRow(deskNotice, 1);
+            deskPanel.Children.Add(deskNotice);
+
             deskCanvas = new Canvas();
             deskCanvas.Background = Brushes.Transparent;
-            deskCanvas.Visibility = Visibility.Collapsed;
             deskCanvas.ClipToBounds = true;
-            contentStack.Children.Add(deskCanvas);
+            deskCanvas.MinHeight = 240;
+            deskCanvas.HorizontalAlignment = HorizontalAlignment.Stretch;
+            deskCanvas.VerticalAlignment = VerticalAlignment.Stretch;
+            Grid.SetRow(deskCanvas, 2);
+            deskPanel.Children.Add(deskCanvas);
+
+            contentStack.Children.Add(deskPanel);
 
             deskOverlay = new Canvas();
             deskOverlay.IsHitTestVisible = false;
