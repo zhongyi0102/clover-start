@@ -514,23 +514,19 @@ namespace Clover
             darkOverlay.CornerRadius = new CornerRadius(Ui.R.Lg);
             contentHost.Children.Add(darkOverlay);
 
-            // ---- 拖放高亮层（常驻）----
+            // ---- 拖放高亮层（已移除）----
             //
-            // 必须常驻且只切 Visibility：早期版本在 DragEnter 里动态 Add
-            // 一个 Border，子元素增删改变了命中测试区域，系统会在边界
-            // 反复派发 Enter/Leave（实测 7~8ms 抖动）。
+            // 这里原来有一个铺满 contentHost 的虚线 Border：
+            //   BorderBrush = Ui.Accent, 2px, CornerRadius = Ui.R.Md? 否，是 Ui.R.Lg
+            //   Margin = 6, IsHitTestVisible = false
+            //   Background = Color.FromArgb(24, 56, 140, 72)   ← 硬编码绿，不跟主题
             //
-            // IsHitTestVisible = false：高亮层绝不能参与命中测试，
-            // 否则它自己会变成拖放目标，把事件从内容区抢走。
-            dropHighlight = new Border();
-            dropHighlight.BorderBrush = Ui.Accent;
-            dropHighlight.BorderThickness = new Thickness(2);
-            dropHighlight.CornerRadius = new CornerRadius(Ui.R.Lg);
-            dropHighlight.Margin = new Thickness(6);
-            dropHighlight.IsHitTestVisible = false;
-            dropHighlight.Background = new SolidColorBrush(Color.FromArgb(24, 56, 140, 72));
-            dropHighlight.Visibility = Visibility.Collapsed;
-            contentHost.Children.Add(dropHighlight);
+            // 移除原因见 SetDropHighlight 的说明：
+            //   · 在不接收文件的页（常用/全部）也会亮，属于误导
+            //   · 硬编码底色在深色主题下与 Ui.Accent 打架
+            //   · 有 DropHint 的页已有局部高亮，面板级是冗余
+            //
+            // 现在高亮统一由 DropHint 承担，没有全局层了。
 
             glassBackdrop = new GlassBackdrop(this, contentHost, Path.Combine(baseDir, "res"));
             glassBackdrop.OpacityPercent = 0;    // 默认关闭，由设置决定

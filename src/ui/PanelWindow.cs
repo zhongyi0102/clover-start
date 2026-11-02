@@ -88,8 +88,13 @@ namespace Clover
         /// <summary>兜底：轮询最多持续这么久，避免标志卡死导致面板再也不收。</summary>
         static readonly TimeSpan DragWatchLimit = TimeSpan.FromSeconds(30);
 
-        /// <summary>拖拽经过时的虚线高亮层。</summary>
-        Border dropHighlight;
+        /// <summary>
+        /// 拖拽经过时的整面板虚线高亮层 —— **已移除**。
+        ///
+        /// 保留字段声明会误导后来者以为它还在用。高亮现在统一由
+        /// `deskDropHint` / `filesDropHint` 承担，见 SetDropHighlight。
+        /// </summary>
+        // Border dropHighlight;   // 已移除：见 SetDropHighlight 的说明
 
         StackPanel navStack;
 
@@ -1344,19 +1349,30 @@ namespace Clover
         }
 
         /// <summary>
-        /// 切换拖放高亮的可见性。
+        /// 切换拖放高亮。
         ///
-        /// 高亮层在 BuildUi 里一次性创建（常驻），这里只切 Visibility ——
-        /// 动态 Add/Remove 子元素会改变命中测试区域，导致 Enter/Leave 抖动。
+        /// ── 只驱动 DropHint，不再有面板级虚线 ──
+        ///
+        /// 原来这里还会切一个铺满整个内容区的虚线 `dropHighlight`。
+        /// 去掉的理由：
+        ///
+        ///   · 它在「常用」「全部」这些**根本不接收文件**的页也会亮
+        ///     （`OnPanelDrop` 在 :1189 直接 return），等于承诺了接收却忽略
+        ///   · 它的底色是硬编码的 `Color.FromArgb(24, 56, 140, 72)`
+        ///     （浅色主题的绿），深色主题下边框青蓝、底色绿，两者打架
+        ///   · 有 DropHint 的页（桌面文件 / 文件）本来就有局部高亮，
+        ///     面板级虚线是冗余
+        ///
+        /// ── 保留的语义 ──
+        ///
+        /// `SetDropHighlight(!internalDrag)` 的内部拖动不高亮语义**完全保留**：
+        /// 内部拖动（磁贴排序、图标拖动）不点亮任何 DropHint。
         /// </summary>
         void SetDropHighlight(bool on)
         {
             try
             {
-                if (dropHighlight == null) return;
-                dropHighlight.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
-
-                // 空桌面提示层跟着一起高亮（它自己不接收事件，由这里驱动）
+                // 空桌面提示层（它自己不接收事件，由这里驱动）
                 if (deskDropHint != null && deskDropHint.Visible)
                     deskDropHint.SetActive(on);
 
