@@ -10,6 +10,11 @@ app/*.log
 config/
 desktop-backup/
 
+# 「桌面文件」的默认存放目录（desks\桌面文件）。
+# 里面是用户自己的文件，和 config 一样属于运行时数据。
+# 注意：用户在设置里可以把存放目录改到别处，那时这里根本不会生成。
+desks/
+
 # 发布包（由 tools\make-release.ps1 生成）
 dist/
 
