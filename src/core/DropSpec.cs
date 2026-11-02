@@ -266,6 +266,39 @@ namespace Clover
         /// <summary>背景图长边上限：超过则等比缩小，小图不放大。</summary>
         public const int BackgroundLongEdge = 3840;
 
+
+
+        /// <summary>
+        /// 背景图放置区的约束文案。
+        ///
+        /// 格式列表和 3840 **全部从常量取**，不手写 —— 这样改了
+        /// `BackgroundExts` / `BackgroundLongEdge`，提示文案自动跟着变，
+        /// 不会出现「提示说支持 tif、实际拒收」这种分叉。
+        ///
+        /// 措辞是「会等比缩小」而不是「不支持」：超长边不是拒绝理由，
+        /// 是自动处理。写成「不支持」会让用户以为大图进不来。
+        /// </summary>
+        public static string BackgroundHintText()
+        {
+            try
+            {
+                // 扩展名去点、按原顺序拼接（.jpg/.jpeg 保留两者，用户可能真有 .jpeg）
+                StringBuilder sb = new StringBuilder();
+                sb.Append("支持 ");
+                for (int i = 0; i < BackgroundExts.Length; i++)
+                {
+                    if (i > 0) sb.Append("/");
+                    sb.Append(BackgroundExts[i].TrimStart('.'));
+                }
+                sb.Append("，长边超过 ");
+                sb.Append(BackgroundLongEdge);
+                sb.Append(" 会等比缩小");
+                return sb.ToString();
+            }
+            catch { return ""; }
+        }
+
+
         /// <summary>
         /// 「桌面文件」页拖入：不限类型，但拒应用类。
         ///

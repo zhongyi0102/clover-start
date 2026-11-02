@@ -38,6 +38,7 @@ namespace Clover
                 TestExtsTruncation();
                 TestEdgeCases();
                 TestDeterminism();
+                TestBackgroundReject();
             }
             catch (Exception ex)
             {
@@ -298,5 +299,57 @@ namespace Clover
 
             Console.WriteLine();
         }
+
+        // ---------- 8. 背景图入口的拒绝文案（接入点 2）----------
+        //
+        // 这一组模拟 AppearanceDialog 的 Drop 分支：
+        //   spec = DropSpec.ForBackground() → Validate → BuildSummary
+        // 断言文案确实走的是步骤 2 那套，而不是背景窗口自己另写一句。
+        static void TestBackgroundReject()
+        {
+            Console.WriteLine("--- 8. 背景图被拒时走 BuildSummary ---");
+
+            DropSpec spec = DropSpec.ForBackground();
+
+            // 拖一个 .txt 进来 → 不支持的类型
+            DropSpec.Rejected txt = R(DropSpec.RejectReason.UnsupportedType, ".txt");
+            string s = DropSpec.BuildSummary(0, List(txt));
+            Check(s == "没有放入任何文件，跳过 1 个不支持的类型（.txt）",
+                "★单文件被拒文案", s);
+
+            // 拖两个非图片
+            string s2 = DropSpec.BuildSummary(0, List(
+                R(DropSpec.RejectReason.UnsupportedType, ".txt"),
+                R(DropSpec.RejectReason.UnsupportedType, ".pdf")));
+            Check(s2 == "没有放入任何文件，跳过 2 个不支持的类型（.pdf/.txt）",
+                "★多个非图片（按字母序）", s2);
+
+            // 拖一个 .exe → 背景预设没配 RejectExts，所以报「不支持的类型」
+            // （不是「应用类文件」）。这是有意的：背景入口只关心"是不是图片"，
+            // 区分 .exe 和 .txt 对用户没有行动意义。
+            DropSpec.Validation v = spec.Validate(new string[] { @"C:\x\a.exe" });
+            Check(v.RejectedItems.Count == 1, "exe 被拒");
+            Check(v.RejectedItems[0].Reason == DropSpec.RejectReason.UnsupportedType,
+                "★背景入口把 exe 也报成「不支持的类型」",
+                v.RejectedItems[0].Reason.ToString());
+
+            // 图片通过
+            DropSpec.Validation ok = spec.Validate(new string[] { @"C:\x\a.png" });
+            Check(ok.Accepted.Count == 1, "★png 通过");
+            Check(!ok.AnyRejected, "png 没有被拒");
+
+            // MaxFiles = 1：拖两张图只收第一张
+            DropSpec.Validation two = spec.Validate(new string[] { @"C:\x\a.png", @"C:\x\b.jpg" });
+            Check(two.Accepted.Count == 1, "★只收第一张");
+            Check(two.RejectedItems.Count == 1
+                && two.RejectedItems[0].Reason == DropSpec.RejectReason.TooMany,
+                "★第二张报超数量");
+            string s3 = DropSpec.BuildSummary(1, two.RejectedItems);
+            Check(s3 == "已放入 1 个，跳过 1 个超出数量上限（.jpg）",
+                "★部分接受时的文案", s3);
+
+            Console.WriteLine();
+        }
+
     }
 }

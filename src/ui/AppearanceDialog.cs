@@ -444,6 +444,11 @@ namespace Clover
                 Border btnChange = null, btnClear = null;
                 StackPanel customRow = null;
 
+                // 拖放提示的当前文案（空 = 没有提示，refreshMode 按文件名显示）。
+                // 用局部变量而不是字段：AppearanceDialog 是 static class，
+                // 而提示的生命周期只在这一个窗口内。
+                string customNoticeText = "";
+
                 Action refreshMode = null;
                 refreshMode = delegate
                 {
@@ -464,10 +469,22 @@ namespace Clover
 
                         if (customPathText != null)
                         {
-                            string f = BackgroundStore.Find(baseDir);
-                            customPathText.Text = string.IsNullOrEmpty(f)
-                                ? "（还没有导入图片）"
-                                : System.IO.Path.GetFileName(f) + "  ·  " + FormatSize(f);
+                            // 有拖放提示正在显示时不要覆盖它 —— 提示刚说完
+                            // 「已设为背景：x.png」，refreshMode 立刻改回文件名
+                            // 会让用户看不到反馈。
+                            if (!string.IsNullOrEmpty(customNoticeText))
+                            {
+                                customPathText.Text = customNoticeText;
+                                customPathText.Foreground = Ui.AccentText;
+                            }
+                            else
+                            {
+                                string f = BackgroundStore.Find(baseDir);
+                                customPathText.Text = string.IsNullOrEmpty(f)
+                                    ? "（还没有导入图片）"
+                                    : System.IO.Path.GetFileName(f) + "  ·  " + FormatSize(f);
+                                customPathText.Foreground = Ui.Sub;
+                            }
                         }
                         if (btnChange != null) btnChange.IsEnabled = true;
                         if (btnClear != null) btnClear.IsEnabled = custom && BackgroundStore.Exists(baseDir);
@@ -586,6 +603,140 @@ namespace Clover
                 customRow.Children.Add(btnClear);
 
                 body.Children.Add(customRow);
+
+                // ---- 自定义背景的放置提示层（常驻）----
+                //
+                // 复用 DropHint（不新建第二套提示控件），样式令牌一个不改。
+                // 约束行由 DropSpec.BackgroundHintText() 从常量生成，
+                // 格式列表和 3840 都取自 core，与真正导入时的判定同源。
+                //
+                // ★ 只挂在「自定义图片」这一块，不是整个窗口：
+                //   窗口还有主题、毛玻璃参数、WE 壁纸等区域，全窗铺一个
+                //   提示层会让用户以为"往哪拖都行"。
+                DropHint customDropHint = new DropHint("把文件拖到这里",
+                    DropSpec.BackgroundHintText());
+                customDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Lg);
+                body.Children.Add(customDropHint.Root);
+
+                // ---- 拖放接线（只做高亮 + Drop 后校验，不接管任何现有事件）----
+                //
+                // 窗口级而不是 chip 级：拖文件时鼠标可能落在提示层、chip、
+                // 或空白处，挂窗口级才能稳定收到 Enter/Leave。
+                // 高亮只驱动 customDropHint，不影响其它控件。
+                dlg.AllowDrop = true;
+
+                // 本窗口自己的提示位。
+                //
+                // ★ 为什么不用主面板的 toastHost：本窗口是模态（ShowDialog），
+                //   toastHost 挂在 PanelWindow 上，被模态窗整个挡住 —— 用户看不到。
+                //   所以在这里把提示写进本窗口的 customPathText（就在 chip 下方，
+                //   正是用户刚操作过的位置）。文案仍由 DropSpec.BuildSummary 生成，
+                //   不另写一套措辞。
+                Action<string> showCustomNotice = delegate(string text)
+                {
+                    try
+                    {
+                        if (string.IsNullOrEmpty(text)) return;
+                        customNoticeText = text;
+
+                        if (customPathText == null) return;
+                        customPathText.Text = text;
+                        customPathText.Foreground = Ui.AccentText;
+                        customPathText.MaxWidth = 460;
+                        customPathText.TextTrimming = TextTrimming.CharacterEllipsis;
+                    }
+                    catch { }
+                };
+
+                dlg.DragEnter += delegate(object s, DragEventArgs e)
+                {
+                    try
+                    {
+                        if (!HasFileDrop(e)) return;
+                        customDropHint.SetActive(true);
+                        e.Effects = DragDropEffects.Copy;
+                        e.Handled = true;
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "背景图 DragEnter"); }
+                };
+
+                dlg.DragOver += delegate(object s, DragEventArgs e)
+                {
+                    try
+                    {
+                        if (!HasFileDrop(e)) return;
+                        // 不重复 SetActive：DragOver 高频触发，反复启停动画会闪
+                        e.Effects = DragDropEffects.Copy;
+                        e.Handled = true;
+                    }
+                    catch { }
+                };
+
+                dlg.DragLeave += delegate(object s, DragEventArgs e)
+                {
+                    try
+                    {
+                        // 不信任事件本身：拖过子元素边界时会派发假 Leave。
+                        // 以光标是否真在窗口内为准。
+                        if (IsCursorInsideWindow(dlg)) { e.Handled = true; return; }
+                        customDropHint.SetActive(false);
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "背景图 DragLeave"); }
+                };
+
+                dlg.Drop += delegate(object s, DragEventArgs e)
+                {
+                    try
+                    {
+                        customDropHint.SetActive(false);
+
+                        string[] paths = null;
+                        try { paths = e.Data.GetData(DataFormats.FileDrop) as string[]; }
+                        catch { }
+                        e.Handled = true;
+                        if (paths == null || paths.Length == 0) return;
+
+                        // ---- 走 DropSpec 校验（与真正导入同一份规则）----
+                        DropSpec spec = DropSpec.ForBackground();
+                        DropSpec.Validation v = spec.Validate(paths);
+
+                        if (!v.AnyAccepted)
+                        {
+                            // 全被拒：复用步骤 2 的 BuildSummary 生成文案
+                            string msg = DropSpec.BuildSummary(0, v.RejectedItems);
+                            if (!string.IsNullOrEmpty(msg))
+                            {
+                                // 模态窗里没有 toastHost（它在主面板上，被本窗挡住），
+                                // 所以写到本窗口自己的提示位（customPathText 上方）。
+                                showCustomNotice(msg);
+                                Ui.Log("背景图拖入被拒: " + msg);
+                            }
+                            return;
+                        }
+
+                        // 只取第一个（背景图 MaxFiles = 1）
+                        string picked = v.Accepted[0];
+                        string err;
+                        string saved = BackgroundStore.Import(baseDir, picked, out err);
+
+                        if (string.IsNullOrEmpty(saved))
+                        {
+                            MessageBox.Show(dlg,
+                                "无法读取该图片。\r\n\r\n" + (err ?? "未知原因"),
+                                "四叶草 · 背景图片",
+                                MessageBoxButton.OK, MessageBoxImage.Warning);
+                            return;
+                        }
+
+                        if (settings != null) settings.GlassMode = "custom";
+                        InvalidateCustomCache(panel);
+                        refreshMode();
+                        commit();
+                        showCustomNotice("已设为背景：" + System.IO.Path.GetFileName(saved));
+                        Ui.Log("拖入背景图: " + picked + " → " + saved);
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "背景图 Drop"); }
+                };
 
                 refreshMode();
 
@@ -1098,6 +1249,42 @@ namespace Clover
                 if (panel != null) panel.InvalidateCustomBackground();
             }
             catch { }
+        }
+
+        /// <summary>这次拖拽里有没有文件（只看存在性，不读内容 —— DragOver 高频）。</summary>
+        static bool HasFileDrop(DragEventArgs e)
+        {
+            try
+            {
+                return e != null && e.Data != null
+                    && e.Data.GetDataPresent(DataFormats.FileDrop);
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 光标是否真的在窗口矩形内（屏幕坐标）。
+        ///
+        /// 为什么需要：拖过子元素边界时系统会派发假的 DragLeave。
+        /// 只信事件会让高亮在拖过 chip 时闪一下。
+        /// </summary>
+        static bool IsCursorInsideWindow(Window w)
+        {
+            try
+            {
+                if (w == null) return false;
+
+                Native.POINT p;
+                if (!Native.GetCursorPos(out p)) return false;
+
+                Native.RECT r;
+                IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
+                if (!Native.GetWindowRect(hwnd, out r)) return false;
+
+                return p.X >= r.Left && p.X <= r.Right
+                    && p.Y >= r.Top && p.Y <= r.Bottom;
+            }
+            catch { return false; }
         }
 
         static Border MakeChip(string label, Action onClick)

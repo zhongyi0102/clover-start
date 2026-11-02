@@ -344,6 +344,37 @@ namespace Clover
             Check(DropSpec.AppExts.Length == 14, "★应用类扩展名 14 个",
                 Convert.ToString(DropSpec.AppExts.Length));
 
+            // ---- 约束文案由常量生成 ----
+            string hint = DropSpec.BackgroundHintText();
+            Check(hint == "支持 jpg/jpeg/png/bmp/gif/webp/tif/tiff，长边超过 3840 会等比缩小",
+                "★约束文案完整", hint);
+            Check(hint.Contains("3840"), "★含长边常量");
+            Check(hint.Contains("会等比缩小"), "★措辞是「会等比缩小」");
+            Check(hint.IndexOf("不支持", StringComparison.Ordinal) < 0,
+                "★不写成「不支持」", hint);
+
+            // 每个扩展名都出现在文案里（去点后）
+            bool allExts = true;
+            foreach (string ext in DropSpec.BackgroundExts)
+            {
+                string bare = ext.TrimStart('.');
+                if (hint.IndexOf(bare, StringComparison.Ordinal) < 0) allExts = false;
+            }
+            Check(allExts, "★每个扩展名都出现在文案里");
+
+            // 全角标点
+            Check(hint.IndexOf('，') > 0, "★用全角逗号", hint);
+            Check(hint.IndexOf(',') < 0, "★没有半角逗号", hint);
+
+            // 改常量 → 文案跟着变（用反射临时改不了 readonly，所以验证派生关系：
+            // 文案里的数字必须等于常量值，扩展名列表必须来自 BackgroundExts）
+            Check(hint.IndexOf(DropSpec.BackgroundLongEdge.ToString(), StringComparison.Ordinal) >= 0,
+                "★文案里的数字就是常量值");
+            int slashCount = 0;
+            foreach (char c in hint) if (c == '/') slashCount++;
+            Check(slashCount == DropSpec.BackgroundExts.Length - 1,
+                "★斜杠数 = 扩展名数 - 1", slashCount + " vs " + (DropSpec.BackgroundExts.Length - 1));
+
             Console.WriteLine();
         }
 
