@@ -121,6 +121,23 @@ namespace Clover
         TextBlock filesNotice;         // 提示行
         StackPanel filesListPanel;     // 文件列表
         FilesTabView filesView;        // 逻辑
+
+        /// <summary>
+        /// 「拖入被跳过项」的提示条。懒创建，挂在跨标签的 `toastHost` 上。
+        ///
+        /// 单独一个实例而不是复用 `undoBarForDesktop`：两者可能几乎同时显示
+        /// （拖入被跳过 + 桌面快捷方式被移除），共用一个会把前一句顶掉。
+        /// </summary>
+        UndoBar dropTipBar;
+
+        /// <summary>跨标签提示条宿主（footer 上方，不占布局空间）。</summary>
+        StackPanel toastHost;
+
+        /// <summary>
+        /// 「桌面文件」页的空状态提示层。懒建在 `PanelWindow.Ui.cs` 的 BuildUi 里，
+        /// 常驻，只切 Visibility。
+        /// </summary>
+        DropHint deskDropHint;
         TextBox searchBox;
         TextBlock searchHint;
         TextBlock footerCount;
@@ -1081,8 +1098,14 @@ namespace Clover
             try
             {
                 dragOverPanel = true;
-                e.Effects = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
-                // 不重复 SetDropHighlight：DragOver 高频触发，反复设属性没必要
+
+                // DragOver 在拖放期间每几十毫秒触发一次，**每次赋值 e.Effects
+                // 都会让系统重画光标**。只在结果真的变了时才写 ——
+                // 这是拖放循环里最容易被忽略的一处开销。
+                DragDropEffects want = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
+                if (e.Effects != want) e.Effects = want;
+
+                // 不重复 SetDropHighlight：那会启动动画，见 SetActive 的说明
                 e.Handled = true;
             }
             catch { }
@@ -1187,7 +1210,8 @@ namespace Clover
                     catch { }
                 }
 
-                // 失败才提示；跳过（.exe/.lnk）按需求静默
+                // 失败才用模态框（少数场景，必须让用户看见）；
+                // 被跳过（.exe/.lnk 等）改用底部提示条，非阻塞。
                 if (!r.AllOk)
                 {
                     string detail = "";
@@ -1203,10 +1227,69 @@ namespace Clover
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
 
+                // ---- 被跳过的项：汇总成一句话，非阻塞 ----
+                //
+                // 这是**行为变化**：以前 .exe/.lnk 静默跳过，用户拖 5 个进来
+                // 只出现 3 个会以为程序坏了。现在告知，但不逐个列文件名 ——
+                // 拖 20 个快捷方式进来时逐条列会占满整屏。
+                ShowDropSkipTip(r);
+
                 e.Handled = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "Drop"); }
         }
+
+        /// <summary>
+        /// 把「被跳过的项」汇总成一条底部提示（不抢焦点，时长沿用 UndoBar 的 5 秒）。
+        ///
+        /// 没有任何跳过项时不显示 —— 全部成功不该弹一句「跳过 0 个」。
+        /// 文案由 `DropSpec.BuildSummary` 生成（纯函数，可单测），这里只负责显示。
+        /// </summary>
+        void ShowDropSkipTip(DeskImporter.Result r)
+        {
+            try
+            {
+                if (r == null || r.SkippedReasons == null || r.SkippedReasons.Count == 0) return;
+
+                // 还原成 DropSpec.Rejected 列表（BuildSummary 的入参类型）
+                List<DropSpec.Rejected> rejected = new List<DropSpec.Rejected>();
+                for (int i = 0; i < r.SkippedReasons.Count; i++)
+                {
+                    DropSpec.Rejected one = new DropSpec.Rejected();
+                    one.Reason = r.SkippedReasons[i];
+                    one.Name = i < r.Skipped.Count ? r.Skipped[i] : "";
+                    one.Ext = i < r.SkippedExts.Count ? r.SkippedExts[i] : "";
+                    rejected.Add(one);
+                }
+
+                string text = DropSpec.BuildSummary(r.ImportedCount, rejected);
+                if (string.IsNullOrEmpty(text)) return;
+
+                // 宿主：跨标签的 toastHost（「桌面文件」页也看得见）
+                if (dropTipBar == null && toastHost != null)
+                {
+                    dropTipBar = new UndoBar(toastHost);
+                    dropTipBar.OnFocusBack = delegate
+                    {
+                        try { if (deskCanvas != null) deskCanvas.Focus(); } catch { }
+                    };
+                    // 提示条消失后把容器命中关回去，别挡住底下的按钮
+                    dropTipBar.OnVisibilityChanged = delegate(bool on)
+                    {
+                        try { if (toastHost != null) toastHost.IsHitTestVisible = on; }
+                        catch { }
+                    };
+                }
+                if (dropTipBar == null) return;
+
+                // undo 传 null → 只显示文字，不出现「撤销」按钮
+                dropTipBar.Show(text, null);
+
+                Ui.Log("拖入提示: " + text);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "显示拖入提示"); }
+        }
+
         static bool HasInternalDesktopDrag(DragEventArgs e)
         {
             try
@@ -1238,8 +1321,35 @@ namespace Clover
             {
                 if (dropHighlight == null) return;
                 dropHighlight.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+
+                // 空桌面提示层跟着一起高亮（它自己不接收事件，由这里驱动）
+                if (deskDropHint != null && deskDropHint.Visible)
+                    deskDropHint.SetActive(on);
             }
             catch (Exception ex) { Ui.LogError(ex, "拖放高亮"); }
+        }
+
+        /// <summary>
+        /// 按「当前桌面有几项」决定空状态提示层的显隐。
+        ///
+        /// 有内容 → 隐藏（不然会盖在图标上）；0 项 → 显示。
+        /// 只在「桌面文件」页有意义，切走时由 RenderDeskTab 的显隐逻辑一并处理。
+        /// </summary>
+        void UpdateDeskDropHint(int itemCount)
+        {
+            try
+            {
+                if (deskDropHint == null) return;
+
+                bool empty = itemCount <= 0;
+                deskDropHint.SetVisible(empty);
+
+                // 隐藏时 SetVisible 内部已经清掉高亮态；
+                // 显示时如果正拖着文件进来，要立刻是高亮态。
+                if (empty && dragOverPanel)
+                    deskDropHint.SetActive(true);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "更新放置提示"); }
         }
         bool IsMouseOverPanel()
         {

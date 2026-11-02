@@ -1612,6 +1612,10 @@ namespace Clover
                     {
                         try { if (virtualDesks != null) virtualDesks.Save(); } catch { }
                     };
+                    deskView.OnItemCountChanged = delegate(int count)
+                    {
+                        try { UpdateDeskDropHint(count); } catch { }
+                    };
                 }
 
                 // 确保磁盘文件夹存在

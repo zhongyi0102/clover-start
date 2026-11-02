@@ -105,6 +105,15 @@ namespace Clover
         /// <summary>坐标变化后的回调（让宿主写盘）。</summary>
         public Action OnLayoutChanged;
 
+        /// <summary>
+        /// 载入完成后回调：参数是当前桌面的项数（文件 + 文件夹）。
+        ///
+        /// 为什么需要它：空桌面提示层由 PanelWindow 持有，但它要知道
+        /// 「这个桌面里有没有东西」—— 而这个信息只有 DesktopView 知道
+        /// （列目录在 Load 里）。用回调传出去，避免 PanelWindow 再扫一遍磁盘。
+        /// </summary>
+        public Action<int> OnItemCountChanged;
+
         public DesktopView(PanelWindow owner, Canvas canvas, Canvas overlay,
             VirtualDesks desks, string deskName)
         {
@@ -200,6 +209,12 @@ namespace Clover
                 PruneStalePositions();
 
                 if (OnLayoutChanged != null) { try { OnLayoutChanged(); } catch { } }
+
+                // 告诉宿主这个桌面有几项 —— 空桌面要显示「把文件拖到这里」
+                if (OnItemCountChanged != null)
+                {
+                    try { OnItemCountChanged(items.Count); } catch { }
+                }
 
                 Ui.Log("虚拟桌面「" + name + "」载入 " + items.Count + " 项");
             }
@@ -555,22 +570,30 @@ namespace Clover
                 }
                 catch (Exception ex) { Ui.Log("设置 Preferred DropEffect 失败: " + ex.Message); }
 
-                // DoDragDrop 返回后光标仍停在目标上。记录窗口句柄，便于解析资源管理器目录。
-                IntPtr targetHwnd = IntPtr.Zero;
-
+                // DoDragDrop 返回后光标仍停在目标上。
+                //
+                // ★ 一次调用同时拿句柄和类型：原来这里是 RootWindowAtCursor()
+                //   + KindAtCursor() 两次，每次都 GetCursorPos + WindowFromPoint，
+                //   而这段正好在用户松手那一刻执行 —— 是拖出「松手后一顿」的
+                //   来源之一。
                 Ui.Log("拖出开始: 文件数=" + paths.Count + "（半格/0.3秒触发）");
+
                 DragDropEffects eff = DragDrop.DoDragDrop(canvas, data,
                     DragDropEffects.Copy | DragDropEffects.Move);
 
-                targetHwnd = DropTarget.RootWindowAtCursor();
-                DropTarget.Kind kind = DropTarget.KindAtCursor();
+                IntPtr targetHwnd;
+                DropTarget.Kind kind = DropTarget.ResolveAtCursor(out targetHwnd);
                 string targetDir = DropTargetPath.Resolve(kind, targetHwnd);
-                Ui.Log("拖出结束: effects=" + eff + " 落点=" + kind
-                    + " 文件数=" + paths.Count
-                    + (string.IsNullOrEmpty(targetDir) ? " 目标路径未知" : " 目标目录=" + targetDir));
 
                 // ---- 只核对，绝不删源 ----
+                //
+                // ★ 日志按批写一条，不再「每拖一个文件写一行」：
+                //   Ui.Log 是 File.AppendAllText，每行都开关一次文件句柄。
+                //   拖 20 个文件就是 20 次开关，松手瞬间明显卡顿。
                 int goneCount = 0;
+                List<string> goneNames = new List<string>();
+                int unverified = 0;
+
                 for (int i = 0; i < paths.Count; i++)
                 {
                     string path = paths[i];
@@ -580,11 +603,7 @@ namespace Clover
                     try { stillThere = File.Exists(path) || Directory.Exists(path); }
                     catch { }
 
-                    if (stillThere)
-                    {
-                        Ui.Log("源文件仍在，保留图标: " + name);
-                        continue;
-                    }
+                    if (stillThere) continue;   // 源还在 → 保留图标，不必逐条记日志
 
                     string targetPath = string.IsNullOrEmpty(targetDir)
                         ? "" : Path.Combine(targetDir, name);
@@ -592,20 +611,78 @@ namespace Clover
 
                     desks.RemovePos(deskName, name);
                     goneCount++;
-
-                    if (targetVerified)
-                        Ui.Log("拖出移动: " + path + " → " + targetPath);
-                    else
-                        Ui.Log("拖出移动: " + path + " → （目标路径未知，落点=" + kind + "）");
+                    goneNames.Add(name);
+                    if (!targetVerified) unverified++;
                 }
+
+                // 一条日志说明整批结果
+                Ui.Log("拖出结束: effects=" + eff + " 落点=" + kind
+                    + " 移走=" + goneCount + "/" + paths.Count
+                    + " 保留=" + (paths.Count - goneCount)
+                    + (unverified > 0 ? " 目标未核对=" + unverified : "")
+                    + (string.IsNullOrEmpty(targetDir) ? " 目标路径未知" : " 目标目录=" + targetDir));
 
                 if (goneCount > 0)
                 {
                     if (OnLayoutChanged != null) { try { OnLayoutChanged(); } catch { } }
-                    Load(deskName);
+
+                    // ★ 增量移除，不做全量 Load()。
+                    //
+                    //   Load() 会 canvas.Children.Clear() 再重建所有图标
+                    //   （每个图标都要取一次图标、做一次文本布局），
+                    //   拖走 1 个文件却重建 20 个 —— 松手后那一顿就是它。
+                    //   这里只把真正移走的图标从画布上摘掉。
+                    RemoveGoneTiles(goneNames);
+
+                    // 提示层要跟着「还有没有内容」更新，但不重建图标
+                    if (OnItemCountChanged != null)
+                    {
+                        try { OnItemCountChanged(items.Count); } catch { }
+                    }
                 }
             }
             catch (Exception ex) { Ui.LogError(ex, "拖出面板"); }
+        }
+
+        /// <summary>
+        /// 把已经移走的图标从画布上摘掉（增量，不重建其它图标）。
+        ///
+        /// 为什么单独一个方法：`Load()` 的重建代价与图标数量成正比，
+        /// 而拖出通常只涉及 1~3 个 —— 增量移除是 O(k) 而不是 O(n)。
+        /// </summary>
+        void RemoveGoneTiles(List<string> goneNames)
+        {
+            try
+            {
+                if (goneNames == null || goneNames.Count == 0) return;
+
+                HashSet<string> gone = new HashSet<string>(
+                    goneNames, StringComparer.OrdinalIgnoreCase);
+
+                List<Item> keep = new List<Item>();
+                foreach (Item it in items)
+                {
+                    if (!gone.Contains(it.Name))
+                    {
+                        keep.Add(it);
+                        continue;
+                    }
+
+                    // 从画布摘掉
+                    try { if (it.Host != null) canvas.Children.Remove(it.Host); }
+                    catch { }
+                }
+
+                items.Clear();
+                items.AddRange(keep);
+
+                // 选择集也要同步（否则后续操作会引用已消失的项）
+                foreach (string n in goneNames)
+                {
+                    try { selected.Remove(n); } catch { }
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "移除已拖出的图标"); }
         }
         /// <summary>
         /// 核对系统拖放后的目标：文件存在且大小一致；文件夹存在。

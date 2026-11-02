@@ -183,7 +183,13 @@ Invoke-Suite 'DeskRemovalTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskRemoval.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRemovalTest.cs')))
 # 拖入导入：过滤 exe/lnk / 移动 / 冲突改名 / 文件夹 / 占用
 Invoke-Suite 'DeskImporterTest' $baseRefs `
-    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+# 放置规则：正常 / 全拒 / 混合 / 超数量 / 超大小 / 空输入 / 目录模式 / 按原因汇总
+Invoke-Suite 'DropSpecTest' $baseRefs `
+    (@((Join-Path $coreDir 'DropSpec.cs'), (Join-Path $testDir 'DropSpecTest.cs')))
+# 拒绝反馈文案：单原因 / 多原因排序 / 全拒 / 无被拒返回 null / 扩展名超 3 种 / 边界
+Invoke-Suite 'DropSummaryTest' $baseRefs `
+    (@((Join-Path $coreDir 'DropSpec.cs'), (Join-Path $testDir 'DropSummaryTest.cs')))
 # 用户文件安全移动：临时副本核对 / 原子发布 / 失败保留源
 Invoke-Suite 'VerifiedFileMoveTest' $baseRefs `
     (@((Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $testDir 'VerifiedFileMoveTest.cs')))
@@ -290,6 +296,10 @@ Invoke-Suite 'OrganizeShellTest' $wpfRefs `
 # 更改存放目录对话框：默认项必须是「搬过去」+ 文案必须写明会搬多少个文件
 Invoke-Suite 'DeskRootDialogTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'DeskRootDialogTest.cs')))
+
+# 放置提示层：常驻不增删子元素 / 只切 Visibility / 不接收命中 / 令牌 / 高亮态 / 文案
+Invoke-Suite 'DropHintTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'DropHintTest.cs')))
 # ---------------- 验收测试 ----------------
 
 # 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退

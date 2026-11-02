@@ -38,14 +38,16 @@ namespace Clover
     /// </summary>
     public static class BackgroundStore
     {
-        /// <summary>支持导入的扩展名（小写，含点）。</summary>
-        public static readonly string[] SupportedExts = new string[]
-        {
-            ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff",
-        };
+        /// <summary>
+        /// 支持导入的扩展名（小写，含点）。
+        ///
+        /// **定义在 `DropSpec.BackgroundExts`**（core 层）：拖放提示的约束文案
+        /// 与这里读同一份，不会出现「提示说支持 tif、实际拒收」这种分叉。
+        /// </summary>
+        public static readonly string[] SupportedExts = DropSpec.BackgroundExts;
 
         /// <summary>长边上限。超过则等比缩小，小图不放大。</summary>
-        public const int MaxLongEdge = 3840;
+        public const int MaxLongEdge = DropSpec.BackgroundLongEdge;
 
         /// <summary>自定义图的固定文件名前缀。</summary>
         const string BaseName = "custom";

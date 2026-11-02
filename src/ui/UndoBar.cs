@@ -51,6 +51,15 @@ namespace Clover
         /// </summary>
         public Action OnFocusBack;
 
+        /// <summary>
+        /// 可见性变化回调（true = 刚显示，false = 刚隐藏）。
+        ///
+        /// 给宿主用的：提示条挂在 `toastHost` 上，而那个容器默认关掉命中
+        /// （否则空容器会挡住底下的分类栏折叠按钮）。显示时要把它打开，
+        /// 隐藏时要关回去 —— 这个时机只有 UndoBar 自己知道。
+        /// </summary>
+        public Action<bool> OnVisibilityChanged;
+
         /// <summary>当前是否可见。</summary>
         public bool IsVisible
         {
@@ -186,6 +195,8 @@ namespace Clover
                 DoubleAnimation fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150));
                 root.BeginAnimation(UIElement.OpacityProperty, fade);
 
+                NotifyVisibility(true);
+
                 // 重开计时（连删多次时每次都刷新 5 秒）
                 if (timer == null)
                 {
@@ -232,8 +243,18 @@ namespace Clover
                 fade.Completed += delegate
                 {
                     try { root.Visibility = Visibility.Collapsed; } catch { }
+                    NotifyVisibility(false);
                 };
                 root.BeginAnimation(UIElement.OpacityProperty, fade);
+            }
+            catch { }
+        }
+
+        void NotifyVisibility(bool on)
+        {
+            try
+            {
+                if (OnVisibilityChanged != null) OnVisibilityChanged(on);
             }
             catch { }
         }

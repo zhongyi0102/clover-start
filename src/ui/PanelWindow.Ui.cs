@@ -374,6 +374,21 @@ namespace Clover
             Grid.SetRow(deskCanvas, 2);
             deskPanel.Children.Add(deskCanvas);
 
+            // ---- 空桌面提示层（常驻）----
+            //
+            // 与 deskCanvas **同一个 Grid 单元格**，叠在它上面。
+            // 为什么放这里而不是 contentStack（像 deskOverlay 那样）：
+            // contentStack 是整个内容区，「文件」页和「常用」页也会被它盖住。
+            // 放 deskPanel 第 2 行才能自然跟着桌面页显隐。
+            //
+            // ★ IsHitTestVisible 只关在 DropHint 自己（root）身上，
+            //   绝不加在 deskCanvas 或 deskPanel 上 —— 框选绑在 deskCanvas，
+            //   关掉它的命中就等于废掉框选。
+            deskDropHint = new DropHint("把文件拖到这里", null);
+            Grid.SetRow(deskDropHint.Root, 2);
+            Panel.SetZIndex(deskDropHint.Root, 5);   // 盖在图标之上，但不吃事件
+            deskPanel.Children.Add(deskDropHint.Root);
+
             contentStack.Children.Add(deskPanel);
 
             deskOverlay = new Canvas();
@@ -435,6 +450,32 @@ namespace Clover
             footer.Children.Add(footerCount);
             Grid.SetRow(footer, 2);
             grid.Children.Add(footer);
+
+            // ---------------- 跨标签提示条宿主 ----------------
+            //
+            // 为什么单独一个容器：`filesUndoHost` 在 filesPanel 里面，
+            // 切到「桌面文件」页时整块被隐藏 —— 拖入提示会看不见。
+            //
+            // 叠在 footer 上方（第 1 行 body 的底部），不占布局空间：
+            // 用 VerticalAlignment=Bottom + Margin，空的时候高度为 0，
+            // 不挤压内容区。这样「文件」页的撤销条和拖入提示条各自独立，
+            // 互不顶掉。
+            toastHost = new StackPanel();
+            toastHost.Orientation = Orientation.Vertical;
+            toastHost.VerticalAlignment = VerticalAlignment.Bottom;
+            toastHost.HorizontalAlignment = HorizontalAlignment.Stretch;
+            toastHost.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, Ui.S.Xs);
+            // ★ 默认不吃命中，避免空容器（或哪怕只有 0 高度）挡住底下的
+            //   分类栏折叠按钮 —— 实测过：空 StackPanel 在 Stretch 对齐下
+            //   仍会参与命中测试，把 navToggle 的点击吃掉。
+            //
+            //   有提示条时由 ShowToast 把它打开；隐藏时再关掉。
+            //   「不能一律关掉」是因为关掉会连子元素的命中一起废掉，
+            //   提示条上的「撤销 / 保留」就点不动了。
+            toastHost.IsHitTestVisible = false;
+            Grid.SetRow(toastHost, 1);
+            Panel.SetZIndex(toastHost, 10);       // 盖在内容之上
+            grid.Children.Add(toastHost);
 
             // ---------------- 毛玻璃底 ----------------
             //

@@ -101,13 +101,22 @@ namespace Clover
         }
 
         /// <summary>
-        /// 当前鼠标位置对应的落点类型。
+        /// 一次拿到「顶层窗口句柄 + 落点类型」。
         ///
-        /// 会向上找顶层窗口：拖到资源管理器里的某个子控件上时，
-        /// `WindowFromPoint` 命中的是子窗口，类名不是 CabinetWClass。
+        /// ── 为什么要合并 ──
+        ///
+        /// 原来调用方是这样写的：
+        /// <code>
+        /// IntPtr hwnd = DropTarget.RootWindowAtCursor();   // GetCursorPos + WindowFromPoint + GetAncestor
+        /// Kind kind   = DropTarget.KindAtCursor();          // 再一次 GetCursorPos + WindowFromPoint + 类名
+        /// </code>
+        /// 两次 `GetCursorPos` + 两次 `WindowFromPoint` + 多次 `ClassNameOf`，
+        /// 而这些调用发生在 `DoDragDrop` **刚返回**的那一刻 —— 正是用户
+        /// 松手后最敏感的时刻。合并成一次，省掉一半 P/Invoke 往返。
         /// </summary>
-        public static Kind KindAtCursor()
+        public static Kind ResolveAtCursor(out IntPtr rootHwnd)
         {
+            rootHwnd = IntPtr.Zero;
             try
             {
                 Native.POINT p;
@@ -116,27 +125,26 @@ namespace Clover
                 IntPtr h = Native.WindowFromPoint(p.X, p.Y);
                 if (h == IntPtr.Zero) return Kind.Unknown;
 
+                // 顶层句柄（后面解析资源管理器目录要用）
+                IntPtr root = IntPtr.Zero;
+                try { root = Native.GetAncestor(h, Native.GA_ROOT); } catch { }
+                if (root == IntPtr.Zero) root = h;
+                rootHwnd = root;
+
                 // 先看命中的窗口本身
                 Kind k = ClassifyByClassName(Native.ClassNameOf(h));
                 if (k != Kind.Other) return k;
 
                 // 再向上找顶层
-                try
+                if (root != h)
                 {
-                    IntPtr root = Native.GetAncestor(h, Native.GA_ROOT);
-                    if (root != IntPtr.Zero && root != h)
-                    {
-                        Kind rk = ClassifyByClassName(Native.ClassNameOf(root));
-                        if (rk != Kind.Other) return rk;
-                    }
+                    Kind rk = ClassifyByClassName(Native.ClassNameOf(root));
+                    if (rk != Kind.Other) return rk;
                 }
-                catch { }
 
-                // 桌面图标列表的子窗口：类名是 SysListView32 的情况已在上面处理，
-                // 这里再兜一层 —— 如果顶层是 Progman/WorkerW 也算桌面
+                // 兜底：顶层是 Progman/WorkerW 也算桌面
                 try
                 {
-                    IntPtr root = Native.GetAncestor(h, Native.GA_ROOT);
                     string rc = Native.ClassNameOf(root);
                     if (Eq(rc, "Progman") || Eq(rc, "WorkerW")) return Kind.Desktop;
                 }

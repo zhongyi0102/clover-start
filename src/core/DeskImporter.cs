@@ -23,12 +23,13 @@ namespace Clover
     /// </summary>
     public static class DeskImporter
     {
-        /// <summary>不接收的扩展名（应用类，有自己的归宿）。</summary>
-        static readonly string[] BlockedExt =
-        {
-            ".exe", ".lnk", ".msi", ".bat", ".cmd", ".com", ".scr", ".pif",
-            ".appref-ms", ".url", ".msc", ".cpl", ".dll", ".sys"
-        };
+        /// <summary>
+        /// 不接收的扩展名（应用类，有自己的归宿）。
+        ///
+        /// **单一来源是 `DropSpec.AppExts`** —— 过滤规则、拖放提示的约束文案、
+        /// 拒绝原因的措辞都读那一份，避免三处各写一遍后分叉。
+        /// </summary>
+        static readonly string[] BlockedExt = DropSpec.AppExts;
 
         /// <summary>一次导入的结果。</summary>
         public class Result
@@ -41,6 +42,18 @@ namespace Clover
 
             /// <summary>被过滤掉的（.exe/.lnk 等），不提示。</summary>
             public List<string> Skipped = new List<string>();
+
+            /// <summary>
+            /// 被跳过的原因，与 `Skipped` 一一对应。
+            ///
+            /// 步骤 2 靠它把「跳过 3 个应用类文件」汇总成一句话，
+            /// 而不是把 3 个文件名逐个列出来。
+            /// </summary>
+            public List<DropSpec.RejectReason> SkippedReasons =
+                new List<DropSpec.RejectReason>();
+
+            /// <summary>被跳过项的扩展名（小写含点，与 Skipped 对应；目录为空串）。</summary>
+            public List<string> SkippedExts = new List<string>();
 
             /// <summary>失败的文件名。</summary>
             public List<string> Failed = new List<string>();
@@ -59,6 +72,10 @@ namespace Clover
         ///
         /// 文件夹一律允许（用户可能想整理一整个目录）；
         /// 文件按扩展名过滤。
+        ///
+        /// **保留为独立 API**：`Import` 现在走 `DropSpec`，但这个方法
+        /// 有测试在用，且语义更直白（只要一个 bool）。两处判定读同一份
+        /// `BlockedExt`，不会分叉。
         /// </summary>
         public static bool IsAllowed(string path)
         {
@@ -88,6 +105,21 @@ namespace Clover
         /// </summary>
         public static Result Import(IEnumerable<string> paths, string destDir)
         {
+            return Import(paths, destDir, null);
+        }
+
+        /// <summary>
+        /// 同上，但可以指定收件规则（`DropSpec`）。
+        ///
+        /// **传 null = 用 `DropSpec.ForDesk()`**，行为与改造前完全一致：
+        /// 只拒应用类，其余照收，被拒项进 `Skipped` 不提示。
+        ///
+        /// 为什么要接受外部 spec：同一个导入器以后可能被别的入口复用
+        /// （比如"把文件收进某个自定义桌面"时带上额外的类型限制），
+        /// 但默认路径必须保持原样 —— 这是本次改动的硬约束。
+        /// </summary>
+        public static Result Import(IEnumerable<string> paths, string destDir, DropSpec spec)
+        {
             Result r = new Result();
             try
             {
@@ -95,6 +127,8 @@ namespace Clover
 
                 if (!Directory.Exists(destDir))
                     Directory.CreateDirectory(destDir);
+
+                DropSpec rules = spec ?? DropSpec.ForDesk();
 
                 foreach (string raw in paths)
                 {
@@ -105,9 +139,24 @@ namespace Clover
                     catch { continue; }
 
                     // ---- 过滤应用类 ----
-                    if (!IsAllowed(src))
+                    // 走 DropSpec 而不是自己比扩展名：规则只有一份，
+                    // 拒绝原因也一并带出来（步骤 2 要用它汇总提示）。
+                    DropSpec.Validation one = rules.Validate(new string[] { src });
+                    if (!one.AnyAccepted)
                     {
-                        r.Skipped.Add(Path.GetFileName(src));
+                        string name = Path.GetFileName(src);
+
+                        if (one.AnyRejected)
+                        {
+                            DropSpec.Rejected rej = one.RejectedItems[0];
+
+                            // 「应用类」沿用老字段（静默跳过语义）；
+                            // 其它拒绝原因目前 DeskImporter 用不到，也归到 Skipped，
+                            // 保证「导入结果行为不变」。
+                            r.Skipped.Add(name);
+                            r.SkippedReasons.Add(rej.Reason);
+                            r.SkippedExts.Add(rej.Ext);
+                        }
                         continue;
                     }
 
