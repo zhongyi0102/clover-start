@@ -1093,8 +1093,14 @@ namespace Clover
                 StopDragWatch();          // 已经进来了，不用再轮询
 
                 bool internalDrag = HasInternalDesktopDrag(e);
-                e.Effects = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
-                SetDropHighlight(!internalDrag);
+                e.Effects = ResolveDropEffect(e, internalDrag);
+
+                // 只有「这一页真的会接收」时才点亮 DropHint。
+                // 否则在「常用」「全部」页拖文件进来，光标是禁止的、
+                // 却有个提示框在说"松开即可放入"—— 自相矛盾。
+                bool accepts = DropCursor.PageAcceptsDrop(current, IsDeskTab(current));
+                SetDropHighlight(!internalDrag && accepts);
+
                 e.Handled = true;
                 Ui.Log(internalDrag ? "DragEnter（内部拖出，不高亮）" : "DragEnter");
             }
@@ -1110,13 +1116,41 @@ namespace Clover
                 // DragOver 在拖放期间每几十毫秒触发一次，**每次赋值 e.Effects
                 // 都会让系统重画光标**。只在结果真的变了时才写 ——
                 // 这是拖放循环里最容易被忽略的一处开销。
-                DragDropEffects want = HasFiles(e) ? DragDropEffects.Copy : DragDropEffects.None;
+                DragDropEffects want = ResolveDropEffect(e, HasInternalDesktopDrag(e));
                 if (e.Effects != want) e.Effects = want;
 
                 // 不重复 SetDropHighlight：那会启动动画，见 SetActive 的说明
                 e.Handled = true;
             }
             catch { }
+        }
+
+        /// <summary>
+        /// 把「内部/外部 + 有没有文件 + 当前页收不收」翻译成 WPF 的光标效果。
+        ///
+        /// 判定本身在 `DropCursor.Resolve`（core，纯函数，可单测）；
+        /// 这里只做两件事：取三个输入、把结果映射成 WPF 枚举。
+        ///
+        /// ── 内部拖动与外部拖动的区分 ──
+        ///
+        /// `HasInternalDesktopDrag(e)` 检查 DataObject 里有没有
+        /// `DesktopDragGesture.InternalDataFormat`（`BeginDragOut` 里设的）。
+        /// 内部拖动带这个格式标记，外部文件拖入没有 —— 这是唯一可靠的区分方式，
+        /// 不能靠"有没有 FileDrop"判断（内部拖动也可能带 FileDrop）。
+        /// </summary>
+        DragDropEffects ResolveDropEffect(DragEventArgs e, bool internalDrag)
+        {
+            try
+            {
+                bool hasFiles = HasFiles(e);
+                bool accepts = DropCursor.PageAcceptsDrop(current, IsDeskTab(current));
+
+                DropCursor.Effect eff = DropCursor.Resolve(internalDrag, hasFiles, accepts);
+                return eff == DropCursor.Effect.Copy
+                    ? DragDropEffects.Copy
+                    : DragDropEffects.None;
+            }
+            catch { return DragDropEffects.None; }
         }
 
         /// <summary>

@@ -304,6 +304,9 @@ Invoke-Suite 'DropHintTest' $wpfRefs `
 # 文件夹来源拖入（接入点 3）：文案常量 / 混合拖入 / 名额不足 / 已满 / 字段行为
 Invoke-Suite 'FolderSourceDropTest' $baseRefs `
     (@((Join-Path $coreDir 'DropSpec.cs'), (Join-Path $testDir 'FolderSourceDropTest.cs')))
+# 拖放光标判定：内部拖动不变 / 不接收页 None / 页判定与 OnPanelDrop 分支一致 / 8 种矩阵
+Invoke-Suite 'DropCursorTest' $baseRefs `
+    (@((Join-Path $coreDir 'DropCursor.cs'), (Join-Path $testDir 'DropCursorTest.cs')))
 # ---------------- 验收测试 ----------------
 
 # 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退
