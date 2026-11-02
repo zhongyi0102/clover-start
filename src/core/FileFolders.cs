@@ -25,7 +25,7 @@ namespace Clover
     public class FileFolders
     {
         /// <summary>最多允许添加几个文件夹。超过这个数，「+」提示上限而不是静默失败。</summary>
-        public const int MaxFolders = 10;
+        public const int MaxFolders = DropSpec.FolderSourceMax;
 
         /// <summary>一条记录：目录路径 + 用户可见的显示名。</summary>
         public class Folder

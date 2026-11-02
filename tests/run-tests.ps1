@@ -162,7 +162,7 @@ Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
 
 # 「文件」标签：自定义文件夹清单（路径校验 / 去重 / 上限 / 重命名 / 容错）
 Invoke-Suite 'FileFoldersTest' $baseRefs `
-    (@((Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileFoldersTest.cs')))
+    (@((Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileFoldersTest.cs')))
 
 # 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
 Invoke-Suite 'NavTabsTest' $baseRefs `
@@ -171,7 +171,7 @@ Invoke-Suite 'WatcherTest' $baseRefs `
     ($baseRefs + $webRef + @((Join-Path $testDir 'WatcherTest.cs')))
 # 「文件」标签：目录列举（过滤 / 排序 / 上限 / 只读）
 Invoke-Suite 'FilesTabTest' $baseRefs `
-    (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
+    (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
 # 虚拟桌面存储：名称安全 / 坐标 / 桌面增删改名 / 持久化 / 容错
 Invoke-Suite 'VirtualDesksTest' $baseRefs `
     (@((Join-Path $coreDir 'VirtualDesks.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'VirtualDesksTest.cs')))
@@ -300,6 +300,10 @@ Invoke-Suite 'DeskRootDialogTest' $wpfRefs `
 # 放置提示层：常驻不增删子元素 / 只切 Visibility / 不接收命中 / 令牌 / 高亮态 / 文案
 Invoke-Suite 'DropHintTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'DropHintTest.cs')))
+
+# 文件夹来源拖入（接入点 3）：文案常量 / 混合拖入 / 名额不足 / 已满 / 字段行为
+Invoke-Suite 'FolderSourceDropTest' $baseRefs `
+    (@((Join-Path $coreDir 'DropSpec.cs'), (Join-Path $testDir 'FolderSourceDropTest.cs')))
 # ---------------- 验收测试 ----------------
 
 # 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退

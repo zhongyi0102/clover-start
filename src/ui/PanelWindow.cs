@@ -138,6 +138,9 @@ namespace Clover
         /// 常驻，只切 Visibility。
         /// </summary>
         DropHint deskDropHint;
+
+        /// <summary>「文件」标签的来源放置提示层（常驻，只切 Visibility）。</summary>
+        DropHint filesDropHint;
         TextBox searchBox;
         TextBlock searchHint;
         TextBlock footerCount;
@@ -1164,7 +1167,26 @@ namespace Clover
 
                 if (!HasFiles(e)) { e.Handled = true; return; }
 
-                // 只在虚拟桌面标签里接收：应用磁贴/文件标签没有"落位"概念
+                // ---- 「文件」标签：拖文件夹进来加来源 ----
+                //
+                // 与「桌面文件」页的语义完全不同：那边是把文件**搬进去**，
+                // 这边只是**记录路径**（不搬、不复制、不递归统计）。
+                // 所以单独一个分支，早于下面的桌面判断。
+                if (current == FilesCategory)
+                {
+                    string[] fp = null;
+                    try { fp = e.Data.GetData(DataFormats.FileDrop) as string[]; }
+                    catch { }
+                    e.Handled = true;
+                    if (fp == null || fp.Length == 0) return;
+
+                    if (filesView == null) return;
+                    string msg = filesView.HandleFolderDrop(fp);
+                    if (!string.IsNullOrEmpty(msg)) ShowToast(msg);
+                    return;
+                }
+
+                // 只在虚拟桌面标签里接收：应用磁贴没有"落位"概念
                 if (!IsDeskTab(current) || deskView == null)
                 {
                     Ui.Log("Drop 忽略：当前不是虚拟桌面标签（" + current + "）");
@@ -1240,6 +1262,40 @@ namespace Clover
         }
 
         /// <summary>
+        /// 弹一条底部提示（非阻塞，5 秒自动消失）。没有拒绝项时什么都不做。
+        ///
+        /// 文案由调用方用 `DropSpec.BuildSummary` 生成，这里只负责显示。
+        /// </summary>
+        void ShowToast(string text)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(text)) return;
+
+                // 宿主：跨标签的 toastHost（「桌面文件」页也看得见）
+                if (dropTipBar == null && toastHost != null)
+                {
+                    dropTipBar = new UndoBar(toastHost);
+                    dropTipBar.OnFocusBack = delegate
+                    {
+                        try { if (deskCanvas != null) deskCanvas.Focus(); } catch { }
+                    };
+                    // 提示条消失后把容器命中关回去，别挡住底下的按钮
+                    dropTipBar.OnVisibilityChanged = delegate(bool on)
+                    {
+                        try { if (toastHost != null) toastHost.IsHitTestVisible = on; }
+                        catch { }
+                    };
+                }
+                if (dropTipBar == null) return;
+
+                dropTipBar.Show(text, null);
+                Ui.Log("提示: " + text);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "显示提示条"); }
+        }
+
+        /// <summary>
         /// 把「被跳过的项」汇总成一条底部提示（不抢焦点，时长沿用 UndoBar 的 5 秒）。
         ///
         /// 没有任何跳过项时不显示 —— 全部成功不该弹一句「跳过 0 个」。
@@ -1263,29 +1319,7 @@ namespace Clover
                 }
 
                 string text = DropSpec.BuildSummary(r.ImportedCount, rejected);
-                if (string.IsNullOrEmpty(text)) return;
-
-                // 宿主：跨标签的 toastHost（「桌面文件」页也看得见）
-                if (dropTipBar == null && toastHost != null)
-                {
-                    dropTipBar = new UndoBar(toastHost);
-                    dropTipBar.OnFocusBack = delegate
-                    {
-                        try { if (deskCanvas != null) deskCanvas.Focus(); } catch { }
-                    };
-                    // 提示条消失后把容器命中关回去，别挡住底下的按钮
-                    dropTipBar.OnVisibilityChanged = delegate(bool on)
-                    {
-                        try { if (toastHost != null) toastHost.IsHitTestVisible = on; }
-                        catch { }
-                    };
-                }
-                if (dropTipBar == null) return;
-
-                // undo 传 null → 只显示文字，不出现「撤销」按钮
-                dropTipBar.Show(text, null);
-
-                Ui.Log("拖入提示: " + text);
+                ShowToast(text);
             }
             catch (Exception ex) { Ui.LogError(ex, "显示拖入提示"); }
         }
@@ -1325,6 +1359,10 @@ namespace Clover
                 // 空桌面提示层跟着一起高亮（它自己不接收事件，由这里驱动）
                 if (deskDropHint != null && deskDropHint.Visible)
                     deskDropHint.SetActive(on);
+
+                // 「文件」标签的来源提示层同理
+                if (filesDropHint != null && filesDropHint.Visible)
+                    filesDropHint.SetActive(on);
             }
             catch (Exception ex) { Ui.LogError(ex, "拖放高亮"); }
         }

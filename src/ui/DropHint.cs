@@ -63,8 +63,8 @@ namespace Clover
         /// <summary>当前是否处于拖入高亮态。</summary>
         public bool IsActive { get; private set; }
 
-        /// <summary>常态主文案。</summary>
-        readonly string idleTitle;
+        /// <summary>常态主文案。可变 —— 见 SetTitle。</summary>
+        string idleTitle;
 
         /// <summary>拖入态文案。</summary>
         const string ActiveTitle = "松开即可放入";
@@ -187,6 +187,41 @@ namespace Clover
         public string HintText
         {
             get { return hint == null ? "" : hint.Text; }
+        }
+
+        /// <summary>
+        /// 换文案。**只改文本，不增删子元素**。
+        ///
+        /// 为什么需要它：有的入口文案会随状态变（比如「文件」标签的来源
+        /// 加满 10 个后，提示要从「把文件夹拖进来」变成「已达上限 10 个」）。
+        /// 换成重建一个 DropHint 会破坏「常驻」这条约束。
+        /// </summary>
+        public void SetTitle(string newTitle, string newHint)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(newTitle))
+                {
+                    idleTitle = newTitle;
+                    // 高亮态时不要覆盖「松开即可放入」
+                    if (!IsActive && title != null) title.Text = newTitle;
+                }
+
+                if (hint != null)
+                {
+                    if (!string.IsNullOrEmpty(newHint))
+                    {
+                        hint.Text = newHint;
+                        hint.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        hint.Text = "";
+                        hint.Visibility = Visibility.Collapsed;
+                    }
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "更新放置提示文案"); }
         }
 
         /// <summary>

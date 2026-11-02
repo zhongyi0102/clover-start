@@ -105,6 +105,14 @@ namespace Clover
         /// <summary>提示条的宿主容器（filesPanel 的末尾）。</summary>
         StackPanel undoHost;
 
+        /// <summary>
+        /// 「把文件夹拖进来」的放置提示层（常驻，只切 Visibility）。
+        ///
+        /// 由 `PanelWindow.Ui.cs` 建好后通过 <see cref="AttachDropHint"/> 注入 ——
+        /// FilesTabView 只拿到各个容器的引用，不负责建控件。
+        /// </summary>
+        DropHint dropHint;
+
         public FilesTabView(PanelWindow owner, Settings settings, string baseDir,
             StackPanel chipHost, StackPanel extHost, StackPanel listHost, TextBlock noticeHost,
             StackPanel undoHost)
@@ -140,6 +148,130 @@ namespace Clover
                 NormalizeSource();
             }
             catch (Exception ex) { Ui.LogError(ex, "重读文件夹清单"); }
+        }
+
+        // ========== 放置提示（拖文件夹进来加来源）==========
+
+        /// <summary>
+        /// 注入放置提示层。由 PanelWindow 在建好控件后调用一次。
+        ///
+        /// 为什么不在构造函数里建：`FilesTabView` 只拿到 chipRow / extRow /
+        /// listPanel / noticeText / undoHost 五个容器引用，没有自己的布局位置；
+        /// 提示层要插在 chipRow 之后，那是 `PanelWindow.Ui.cs` 的职责。
+        /// </summary>
+        public void AttachDropHint(DropHint hint)
+        {
+            try
+            {
+                dropHint = hint;
+                RefreshDropHint();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "接入放置提示"); }
+        }
+
+        /// <summary>
+        /// 按「已有几个来源」更新提示层：没满就邀请拖入，满了就显示已达上限。
+        ///
+        /// 文案全部来自 `DropSpec` 的常量派生函数，不在这里手写。
+        /// </summary>
+        void RefreshDropHint()
+        {
+            try
+            {
+                if (dropHint == null) return;
+                if (folders == null) folders = FileFolders.Load(baseDir);
+
+                int have = folders == null ? 0 : folders.Items.Count;
+                bool full = have >= FileFolders.MaxFolders;
+
+                if (full)
+                {
+                    // 满了：不再邀请拖入，改显示已达上限
+                    dropHint.SetTitle(DropSpec.FolderFullText(), DropSpec.FolderHintText());
+                    dropHint.SetActive(false);
+                }
+                else
+                {
+                    dropHint.SetTitle("把文件夹拖进来", DropSpec.FolderHintText());
+                }
+
+                // 提示层始终显示（这一页没有"空态才显示"的语义 ——
+                // 用户任何时候都可能想加来源）。
+                dropHint.SetVisible(true);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "刷新放置提示"); }
+        }
+
+        /// <summary>
+        /// 拖入一批路径，按 `DropSpec.ForFolderSource(remaining)` 校验并逐个加入。
+        ///
+        /// 返回给用户的汇总文案（null = 不需要提示）。
+        /// 不搬运、不复制、不递归统计大小 —— 只记录路径。
+        /// </summary>
+        internal string HandleFolderDrop(IEnumerable<string> paths)
+        {
+            try
+            {
+                if (paths == null) return null;
+                if (folders == null) folders = FileFolders.Load(baseDir);
+
+                int have = folders.Items.Count;
+                int remaining = FileFolders.MaxFolders - have;
+
+                // remaining <= 0 → ForFolderSource 里会变成 0（不限），
+                // 但那不是我们要的语义。这里显式处理"已满"。
+                if (remaining <= 0)
+                {
+                    // 全部按「超出数量」拒绝
+                    List<DropSpec.Rejected> all = new List<DropSpec.Rejected>();
+                    foreach (string p in paths)
+                    {
+                        if (string.IsNullOrWhiteSpace(p)) continue;
+                        DropSpec.Rejected r = new DropSpec.Rejected();
+                        r.Path = p;
+                        try { r.Name = Path.GetFileName(p.TrimEnd('\\', '/')); }
+                        catch { r.Name = p; }
+                        r.Reason = DropSpec.RejectReason.TooMany;
+                        all.Add(r);
+                    }
+                    RefreshDropHint();
+                    return DropSpec.BuildSummary(0, all);
+                }
+
+                DropSpec spec = DropSpec.ForFolderSource(remaining);
+                DropSpec.Validation v = spec.Validate(paths);
+
+                int added = 0;
+                int dup = 0;
+
+                foreach (string p in v.Accepted)
+                {
+                    // 走现有的 FileFolders.Add：去重、上限、网络路径拒绝都在里面
+                    FileFolders.AddResult r = folders.Add(p);
+                    if (r == FileFolders.AddResult.Ok) added++;
+                    else if (r == FileFolders.AddResult.Duplicate) dup++;
+                }
+
+                if (added > 0)
+                {
+                    NormalizeSource();
+                    SaveSource();
+                    selected.Clear();
+                    anchorIndex = -1;
+                    Refresh(true);
+                }
+
+                RefreshDropHint();
+
+                // 汇总：被拒项和「已存在」都并进同一个「跳过」计数，
+                // 避免「跳过」在一句话里出现两次。文案规则全在 DropSpec 里。
+                return DropSpec.BuildSummary(added, v.RejectedItems, dup);
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "拖入文件夹来源");
+                return null;
+            }
         }
 
         /// <summary>刷新整个视图。force=false 时 30 秒内复用缓存。</summary>

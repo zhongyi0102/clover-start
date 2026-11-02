@@ -1658,6 +1658,9 @@ namespace Clover
                     filesView = new FilesTabView(this, settings, baseDir,
                         filesChipRow, filesExtRow, filesListPanel, filesNotice,
                         filesUndoHost);
+
+                    // 注入放置提示层（FilesTabView 只拿容器引用，不负责建控件）
+                    if (filesDropHint != null) filesView.AttachDropHint(filesDropHint);
                 }
 
                 if (filesView != null)

@@ -310,6 +310,15 @@ namespace Clover
             chipScroll.Content = filesChipRow;
             filesPanel.Children.Add(chipScroll);
 
+            // ---- 「把文件夹拖进来」放置提示（常驻）----
+            //
+            // 放在来源胶囊行之后：用户看到 chip 行，紧接着看到"还能加"。
+            // 复用 DropHint，样式令牌一个不改。
+            // 文案由 DropSpec 从 FileFolders.MaxFolders 派生，不在这里手写。
+            filesDropHint = new DropHint("把文件夹拖进来", DropSpec.FolderHintText());
+            filesDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesPanel.Children.Add(filesDropHint.Root);
+
             // 后缀筛选行（横向，可滚动 —— 分组 + 自定义 + 刷新可能超出宽度）
             ScrollViewer extScroll = new ScrollViewer();
             extScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;

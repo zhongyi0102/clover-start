@@ -266,7 +266,41 @@ namespace Clover
         /// <summary>背景图长边上限：超过则等比缩小，小图不放大。</summary>
         public const int BackgroundLongEdge = 3840;
 
+        /// <summary>
+        /// 「文件」标签最多能加几个来源。
+        ///
+        /// **定义在 core 的 DropSpec 而不是 FileFolders**：提示文案要读它，
+        /// 而 `DropSpec` 不该反向依赖 `FileFolders`（那会让 DropSpec 的
+        /// 单测必须拖上 FileFolders + JsonIO + Log 一整条链）。
+        /// 由 `FileFolders.MaxFolders` 反向引用同一份 —— 全仓只有一个数字。
+        /// </summary>
+        public const int FolderSourceMax = 10;
 
+        /// <summary>
+        /// 「文件」标签添加来源的约束文案。
+        ///
+        /// 上限取自 <see cref="FolderSourceMax"/>，不硬编码。
+        /// </summary>
+        public static string FolderHintText()
+        {
+            try
+            {
+                return "只收文件夹，最多 " + FolderSourceMax + " 个";
+            }
+            catch { return ""; }
+        }
+
+        /// <summary>
+        /// 已经收满时的文案（放置提示不再邀请拖入，改显示这句）。
+        /// </summary>
+        public static string FolderFullText()
+        {
+            try
+            {
+                return "已达上限 " + FolderSourceMax + " 个";
+            }
+            catch { return ""; }
+        }
 
         /// <summary>
         /// 背景图放置区的约束文案。
@@ -385,6 +419,33 @@ namespace Clover
         /// <param name="rejected">被拒项</param>
         public static string BuildSummary(int acceptedCount, IEnumerable<Rejected> rejected)
         {
+            return BuildSummary(acceptedCount, rejected, 0);
+        }
+
+        /// <summary>
+        /// 同上，但可以把「已存在（跳过）」的项并进同一个计数。
+        ///
+        /// ── 为什么需要这个重载 ──
+        ///
+        /// 「文件」标签拖入目录时，「不是文件夹」和「已存在」会同时出现。
+        /// 第一版把它们拼成两句：
+        /// <code>
+        /// 已放入 1 个，跳过 1 个不是文件夹（.txt）；已存在 1 个（跳过）
+        /// </code>
+        /// 「跳过」出现了两次，读起来像两个独立结论。
+        ///
+        /// 现在把 `alreadyExists` 并进「跳过」总数，已存在项作为附加说明：
+        /// <code>
+        /// 已放入 1 个，跳过 2 个：不是文件夹 1、已存在 1
+        /// </code>
+        ///
+        /// **只在有拒绝项时才提及已存在**：如果全部都是新目录（`rejected` 为空、
+        /// `alreadyExists > 0`），返回 null —— 重复拖同一批目录不该弹提示，
+        /// 因为用户没做错任何事，chip 行本来就没变化。
+        /// </summary>
+        public static string BuildSummary(int acceptedCount, IEnumerable<Rejected> rejected,
+            int alreadyExists)
+        {
             try
             {
                 List<Rejected> list = new List<Rejected>();
@@ -393,10 +454,27 @@ namespace Clover
                     foreach (Rejected r in rejected)
                         if (r != null) list.Add(r);
                 }
-                if (list.Count == 0) return null;   // 没有拒绝项 → 不提示
+
+                if (alreadyExists < 0) alreadyExists = 0;
+
+                // 没有拒绝项也没有已存在 → 不提示
+                if (list.Count == 0 && alreadyExists == 0) return null;
 
                 if (acceptedCount < 0) acceptedCount = 0;
-                int skipped = list.Count;
+
+                // ---- 只有「已存在」，没有任何拒绝 ----
+                //
+                // 这不算失败，也不该占用「跳过」的措辞（那是给"进不来"的东西用的）。
+                // 用「另有」单独说一句。
+                if (list.Count == 0)
+                {
+                    if (acceptedCount > 0)
+                        return "已放入 " + acceptedCount + " 个，另有 " + alreadyExists
+                            + " 个已存在";
+                    return "这 " + alreadyExists + " 个都已经在列表里了";
+                }
+
+                int skipped = list.Count + alreadyExists;
 
                 // ---- 前缀 ----
                 string head = acceptedCount > 0
@@ -406,14 +484,14 @@ namespace Clover
                 // ---- 按原因分组，数量降序、同数量按枚举值升序 ----
                 List<KeyValuePair<RejectReason, int>> groups = GroupByReason(list);
 
-                // ---- 单原因：带上扩展名（用户最想知道"到底什么进不来"）----
-                if (groups.Count == 1)
+                // ---- 只有一种拒绝原因 + 没有已存在：带上扩展名 ----
+                if (groups.Count == 1 && alreadyExists == 0)
                 {
                     string exts = FormatExts(list);
                     return head + ReasonText(groups[0].Key) + exts;
                 }
 
-                // ---- 多原因：只报「原因 + 数量」，不堆扩展名 ----
+                // ---- 否则：原因 + 数量，已存在并进同一句 ----
                 StringBuilder sb = new StringBuilder(head);
                 sb.Append("：");
                 for (int i = 0; i < groups.Count; i++)
@@ -422,6 +500,12 @@ namespace Clover
                     sb.Append(ReasonText(groups[i].Key));
                     sb.Append(" ");
                     sb.Append(groups[i].Value);
+                }
+                if (alreadyExists > 0)
+                {
+                    if (groups.Count > 0) sb.Append("、");
+                    sb.Append("已存在 ");
+                    sb.Append(alreadyExists);
                 }
                 return sb.ToString();
             }

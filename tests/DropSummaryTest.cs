@@ -39,6 +39,7 @@ namespace Clover
                 TestEdgeCases();
                 TestDeterminism();
                 TestBackgroundReject();
+                TestAlreadyExists();
             }
             catch (Exception ex)
             {
@@ -351,5 +352,72 @@ namespace Clover
             Console.WriteLine();
         }
 
+        // ---------- 9. 「已存在」并入「跳过」（文案收尾）----------
+        //
+        // 回归的是这个毛病：第一版把「不是文件夹」和「已存在」拼成两句，
+        // 「跳过」在一句话里出现两次：
+        //   已放入 1 个，跳过 1 个不是文件夹（.txt）；已存在 1 个（跳过）
+        // 现在并进同一个「跳过」计数。
+        static void TestAlreadyExists()
+        {
+            Console.WriteLine("--- 9. 「已存在」并入「跳过」---");
+
+            // 只有已存在，没有拒绝 → 用「另有」，不占用「跳过」
+            string a = DropSpec.BuildSummary(2, null, 1);
+            Check(a == "已放入 2 个，另有 1 个已存在", "★只有已存在时的文案", a);
+            Check(CountOf(a, "跳过") == 0, "★只有已存在时不说「跳过」", a);
+
+            // 一个拒绝 + 一个已存在 → 并进同一个跳过计数
+            string b = DropSpec.BuildSummary(1, List(
+                R(DropSpec.RejectReason.NotDirectory, ".txt")), 1);
+            Check(b == "已放入 1 个，跳过 2 个：不是文件夹 1、已存在 1",
+                "★拒绝 + 已存在合并", b);
+            Check(CountOf(b, "跳过") == 1, "★「跳过」只出现一次", b);
+
+            // 多个拒绝 + 已存在
+            string c = DropSpec.BuildSummary(0, List(
+                R(DropSpec.RejectReason.NotDirectory, ".txt"),
+                R(DropSpec.RejectReason.NotDirectory, ".pdf"),
+                R(DropSpec.RejectReason.TooMany, "")), 2);
+            Check(c == "没有放入任何文件，跳过 5 个：不是文件夹 2、超出数量上限 1、已存在 2",
+                "★多原因 + 已存在", c);
+            Check(CountOf(c, "跳过") == 1, "★仍然只出现一次", c);
+
+            // 没有拒绝、没有已存在 → null（不提示）
+            Check(DropSpec.BuildSummary(3, null, 0) == null, "★全成功 → null");
+            Check(DropSpec.BuildSummary(3, new List<DropSpec.Rejected>(), 0) == null,
+                "★空列表 + 0 已存在 → null");
+
+            // 全是已存在、一个都没新增
+            string d = DropSpec.BuildSummary(0, null, 3);
+            Check(d == "这 3 个都已经在列表里了", "★全部重复时的文案", d);
+            Check(CountOf(d, "跳过") == 0, "★全部重复时不说「跳过」", d);
+
+            // 两参重载行为不变（alreadyExists 默认 0）
+            string e = DropSpec.BuildSummary(1, List(
+                R(DropSpec.RejectReason.AppFile, ".exe")));
+            Check(e == "已放入 1 个，跳过 1 个应用类文件（.exe）",
+                "★两参重载保持原样", e);
+
+            // 负数已存在按 0 处理
+            string f = DropSpec.BuildSummary(1, List(
+                R(DropSpec.RejectReason.AppFile, ".exe")), -5);
+            Check(f == "已放入 1 个，跳过 1 个应用类文件（.exe）",
+                "★负数已存在按 0", f);
+
+            Console.WriteLine();
+        }
+
+        /// <summary>数一个子串在文本里出现几次。</summary>
+        static int CountOf(string text, string needle)
+        {
+            int n = 0, i = 0;
+            while (text != null && (i = text.IndexOf(needle, i, StringComparison.Ordinal)) >= 0)
+            {
+                n++;
+                i += needle.Length;
+            }
+            return n;
+        }
     }
 }
