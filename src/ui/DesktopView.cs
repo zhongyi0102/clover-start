@@ -359,10 +359,18 @@ namespace Clover
                 bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
                 bool ctrl2 = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
 
+                // 上一次按下之后有没有真的拖动过。
+                //
+                // 这是防「拖动被误判成双击」的关键：用户拖图标时经常
+                // 「按下 → 停顿 → 再拖」，两次按下若在系统双击时间内
+                // （默认 500ms），WPF 会报 ClickCount=2。
+                // 传 true 告诉判定函数「上一次已经在拖了，这次不是双击」。
+                bool prevDragMoved = dragging && dragMoved;
+
                 // 三条路径的统一判定（core 纯函数，可单测）：
                 //   空白处 → 框选 / 图标双击 → 打开 / 其余 → 拖动准备
                 DeskClickAction.Action act = DeskClickAction.Resolve(
-                    hit != null, e.ClickCount, shift, ctrl2);
+                    hit != null, e.ClickCount, shift, ctrl2, prevDragMoved);
 
                 if (act == DeskClickAction.Action.BandSelect)
                 {
@@ -396,6 +404,14 @@ namespace Clover
                     e.Handled = true;
                     return;
                 }
+
+                // ---- 拖动准备 ----
+                //
+                // ★ 这里必须先 ResetDragState()：上一次按下可能因为
+                //   「拖动被误判成双击」提前 return 过，dragging 等标志
+                //   还残留着旧值。不清掉会让这次拖动的 dragStart /
+                //   dragOrigins 混进上一次的数据，表现为「图标跳到别处」。
+                ResetDragState();
 
                 if (shift) SelectRange(hit);
                 else if (ctrl2) ToggleSelect(hit);

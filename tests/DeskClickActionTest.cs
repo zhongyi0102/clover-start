@@ -38,6 +38,7 @@ namespace Clover
                 TestBlank();
                 TestOtherClicks();
                 TestMatrix();
+                TestPreviousDragMoved();
             }
             catch (Exception ex)
             {
@@ -157,6 +158,53 @@ namespace Clover
             Check(openCount == 1, "★24 种里只有 1 种是打开", Convert.ToString(openCount));
             Check(bandCount == 12, "★12 种空白都是框选", Convert.ToString(bandCount));
             Check(dragCount == 11, "★其余 11 种是拖动路径", Convert.ToString(dragCount));
+
+            Console.WriteLine();
+        }
+
+        // ---------- 6. 拖动被误判成双击（回归）----------
+        //
+        // 用户报的问题：「桌面文件页内图标拖动位置不正常」。
+        //
+        // 根因：拖图标时经常「按下 → 停顿一下 → 再拖」，
+        // 两次按下若在系统双击时间内（默认 500ms），
+        // WPF 会报 ClickCount=2 → 被当成双击打开文件 → 拖动中断。
+        static void TestPreviousDragMoved()
+        {
+            Console.WriteLine("--- 6. 上一次已在拖动时不判双击（回归）---");
+
+            // 上一次已经拖动过 → 即使 ClickCount=2 也不打开
+            Check(DeskClickAction.Resolve(true, 2, false, false, true)
+                == DeskClickAction.Action.Drag,
+                "★★上一次拖动过 + ClickCount=2 → 拖动（不打开）");
+
+            // 上一次没拖动 → 正常判双击
+            Check(DeskClickAction.Resolve(true, 2, false, false, false)
+                == DeskClickAction.Action.Open,
+                "★上一次没拖动 + ClickCount=2 → 打开");
+
+            // 上一次拖动过 + ClickCount=1 → 仍是拖动
+            Check(DeskClickAction.Resolve(true, 1, false, false, true)
+                == DeskClickAction.Action.Drag,
+                "★上一次拖动过 + 单击 → 拖动");
+
+            // 空白处不受影响
+            Check(DeskClickAction.Resolve(false, 2, false, false, true)
+                == DeskClickAction.Action.BandSelect,
+                "★空白处仍框选（prevDragMoved 不影响）");
+
+            // 带修饰键 + prevDragMoved → 拖动
+            Check(DeskClickAction.Resolve(true, 2, true, false, true)
+                == DeskClickAction.Action.Drag,
+                "Shift + 双击 + prevDragMoved → 拖动");
+            Check(DeskClickAction.Resolve(true, 2, false, true, true)
+                == DeskClickAction.Action.Drag,
+                "Ctrl + 双击 + prevDragMoved → 拖动");
+
+            // 四参重载（老签名）等价于 prevDragMoved=false
+            Check(DeskClickAction.Resolve(true, 2, false, false)
+                == DeskClickAction.Resolve(true, 2, false, false, false),
+                "★四参重载 = prevDragMoved=false");
 
             Console.WriteLine();
         }

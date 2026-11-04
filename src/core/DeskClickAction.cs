@@ -44,8 +44,34 @@ namespace Clover
         /// <param name="ctrl">是否按着 Ctrl</param>
         public static Action Resolve(bool hitItem, int clickCount, bool shift, bool ctrl)
         {
+            return Resolve(hitItem, clickCount, shift, ctrl, false);
+        }
+
+        /// <summary>
+        /// 同上，但可以告诉它「上一次按下之后有没有拖动过」。
+        ///
+        /// ── 为什么需要 previousDragMoved ──
+        ///
+        /// 只靠 `ClickCount == 2` 会误判：用户拖动图标时经常「按下 → 停顿
+        /// 一下 → 再拖」，如果两次按下间隔在系统双击时间内（默认 500ms），
+        /// 第二次按下会被 WPF 报成 ClickCount=2，于是被当成双击**打开文件**，
+        /// 而不是继续拖动。
+        ///
+        /// 修法：上一次按下之后如果已经拖动过（图标移动了），
+        /// 这次就算 ClickCount=2 也不算双击 —— 用户是在拖，不是在双击。
+        /// </summary>
+        /// <param name="previousDragMoved">
+        /// 上一次按下到现在，指针是否已超过拖动阈值。
+        /// true = 上一次是拖动，这次不该判成双击。
+        /// </param>
+        public static Action Resolve(bool hitItem, int clickCount, bool shift, bool ctrl,
+            bool previousDragMoved)
+        {
             // 空白处永远是框选，不管点了几下
             if (!hitItem) return Action.BandSelect;
+
+            // 上一次已经在拖了 → 这次是拖动的延续，不是双击
+            if (previousDragMoved) return Action.Drag;
 
             // 图标上：双击才打开，且**不能带修饰键**。
             //
