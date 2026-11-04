@@ -59,7 +59,11 @@ namespace Clover
             Check(DeskCollector.IsAllowed("a.txt"), "txt 允许");
             Check(DeskCollector.IsAllowed("a.docx"), "docx 允许");
             Check(!DeskCollector.IsAllowed("a.exe"), "★exe 拒绝");
-            Check(!DeskCollector.IsAllowed("a.lnk"), "★lnk 拒绝");
+            // .lnk 在 DeskCollector 里**仍然被拒** —— 它有自己的 BlockedExt，
+            // 比 DropSpec.AppExts 多 .jar/.ps1/.vbs。本次只放开了「拖入」，
+            // 「收纳」不受影响（收纳是把桌面清空，快捷方式也该被收走才怪，
+            // 保持原行为最稳）。
+            Check(!DeskCollector.IsAllowed("a.lnk"), "★lnk 在收纳侧仍拒绝");
             Check(!DeskCollector.IsAllowed("a.msi"), "msi 拒绝");
             Check(!DeskCollector.IsAllowed("a.bat"), "bat 拒绝");
             Check(!DeskCollector.IsAllowed(null), "null 拒绝");

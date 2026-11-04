@@ -182,9 +182,10 @@ Invoke-Suite 'DeskRootChangeTest' $baseRefs `
 # 删除虚拟桌面：放回桌面 / 保留 / 同名冲突 / 占用失败 / 空桌面
 Invoke-Suite 'DeskRemovalTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskRemoval.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskRemovalTest.cs')))
-# 拖入导入：过滤 exe/lnk / 移动 / 冲突改名 / 文件夹 / 占用
+# 拖入导入：过滤 exe/lnk / 移动 vs 复制 / 冲突改名 / 文件夹 / 占用 / 来源判定
+# （DeskImporter 现在引用 DesktopKeep.DesktopDirs 判来源，所以要带它及其依赖）
 Invoke-Suite 'DeskImporterTest' $baseRefs `
-    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'DesktopKeep.cs'), (Join-Path $coreDir 'DesktopCleaner.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
 # 放置规则：正常 / 全拒 / 混合 / 超数量 / 超大小 / 空输入 / 目录模式 / 按原因汇总
 Invoke-Suite 'DropSpecTest' $baseRefs `
     (@((Join-Path $coreDir 'DropSpec.cs'), (Join-Path $testDir 'DropSpecTest.cs')))

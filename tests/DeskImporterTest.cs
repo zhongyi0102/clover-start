@@ -41,6 +41,8 @@ namespace Clover
                 TestLocked();
                 TestNoReceiver();
                 TestVerifyMove();
+                TestIsFromDesktop();
+                TestImportMode();
             }
             catch (Exception ex)
             {
@@ -78,12 +80,14 @@ namespace Clover
             Check(DeskImporter.IsAllowed("noext"), "无扩展名允许");
 
             Check(!DeskImporter.IsAllowed("a.exe"), "★exe 拒绝");
-            Check(!DeskImporter.IsAllowed("a.lnk"), "★lnk 拒绝");
-            Check(!DeskImporter.IsAllowed("a.EXE"), "★EXE 大写也拒绝");
-            Check(!DeskImporter.IsAllowed("a.LnK"), "★大小写混合也拒绝");
+            // ★ .lnk 已放开：快捷方式当书签用，不是程序
+            Check(DeskImporter.IsAllowed("a.lnk"), "★lnk 允许（快捷方式可拖入）");
+            Check(DeskImporter.IsAllowed("a.LnK"), "★大小写混合也允许");
+            Check(!DeskImporter.IsAllowed("a.EXE"), "★EXE 大写仍拒绝");
             Check(!DeskImporter.IsAllowed("a.msi"), "msi 拒绝");
             Check(!DeskImporter.IsAllowed("a.bat"), "bat 拒绝");
             Check(!DeskImporter.IsAllowed("a.dll"), "dll 拒绝");
+            Check(!DeskImporter.IsAllowed("a.url"), "★url 仍拒绝（纯网址书签，未放开）");
 
             Check(!DeskImporter.IsAllowed(null), "null 拒绝");
             Check(!DeskImporter.IsAllowed(""), "空串拒绝");
@@ -135,21 +139,26 @@ namespace Clover
             {
                 File.WriteAllText(Path.Combine(src, "doc.txt"), "x");
                 File.WriteAllText(Path.Combine(src, "app.exe"), "x");
+                File.WriteAllText(Path.Combine(src, "setup.msi"), "x");
                 File.WriteAllText(Path.Combine(src, "link.lnk"), "x");
 
                 DeskImporter.Result r = DeskImporter.Import(
                     new string[] {
                         Path.Combine(src, "doc.txt"),
                         Path.Combine(src, "app.exe"),
+                        Path.Combine(src, "setup.msi"),
                         Path.Combine(src, "link.lnk")
                     }, dst);
 
-                Check(r.ImportedCount == 1, "★只导入 txt", Convert.ToString(r.ImportedCount));
-                Check(r.SkippedCount == 2, "★跳过 2 个应用", Convert.ToString(r.SkippedCount));
+                // doc.txt 收进来；app.exe / setup.msi 被拒；link.lnk **现在收进来**
+                Check(r.ImportedCount == 2, "★导入 txt + lnk", Convert.ToString(r.ImportedCount));
+                Check(r.SkippedCount == 2, "★跳过 2 个应用（exe + msi）",
+                    Convert.ToString(r.SkippedCount));
                 Check(r.AllOk, "★跳过不算失败");
-                Check(File.Exists(Path.Combine(src, "app.exe")), "★exe 仍在原处（没被移动）");
-                Check(File.Exists(Path.Combine(src, "link.lnk")), "★lnk 仍在原处");
+                Check(File.Exists(Path.Combine(src, "app.exe")), "★exe 仍在原处（没被动）");
+                Check(File.Exists(Path.Combine(src, "link.lnk")), "★lnk 仍在原处（复制不是移动）");
                 Check(!File.Exists(Path.Combine(dst, "app.exe")), "exe 没进目标");
+                Check(File.Exists(Path.Combine(dst, "link.lnk")), "★lnk 进了目标");
             }
             finally { Clean(src); Clean(dst); }
 
@@ -326,6 +335,131 @@ namespace Clover
                 Check(!bad, "★大小不一致时核对不通过");
             }
             finally { Clean(src); Clean(dst); }
+
+            Console.WriteLine();
+        }
+
+        // ---------- 11. 来源判定：桌面 vs 其他 ----------
+        static void TestIsFromDesktop()
+        {
+            Console.WriteLine("--- 11. 来源判定（桌面 → 移动 / 其他 → 复制）---");
+
+            // 真实桌面目录下的路径 → 判定为「来自桌面」
+            string desk = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            if (!string.IsNullOrEmpty(desk))
+            {
+                Check(DeskImporter.IsFromDesktop(Path.Combine(desk, "a.txt")),
+                    "★用户桌面上的文件 → 来自桌面", desk);
+
+                // 子目录不算（桌面上某个文件夹里的东西不是"桌面上的文件"）
+                Check(!DeskImporter.IsFromDesktop(
+                        Path.Combine(desk, "sub", "a.txt")),
+                    "★桌面子目录里的文件 → 不算来自桌面");
+            }
+
+            // 公共桌面
+            string common = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+            if (!string.IsNullOrEmpty(common))
+            {
+                Check(DeskImporter.IsFromDesktop(Path.Combine(common, "a.txt")),
+                    "★公共桌面上的文件 → 来自桌面", common);
+            }
+
+            // 临时目录（模拟资源管理器里任意目录）→ 不是桌面
+            string tmp = NewDir("notdesk");
+            try
+            {
+                Check(!DeskImporter.IsFromDesktop(Path.Combine(tmp, "a.txt")),
+                    "★其他目录的文件 → 不是来自桌面", tmp);
+            }
+            finally { Clean(tmp); }
+
+            // 边界
+            Check(!DeskImporter.IsFromDesktop(null), "null → false");
+            Check(!DeskImporter.IsFromDesktop(""), "空串 → false");
+            Check(!DeskImporter.IsFromDesktop("   "), "空白 → false");
+
+            Console.WriteLine();
+        }
+
+        // ---------- 12. ImportMode 三种语义 ----------
+        static void TestImportMode()
+        {
+            Console.WriteLine("--- 12. ImportMode：移动 / 复制 / 按来源 ---");
+
+            // Move：源消失
+            {
+                string src = NewDir("mode-m-src");
+                string dst = NewDir("mode-m-dst");
+                try
+                {
+                    string f = Path.Combine(src, "a.txt");
+                    File.WriteAllText(f, "x");
+
+                    DeskImporter.Result r = DeskImporter.Import(
+                        new string[] { f }, dst, null, DeskImporter.ImportMode.Move);
+
+                    Check(r.ImportedCount == 1, "Move：导入 1 个");
+                    Check(!File.Exists(f), "★Move → 源文件消失");
+                    Check(File.Exists(Path.Combine(dst, "a.txt")), "★Move → 目标存在");
+                }
+                finally { Clean(src); Clean(dst); }
+            }
+
+            // Copy：源保留
+            {
+                string src = NewDir("mode-c-src");
+                string dst = NewDir("mode-c-dst");
+                try
+                {
+                    string f = Path.Combine(src, "a.txt");
+                    File.WriteAllText(f, "x");
+
+                    DeskImporter.Result r = DeskImporter.Import(
+                        new string[] { f }, dst, null, DeskImporter.ImportMode.Copy);
+
+                    Check(r.ImportedCount == 1, "Copy：导入 1 个");
+                    Check(File.Exists(f), "★Copy → 源文件保留");
+                    Check(File.Exists(Path.Combine(dst, "a.txt")), "★Copy → 目标存在");
+                }
+                finally { Clean(src); Clean(dst); }
+            }
+
+            // BySource + 非桌面文件 → 复制
+            {
+                string src = NewDir("mode-s-src");
+                string dst = NewDir("mode-s-dst");
+                try
+                {
+                    string f = Path.Combine(src, "a.txt");
+                    File.WriteAllText(f, "x");
+
+                    DeskImporter.Result r = DeskImporter.Import(
+                        new string[] { f }, dst, null, DeskImporter.ImportMode.BySource);
+
+                    Check(r.ImportedCount == 1, "BySource：导入 1 个");
+                    Check(File.Exists(f), "★BySource + 非桌面 → 源保留（复制）");
+                    Check(File.Exists(Path.Combine(dst, "a.txt")), "★BySource → 目标存在");
+                }
+                finally { Clean(src); Clean(dst); }
+            }
+
+            // 默认两参重载 = BySource
+            {
+                string src = NewDir("mode-d-src");
+                string dst = NewDir("mode-d-dst");
+                try
+                {
+                    string f = Path.Combine(src, "a.txt");
+                    File.WriteAllText(f, "x");
+
+                    DeskImporter.Result r = DeskImporter.Import(new string[] { f }, dst);
+
+                    Check(r.ImportedCount == 1, "两参重载：导入 1 个");
+                    Check(File.Exists(f), "★两参重载默认走 BySource（非桌面 → 复制）");
+                }
+                finally { Clean(src); Clean(dst); }
+            }
 
             Console.WriteLine();
         }
