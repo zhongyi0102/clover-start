@@ -356,11 +356,18 @@ namespace Clover
             {
                 Item hit = HitItem(e.GetPosition(canvas));
 
-                if (hit == null)
+                bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+                bool ctrl2 = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+
+                // 三条路径的统一判定（core 纯函数，可单测）：
+                //   空白处 → 框选 / 图标双击 → 打开 / 其余 → 拖动准备
+                DeskClickAction.Action act = DeskClickAction.Resolve(
+                    hit != null, e.ClickCount, shift, ctrl2);
+
+                if (act == DeskClickAction.Action.BandSelect)
                 {
                     // 空白处 → 开始框选（先清空选择，除非按着 Ctrl）
-                    bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-                    if (!ctrl) ClearSelection();
+                    if (!ctrl2) ClearSelection();
 
                     bandSelecting = true;
                     bandStart = e.GetPosition(canvas);
@@ -370,9 +377,25 @@ namespace Clover
                     return;
                 }
 
-                // 图标上按下 → 准备拖动
-                bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-                bool ctrl2 = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+                // ---- 双击打开 ----
+                //
+                // 类注释里一直写着「双击 打开」，但此前**从未实现**：
+                // OnCanvasUp 的单击分支只保留选择、不执行动作，
+                // OpenItem 也只挂在右键菜单上。所以双击 html/图片/文档
+                // 全都没反应，只能右键 →「打开」。
+                //
+                // 用 ClickCount == 2 而不是自己记两次点击的时间差：
+                // WPF 已按系统双击间隔（GetDoubleClickTime）算好了。
+                if (act == DeskClickAction.Action.Open)
+                {
+                    // 双击时不再进入拖动流程 —— 否则第二次按下会捕获鼠标、
+                    // 抬起时又走一遍 OnCanvasUp，选择状态被重算一次。
+                    try { canvas.ReleaseMouseCapture(); } catch { }
+                    ResetDragState();
+                    OpenItem(hit);
+                    e.Handled = true;
+                    return;
+                }
 
                 if (shift) SelectRange(hit);
                 else if (ctrl2) ToggleSelect(hit);
@@ -743,6 +766,10 @@ namespace Clover
                     else if (dragAnchor != null && !dragMoved)
                     {
                         // 单击（没拖动）—— 保留选择，不执行额外动作。
+                        //
+                        // 双击由 WPF 的 MouseLeftButtonDown 的 ClickCount==2
+                        // 单独处理（见 OnCanvasDown），不走这里 ——
+                        // 否则"第二次按下→抬起"会被当成又一次单击。
                     }
 
                     ClearDragPreview();
@@ -1020,7 +1047,27 @@ namespace Clover
                 if (it == null) return;
                 if (!File.Exists(it.FullPath) && !Directory.Exists(it.FullPath)) return;
 
-                System.Diagnostics.Process.Start("explorer.exe", "\"" + it.FullPath + "\"");
+                // ★ 用 UseShellExecute=true 走 Shell 的默认动词，**不要**用
+                //   `explorer.exe "<path>"`。
+                //
+                // 旧写法的问题：`explorer.exe "C:\x\a.html"` 的语义是
+                // "在资源管理器里打开/定位这个路径"，对文件夹有效，对**文件**
+                // 不可靠 —— 实测双击 html 什么都不发生（浏览器不启动）。
+                //
+                // UseShellExecute=true 会按文件关联调默认程序：
+                //   · .html/.htm → 默认浏览器
+                //   · .txt/.pdf/… → 对应程序
+                //   · 文件夹 → 资源管理器（Shell 对目录的默认动词就是 open，
+                //     效果与旧写法一致）
+                //
+                // 这也与项目里其它打开文件的地方保持一致：
+                //   FilesTabView.cs:2326 / PanelWindow.cs:1682 /
+                //   SearchResultList.cs:392 / FilePreviewPopup.cs:378
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(it.FullPath)
+                    {
+                        UseShellExecute = true
+                    });
             }
             catch (Exception ex) { Ui.LogError(ex, "打开桌面项目"); }
         }

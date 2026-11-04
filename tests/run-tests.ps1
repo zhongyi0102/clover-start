@@ -313,6 +313,9 @@ Invoke-Suite 'FolderSourceDropTest' $baseRefs `
 # 拖放光标判定：内部拖动不变 / 不接收页 None / 页判定与 OnPanelDrop 分支一致 / 8 种矩阵
 Invoke-Suite 'DropCursorTest' $baseRefs `
     (@((Join-Path $coreDir 'DropCursor.cs'), (Join-Path $coreDir 'DesktopDragGesture.cs'), (Join-Path $testDir 'DropCursorTest.cs')))
+# 桌面点击路径：双击打开（此前从未实现）/ 修饰键不误触 / 空白框选 / 24 种矩阵
+Invoke-Suite 'DeskClickActionTest' $baseRefs `
+    (@((Join-Path $coreDir 'DeskClickAction.cs'), (Join-Path $testDir 'DeskClickActionTest.cs')))
 # ---------------- 验收测试 ----------------
 
 # 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退
