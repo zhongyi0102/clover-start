@@ -1279,11 +1279,11 @@ namespace Clover
                     deskView.ReloadAndPlace(current, r.Imported, dropX, dropY);
                     if (virtualDesks != null) virtualDesks.Save();
 
-                    // 上次事故暴露的缺口：每个成功移入的项都写「原路径 → 新路径」。
+                    // 每次成功复制都写「原路径 → 新路径」，便于事后追溯。
                     try
                     {
                         foreach (DeskUndo.Entry entry in r.Moved)
-                            Ui.Log("拖入: " + entry.From + " → " + entry.To);
+                            Ui.Log("拖入复制: " + entry.From + " → " + entry.To);
                     }
                     catch { }
                 }

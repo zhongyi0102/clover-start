@@ -5,21 +5,22 @@ using System.IO;
 namespace Clover
 {
     /// <summary>
-    /// 把外部拖进来的文件**移动**进某个虚拟桌面的存放文件夹。
+    /// 把外部拖进来的文件**复制**进某个虚拟桌面的存放文件夹。
     ///
     /// ── 需求边界 ──
     ///
     ///   1. 只处理**非应用文件**（文档、图片、压缩包、文件夹…）。
-    ///      `.exe` / `.lnk` 直接忽略：不弹窗、不移动、不提示。
+    ///      `.exe` / `.lnk` 直接忽略：不弹窗、不复制、不提示。
     ///      理由：应用有自己的归宿（「常用」「全部」），虚拟桌面只放文件。
-    ///   2. 同盘用 `File.Move`（底层 rename，瞬时）；跨盘自动退化为复制+删除。
+    ///   2. **复制而不是移动** —— 源文件永远留在原处。
+    ///      用户从桌面拖文件进来，桌面上的那份必须还在（那是他的工作区）；
+    ///      面板里只是多一份副本。用移动会让用户以为文件丢了。
     ///   3. 同名冲突按「保留两者」处理：改成 `名称 (1)`，绝不覆盖。
-    ///   4. 被占用失败时文件保持原位，返回原因给调用方汇总。
+    ///   4. 被占用失败时源文件保持原位，返回原因给调用方汇总。
     ///
     /// ── 为什么单独成类 ──
     ///
-    /// 过滤规则、跨盘退化、冲突改名都需要单元测试；
-    /// 塞进 Drop 事件里就没法测了。
+    /// 过滤规则、冲突改名都需要单元测试；塞进 Drop 事件里就没法测了。
     /// </summary>
     public static class DeskImporter
     {
@@ -34,10 +35,16 @@ namespace Clover
         /// <summary>一次导入的结果。</summary>
         public class Result
         {
-            /// <summary>成功移入的文件名（用于落位）。</summary>
+            /// <summary>成功复制进来的文件名（用于落位）。</summary>
             public List<string> Imported = new List<string>();
 
-            /// <summary>成功移入的原路径 → 新路径记录（供日志追溯）。</summary>
+            /// <summary>
+            /// 成功复制的「原路径 → 新路径」记录（供日志追溯）。
+            ///
+            /// 字段名保留 `Moved` 是为了不改调用方（PanelWindow 的日志循环），
+            /// 但语义已经是「复制」。**这些记录不能拿去撤销** ——
+            /// 撤销会把副本移回原处、覆盖原文件，而原文件本来就没动过。
+            /// </summary>
             public List<DeskUndo.Entry> Moved = new List<DeskUndo.Entry>();
 
             /// <summary>被过滤掉的（.exe/.lnk 等），不提示。</summary>
@@ -167,7 +174,11 @@ namespace Clover
                         continue;
                     }
 
-                    // 已经在目标目录里 → 视为成功，不重复搬
+                    // 已经在目标目录里 → 视为成功，不重复复制
+                    //
+                    // 复制语义下这种情况很少见（源在 destDir 里说明用户是从
+                    // 桌面页内部拖的），但仍要拦：否则会在同一个目录里
+                    // 复制出「a (1).txt」。
                     try
                     {
                         string parent = Path.GetDirectoryName(src);
@@ -193,6 +204,12 @@ namespace Clover
             return r;
         }
 
+        /// <summary>
+        /// 复制一个文件/文件夹进 destDir。
+        ///
+        /// 名字里的 "Move" 是历史遗留 —— 从移动改成复制时为了不改调用点保留了
+        /// 方法名。**现在它调的是 `VerifiedFileMove.Copy`，源文件不动。**
+        /// </summary>
         static void MoveOne(string src, string destDir, Result r)
         {
             string name = Path.GetFileName(src);
@@ -203,14 +220,16 @@ namespace Clover
             try
             {
                 string target = MakeUniqueTarget(destDir, name, isFolder);
-                VerifiedFileMove.Result moved = VerifiedFileMove.Move(src, target);
-                if (!moved.Ok) throw new IOException(moved.Message);
 
-                r.Imported.Add(Path.GetFileName(moved.Target));
+                // ★ Copy 而不是 Move：源文件必须留在原处。
+                VerifiedFileMove.Result copied = VerifiedFileMove.Copy(src, target);
+                if (!copied.Ok) throw new IOException(copied.Message);
+
+                r.Imported.Add(Path.GetFileName(copied.Target));
 
                 DeskUndo.Entry rec = new DeskUndo.Entry();
                 rec.From = src;
-                rec.To = moved.Target;
+                rec.To = copied.Target;
                 rec.Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 r.Moved.Add(rec);
             }

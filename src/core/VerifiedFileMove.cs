@@ -61,6 +61,137 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 核对式**复制**：目标完整发布后才算成功，**源文件永不删除**。
+        ///
+        /// ── 与 Move 的区别 ──
+        ///
+        /// `Move` = 复制 + 核对 + 删源；`Copy` = 复制 + 核对，到核对为止。
+        /// 两者共用同一套「临时副本 → 核对 → 原子发布 → 再核对」的保证，
+        /// 所以复制出来的目标与源在字节级一致（目录按完整清单核对）。
+        ///
+        /// ── 为什么需要它 ──
+        ///
+        /// 「桌面文件」页拖入改成复制语义：用户把桌面上的文件拖进面板，
+        /// 原文件必须留在桌面（那是他的工作区），面板里只是多一份。
+        /// 用 Move 会把桌面上的文件搬走 —— 用户会以为文件丢了。
+        ///
+        /// ── 失败语义 ──
+        ///
+        /// 任何一步核对失败都清理临时文件、返回失败，**源始终完好**。
+        /// 目标一旦发布就不自动删除（避免并发替换时误删外部文件）。
+        /// </summary>
+        public static Result Copy(string source, string target)
+        {
+            Result r = new Result { Target = target ?? "" };
+            try
+            {
+                if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target))
+                    return Fail(r, "源路径或目标路径为空", source);
+
+                string src = Path.GetFullPath(source);
+                string dst = Path.GetFullPath(target);
+                r.Target = dst;
+
+                if (string.Equals(src.TrimEnd('\\'), dst.TrimEnd('\\'),
+                    StringComparison.OrdinalIgnoreCase))
+                    return Fail(r, "源路径与目标路径相同", src);
+
+                if (File.Exists(dst) || Directory.Exists(dst))
+                    return Fail(r, "目标已存在，未覆盖：" + dst, src);
+
+                if (File.Exists(src)) return CopyFile(src, dst, r);
+                if (Directory.Exists(src)) return CopyDirectoryVerified(src, dst, r);
+                return Fail(r, "源文件不存在：" + src, src);
+            }
+            catch (Exception ex)
+            {
+                return Fail(r, ex.Message, source);
+            }
+        }
+
+        static Result CopyFile(string src, string dst, Result r)
+        {
+            long sourceSize = new FileInfo(src).Length;
+            string temp = TempPathBeside(dst);
+            try
+            {
+                string parent = Path.GetDirectoryName(dst);
+                if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+
+                File.Copy(src, temp, false);
+                if (!VerifyFile(temp, sourceSize))
+                {
+                    CleanupFile(temp);
+                    return Fail(r, "目标临时文件核对失败，未发布", src);
+                }
+
+                // 复制期间源可能被其他程序改动 —— 与 Move 一样要拦下来，
+                // 否则"复制的到底是不是我看到的那个文件"没法保证。
+                if (!VerifyFile(src, sourceSize))
+                {
+                    CleanupFile(temp);
+                    return Fail(r, "复制期间源文件发生变化，未发布目标", src);
+                }
+
+                File.Move(temp, dst);
+
+                if (!VerifyFile(dst, sourceSize))
+                    return Fail(r, "目标文件发布后核对失败，请检查目标：" + dst, src);
+
+                // ★ 与 Move 唯一的区别：到这里就结束，不删源。
+                r.Ok = true;
+                r.SourceStillExists = true;
+                return r;
+            }
+            catch (Exception ex)
+            {
+                CleanupFile(temp);
+                return Fail(r, ex.Message, src);
+            }
+        }
+
+        static Result CopyDirectoryVerified(string src, string dst, Result r)
+        {
+            DirectorySnapshot snapshot;
+            string snapshotError;
+            if (!TrySnapshot(src, out snapshot, out snapshotError))
+                return Fail(r, snapshotError, src);
+
+            string temp = TempPathBeside(dst);
+            try
+            {
+                CopyDirectory(src, temp, snapshot);
+                if (!VerifyDirectory(temp, snapshot))
+                {
+                    CleanupDirectory(temp);
+                    return Fail(r, "目标临时文件夹核对失败，未发布", src);
+                }
+
+                // 复制期间源目录可能新增/修改文件
+                if (!VerifyDirectory(src, snapshot))
+                {
+                    CleanupDirectory(temp);
+                    return Fail(r, "复制期间源文件夹发生变化，未发布目标", src);
+                }
+
+                Directory.Move(temp, dst);
+
+                if (!VerifyDirectory(dst, snapshot))
+                    return Fail(r, "目标文件夹发布后核对失败，请检查目标：" + dst, src);
+
+                // ★ 不删源。
+                r.Ok = true;
+                r.SourceStillExists = true;
+                return r;
+            }
+            catch (Exception ex)
+            {
+                CleanupDirectory(temp);
+                return Fail(r, ex.Message, src);
+            }
+        }
+
         static Result MoveFile(string src, string dst, Result r)
         {
             long sourceSize = new FileInfo(src).Length;

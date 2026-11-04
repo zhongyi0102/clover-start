@@ -113,8 +113,11 @@ namespace Clover
                 Check(r.ImportedCount == 2, "★导入 2 个", Convert.ToString(r.ImportedCount));
                 Check(File.Exists(Path.Combine(dst, "a.txt")), "★a.txt 已到目标");
                 Check(File.Exists(Path.Combine(dst, "b.txt")), "★b.txt 已到目标");
-                Check(!File.Exists(Path.Combine(src, "a.txt")), "★源文件已移走（真移动）");
+                // ★ 复制语义：源文件必须还在原处（改成复制前的断言是「已移走」）
+                Check(File.Exists(Path.Combine(src, "a.txt")), "★源文件仍在原处（复制不是移动）");
+                Check(File.Exists(Path.Combine(src, "b.txt")), "★第二个源文件也仍在");
                 Check(File.ReadAllText(Path.Combine(dst, "a.txt")) == "hello", "内容正确");
+                Check(File.ReadAllText(Path.Combine(src, "a.txt")) == "hello", "源内容也未被破坏");
             }
             finally { Clean(src); Clean(dst); }
 
@@ -238,8 +241,10 @@ namespace Clover
 
                 Check(r.AllOk, "★文件夹导入成功", string.Join(",", r.Failed.ToArray()));
                 Check(Directory.Exists(Path.Combine(dst, "myfolder")), "★目标有该文件夹");
-                Check(File.Exists(Path.Combine(dst, "myfolder", "inner.txt")), "★内部文件跟着搬");
-                Check(!Directory.Exists(sub), "★源文件夹已移走");
+                Check(File.Exists(Path.Combine(dst, "myfolder", "inner.txt")), "★内部文件跟着复制");
+                // ★ 复制语义：源文件夹必须还在
+                Check(Directory.Exists(sub), "★源文件夹仍在原处（复制不是移动）");
+                Check(File.Exists(Path.Combine(sub, "inner.txt")), "★源文件夹里的文件也在");
             }
             finally { Clean(src); Clean(dst); }
 
