@@ -104,6 +104,42 @@ namespace Clover
                 "★阈值为 0 时不触发");
 
             Console.WriteLine();
+            Console.WriteLine("--- 新判据：指针离开面板窗口才转系统拖放 ---");
+
+            // 窗口矩形 (100,100)-(900,700)
+            // 面板内移动：任意位置都不该转系统拖放（这是修「拖不动」的核心）
+            Check(!DesktopDragGesture.HasLeftWindow(500, 400, 100, 100, 900, 700),
+                "★窗口正中间 → 不转");
+            Check(!DesktopDragGesture.HasLeftWindow(101, 101, 100, 100, 900, 700),
+                "★贴着左上角但在窗口内 → 不转");
+            Check(!DesktopDragGesture.HasLeftWindow(899, 699, 100, 100, 900, 700),
+                "★贴着右下角但在窗口内 → 不转");
+            Check(!DesktopDragGesture.HasLeftWindow(100, 400, 100, 100, 900, 700),
+                "★正好在左边界上 → 不转（边界算内）");
+            Check(!DesktopDragGesture.HasLeftWindow(900, 400, 100, 100, 900, 700),
+                "★正好在右边界上 → 不转");
+
+            // 真的离开窗口才转
+            Check(DesktopDragGesture.HasLeftWindow(99, 400, 100, 100, 900, 700),
+                "★左移出窗口 → 转系统拖放");
+            Check(DesktopDragGesture.HasLeftWindow(901, 400, 100, 100, 900, 700),
+                "★右移出窗口 → 转系统拖放");
+            Check(DesktopDragGesture.HasLeftWindow(500, 99, 100, 100, 900, 700),
+                "★上移出窗口 → 转系统拖放");
+            Check(DesktopDragGesture.HasLeftWindow(500, 701, 100, 100, 900, 700),
+                "★下移出窗口 → 转系统拖放");
+
+            // 边界与异常输入
+            Check(!DesktopDragGesture.HasLeftWindow(500, 400, 900, 700, 100, 100),
+                "★窗口矩形反了（未布局）→ 不转");
+            Check(!DesktopDragGesture.HasLeftWindow(500, 400, 100, 100, 100, 700),
+                "★零宽窗口 → 不转");
+            Check(!DesktopDragGesture.HasLeftWindow(double.NaN, 400, 100, 100, 900, 700),
+                "★NaN 坐标 → 不转");
+            Check(!DesktopDragGesture.HasLeftWindow(500, 400, double.NaN, 100, 900, 700),
+                "★NaN 窗口坐标 → 不转");
+
+            Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             Environment.Exit(failed == 0 ? 0 : 1);
         }

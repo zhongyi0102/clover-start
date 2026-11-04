@@ -460,22 +460,20 @@ namespace Clover
                     dragMoved = true;
                 if (!dragMoved) return;
 
-                // ---- 面板内自由摆放 → 拖出（B 方案）----
+                // ---- 面板内自由摆放 → 拖出 ----
                 //
-                // 触发条件（二选一，均为常量，便于调参）：
-                //   1. 指针离开「按下时的格子」超过半格
-                //   2. 按住超过 0.3 秒仍未松手
+                // ★ 判据是「指针真的离开面板窗口」，不是「离开原格子」。
                 //
-                // 必须用「按下时的格子」：图标会跟着指针移动，
-                // 拿图标当前位置判定永远判不出来 —— 这正是旧 bug 的根因。
-                bool leftCell = DesktopDragGesture.HasLeftOriginCell(
-                    dragStart.X, dragStart.Y, p.X, p.Y,
-                    CellW, CellH, DesktopDragGesture.LeaveCellRatio);
+                // 旧实现（B 方案）用「离开按下时的格子超过半格」，
+                // 结果面板内根本没法自由摆放：想挪图标到旁边，一动就被
+                // 系统拖放接管，用户感知就是"拖不动"。
+                //
+                // 现在的行为与 Windows 桌面一致：
+                //   · 面板内拖动 → 自由摆放（图标跟指针走，松手停在新位置）
+                //   · 拖到面板外 → 转系统拖放（拖到桌面 / 资源管理器）
+                bool leftWindow = HasPointerLeftWindow();
 
-                bool heldLong = DesktopDragGesture.HasHeldLongEnough(
-                    dragPressTime, DateTime.Now, DesktopDragGesture.HoldSeconds);
-
-                if (!dragOutStarted && (leftCell || heldLong))
+                if (!dragOutStarted && leftWindow)
                 {
                     dragOutStarted = true;
 
@@ -500,6 +498,34 @@ namespace Clover
                 ApplyDragPreview(dx, dy);
             }
             catch (Exception ex) { Ui.LogError(ex, "桌面拖动"); }
+        }
+
+        /// <summary>
+        /// 指针是否已离开面板窗口（屏幕坐标）。
+        ///
+        /// 用 `GetCursorPos` 而不是 `e.GetPosition(canvas)`：后者在指针离开
+        /// 画布后仍会给出相对坐标（可能超出边界），但拿不到窗口真实边界。
+        /// 屏幕坐标 + 窗口矩形是最直接的判据。
+        /// </summary>
+        bool HasPointerLeftWindow()
+        {
+            try
+            {
+                if (owner == null) return false;
+
+                Native.POINT p;
+                if (!Native.GetCursorPos(out p)) return false;
+
+                IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(owner).Handle;
+                if (hwnd == IntPtr.Zero) return false;
+
+                Native.RECT r;
+                if (!Native.GetWindowRect(hwnd, out r)) return false;
+
+                return DesktopDragGesture.HasLeftWindow(
+                    p.X, p.Y, r.Left, r.Top, r.Right, r.Bottom);
+            }
+            catch { return false; }
         }
 
         /// <summary>只更新合成层位移，不触发布局重排。</summary>
