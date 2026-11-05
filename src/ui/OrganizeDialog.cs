@@ -301,7 +301,7 @@ namespace Clover
 
         public void Show()
         {
-            try { dlg.ShowDialog(); }
+            try { ModalOwnerGuard.Attach(dlg); dlg.ShowDialog(); }
             catch (Exception ex) { Ui.LogError(ex, "显示整理与隐藏窗口"); }
         }
     }

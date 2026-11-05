@@ -907,6 +907,7 @@ namespace Clover
                     if (e.Key == Key.Escape) { dlg.Close(); e.Handled = true; }
                 };
 
+                ModalOwnerGuard.Attach(dlg);
                 dlg.ShowDialog();
             }
             catch (Exception ex)

@@ -247,5 +247,49 @@ namespace Clover
             }
             catch { }
         }
+
+        // ========== 模态窗口的 Owner 解禁 ==========
+
+        [DllImport("user32.dll")]
+        public static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowEnabled(IntPtr hWnd);
+
+        /// <summary>
+        /// 启用/禁用窗口（传句柄，不传 WPF 的 Window —— core 层零 WPF 依赖）。
+        ///
+        /// ── 为什么需要它 ──
+        ///
+        /// WPF 的 `ShowDialog()` 是**模态**：子窗口显示期间，系统会
+        /// `EnableWindow(owner, false)` 把 Owner 禁掉。这是模态的定义。
+        ///
+        /// 但子窗口可以最小化。最小化后：
+        ///   · 子窗口看不见了
+        ///   · Owner 仍被禁用（点不动）
+        ///   · 用户感觉整个程序卡死
+        ///
+        /// 所以子窗口最小化时把 Owner 解禁，恢复时再禁回去。
+        /// 这不破坏模态语义 —— 子窗口可见时它仍然是模态的。
+        ///
+        /// ── 为什么不用 WPF 的 owner.IsEnabled ──
+        ///
+        /// WPF 的 `IsEnabled` 和 Win32 的 `EnableWindow` 是两层：
+        /// 模态禁用是 Win32 层做的，改 WPF 属性改不动它。
+        /// </summary>
+        public static void SetWindowEnabled(IntPtr hwnd, bool enabled)
+        {
+            try
+            {
+                if (hwnd == IntPtr.Zero) return;
+
+                // 只在状态真的需要变时才调，避免无谓的 Win32 往返
+                bool now = IsWindowEnabled(hwnd);
+                if (now == enabled) return;
+
+                EnableWindow(hwnd, enabled);
+            }
+            catch { }
+        }
     }
 }

@@ -918,7 +918,7 @@ namespace Clover
 
         void ShowDialog()
         {
-            try { dlg.ShowDialog(); }
+            try { ModalOwnerGuard.Attach(dlg); dlg.ShowDialog(); }
             catch (Exception ex) { Ui.LogError(ex, "显示设置窗口"); }
         }
 

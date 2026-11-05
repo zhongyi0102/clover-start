@@ -551,7 +551,7 @@ namespace Clover
 
         public void Show()
         {
-            try { dlg.ShowDialog(); }
+            try { ModalOwnerGuard.Attach(dlg); dlg.ShowDialog(); }
             catch (Exception ex) { Ui.LogError(ex, "显示壁纸选择窗口"); }
         }
     }

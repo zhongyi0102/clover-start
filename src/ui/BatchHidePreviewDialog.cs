@@ -246,6 +246,7 @@ namespace Clover
         {
             try
             {
+                ModalOwnerGuard.Attach(dlg);
                 dlg.ShowDialog();
                 return confirmed;
             }
