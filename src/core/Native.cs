@@ -61,12 +61,15 @@ namespace Clover
                 if (hwnd == IntPtr.Zero) return;
 
                 int style = GetWindowLong(hwnd, GWL_STYLE);
-                if ((style & WS_MINIMIZEBOX) == 0) return;   // 已经没有，不用改
 
-                SetWindowLong(hwnd, GWL_STYLE, style & ~WS_MINIMIZEBOX);
+                // ★ 注意：这里**不**提前 return。
+                //   上一版有 `if ((style & WS_MINIMIZEBOX) == 0) return;`，
+                //   结果第二次调用（Loaded 里）发现样式已经去掉就不再重画，
+                //   标题栏还留着按钮的残影。现在每次都强制重画。
+                if ((style & WS_MINIMIZEBOX) != 0)
+                    SetWindowLong(hwnd, GWL_STYLE, style & ~WS_MINIMIZEBOX);
 
-                // 样式改动后要重画标题栏，否则按钮还在视觉上留着。
-                // SetWindowPos 与 SWP_* 常量在文件下方已有声明（第 129 行附近）。
+                // 样式改动后必须重画标题栏，否则按钮还在视觉上留着
                 SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
             }

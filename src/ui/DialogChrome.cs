@@ -52,8 +52,12 @@ namespace Clover
 
                 // ---- 1. 去掉最小化按钮 ----
                 //
-                // 必须在句柄建立之后。SourceInitialized 是最早的可用时机
-                // （早于 Loaded，用户看不到按钮闪一下）。
+                // 必须在句柄建立之后。**两个时机都做**：
+                //   · SourceInitialized —— 最早，但此时窗口还没被系统画出来，
+                //     有些情况下样式改动会被后续的 CreateWindow 覆盖
+                //   · Loaded —— 窗口已经画完，再改一次并强制重画标题栏
+                //
+                // 实测只做 SourceInitialized 时按钮有时还留着，所以补 Loaded。
                 dlg.SourceInitialized += delegate
                 {
                     try
@@ -64,7 +68,57 @@ namespace Clover
                     catch { }
                 };
 
-                // ---- 2. 万一被最小化，解禁 Owner ----
+                dlg.Loaded += delegate
+                {
+                    try
+                    {
+                        IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                        Native.RemoveMinimizeBox(hwnd);
+                    }
+                    catch { }
+                };
+
+                // ---- 2. 拦截最小化命令（保险）----
+                //
+                // 即使样式位没生效、按钮还留着，点它也**不会真的最小化**。
+                // 双保险：样式去掉是"看不见按钮"，这里是"点了也没用"。
+                //
+                // 同时覆盖 Win+↓ 和任务栏右键 → 最小化。
+                dlg.SourceInitialized += delegate
+                {
+                    try
+                    {
+                        System.Windows.Interop.HwndSource src =
+                            System.Windows.Interop.HwndSource.FromHwnd(
+                                new System.Windows.Interop.WindowInteropHelper(dlg).Handle);
+                        if (src == null) return;
+
+                        src.AddHook(delegate(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam,
+                            ref bool handled)
+                        {
+                            try
+                            {
+                                const int WM_SYSCOMMAND = 0x0112;
+                                const int SC_MINIMIZE = 0xF020;
+
+                                if (msg != WM_SYSCOMMAND) return IntPtr.Zero;
+
+                                int cmd = wParam.ToInt32() & 0xFFF0;
+                                if (cmd == SC_MINIMIZE)
+                                {
+                                    // 吞掉最小化命令：窗口保持原状
+                                    handled = true;
+                                    return IntPtr.Zero;
+                                }
+                            }
+                            catch { }
+                            return IntPtr.Zero;
+                        });
+                    }
+                    catch { }
+                };
+
+                // ---- 3. 万一还是被最小化，解禁 Owner ----
                 Window owner = dlg.Owner;
                 if (owner != null)
                 {
