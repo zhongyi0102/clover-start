@@ -24,6 +24,55 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
+        /// <summary>GWL_STYLE：窗口样式位（WS_* 系列）。</summary>
+        public const int GWL_STYLE = -16;
+
+        /// <summary>WS_MINIMIZEBOX：标题栏的最小化按钮。</summary>
+        public const int WS_MINIMIZEBOX = 0x00020000;
+
+        // SetWindowPos 的 uFlags（只列本文件用到的）
+        const uint SWP_NOSIZE = 0x0001;
+        const uint SWP_NOMOVE = 0x0002;
+        const uint SWP_NOZORDER = 0x0004;
+        const uint SWP_FRAMECHANGED = 0x0020;
+
+        /// <summary>
+        /// 去掉标题栏的最小化按钮。
+        ///
+        /// ── 为什么需要它 ──
+        ///
+        /// 项目的对话框都是 `ShowInTaskbar = false`（不占任务栏），
+        /// 但 `ResizeMode = CanResize` 会让系统标题栏带上最小化按钮。
+        /// 两者矛盾：最小化后任务栏没有图标，窗口再也找不回来。
+        ///
+        /// WPF 的 `ResizeMode` 只有三档（NoResize / CanMinimize /
+        /// CanResize / CanResizeWithGrip），**没有"可调大小但没有最小化"**
+        /// 这一档。所以只能改 Win32 窗口样式位。
+        ///
+        /// ── 什么时候调 ──
+        ///
+        /// 必须在窗口句柄建立之后（`SourceInitialized` 或 `Loaded`）。
+        /// 在构造函数里调 `WindowInteropHelper.Handle` 会拿到 0。
+        /// </summary>
+        public static void RemoveMinimizeBox(IntPtr hwnd)
+        {
+            try
+            {
+                if (hwnd == IntPtr.Zero) return;
+
+                int style = GetWindowLong(hwnd, GWL_STYLE);
+                if ((style & WS_MINIMIZEBOX) == 0) return;   // 已经没有，不用改
+
+                SetWindowLong(hwnd, GWL_STYLE, style & ~WS_MINIMIZEBOX);
+
+                // 样式改动后要重画标题栏，否则按钮还在视觉上留着。
+                // SetWindowPos 与 SWP_* 常量在文件下方已有声明（第 129 行附近）。
+                SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+            }
+            catch { }
+        }
+
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
 

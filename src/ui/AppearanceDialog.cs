@@ -60,10 +60,10 @@ namespace Clover
                 // 最大不超过屏幕工作区。初值按主屏算，窗口移动/尺寸变化时
                 // 再按所在屏幕重算（多显示器时上限跟着走）。
                 ApplyWorkAreaLimits(dlg);
-            // ★ ShowInTaskbar = true：这些窗口 ResizeMode=CanResize，
-            //   系统标题栏自带最小化按钮。若不在任务栏显示，最小化后
-            //   没有任何入口能恢复窗口 —— 用户感知就是"窗口消失了"。
-            dlg.ShowInTaskbar = true;
+            // 不占任务栏（这是配置对话框，一闪而过）。
+            // 配合 DialogChrome.Attach 去掉最小化按钮 ——
+            // 否则最小化后任务栏没图标，窗口再也找不回来。
+            dlg.ShowInTaskbar = false;
                 dlg.WindowStartupLocation = owner != null
                     ? WindowStartupLocation.CenterOwner
                     : WindowStartupLocation.CenterScreen;
@@ -907,7 +907,7 @@ namespace Clover
                     if (e.Key == Key.Escape) { dlg.Close(); e.Handled = true; }
                 };
 
-                ModalOwnerGuard.Attach(dlg);
+                DialogChrome.Attach(dlg);
                 dlg.ShowDialog();
             }
             catch (Exception ex)

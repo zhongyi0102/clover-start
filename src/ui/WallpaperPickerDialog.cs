@@ -65,10 +65,10 @@ namespace Clover
             dlg.Owner = owner;
             dlg.Background = Ui.Bg;
             dlg.ResizeMode = ResizeMode.CanResize;
-            // ★ ShowInTaskbar = true：这些窗口 ResizeMode=CanResize，
-            //   系统标题栏自带最小化按钮。若不在任务栏显示，最小化后
-            //   没有任何入口能恢复窗口 —— 用户感知就是"窗口消失了"。
-            dlg.ShowInTaskbar = true;
+            // 不占任务栏（这是配置对话框，一闪而过）。
+            // 配合 DialogChrome.Attach 去掉最小化按钮 ——
+            // 否则最小化后任务栏没图标，窗口再也找不回来。
+            dlg.ShowInTaskbar = false;
             dlg.MinWidth = 520;
             dlg.MinHeight = 420;
 
@@ -551,7 +551,7 @@ namespace Clover
 
         public void Show()
         {
-            try { ModalOwnerGuard.Attach(dlg); dlg.ShowDialog(); }
+            try { DialogChrome.Attach(dlg); dlg.ShowDialog(); }
             catch (Exception ex) { Ui.LogError(ex, "显示壁纸选择窗口"); }
         }
     }
