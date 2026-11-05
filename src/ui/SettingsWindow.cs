@@ -127,7 +127,10 @@ namespace Clover
             dlg.Owner = owner;
             dlg.Background = Ui.Bg;
             dlg.ResizeMode = ResizeMode.CanResize;
-            dlg.ShowInTaskbar = false;
+            // ★ ShowInTaskbar = true：这些窗口 ResizeMode=CanResize，
+            //   系统标题栏自带最小化按钮。若不在任务栏显示，最小化后
+            //   没有任何入口能恢复窗口 —— 用户感知就是"窗口消失了"。
+            dlg.ShowInTaskbar = true;
             dlg.MinWidth = 420;
             dlg.MinHeight = 400;
 

@@ -60,7 +60,10 @@ namespace Clover
                 // 最大不超过屏幕工作区。初值按主屏算，窗口移动/尺寸变化时
                 // 再按所在屏幕重算（多显示器时上限跟着走）。
                 ApplyWorkAreaLimits(dlg);
-                dlg.ShowInTaskbar = false;
+            // ★ ShowInTaskbar = true：这些窗口 ResizeMode=CanResize，
+            //   系统标题栏自带最小化按钮。若不在任务栏显示，最小化后
+            //   没有任何入口能恢复窗口 —— 用户感知就是"窗口消失了"。
+            dlg.ShowInTaskbar = true;
                 dlg.WindowStartupLocation = owner != null
                     ? WindowStartupLocation.CenterOwner
                     : WindowStartupLocation.CenterScreen;
