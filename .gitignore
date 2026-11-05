@@ -34,5 +34,9 @@ src/core/Version.cs
 Thumbs.db
 .DS_Store
 
+# UI 设计工具的中间产物（brief / 草图等），不是项目源码。
+# 内容随每次设计讨论变化，进版本库只会制造噪音。
+.ui-craft/
+
 # 工具临时锁文件
 .dsh-ops-update-*.lock
