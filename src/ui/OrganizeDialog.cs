@@ -118,7 +118,16 @@ namespace Clover
             Grid.SetRow(pageHost, 1);
             layout.Children.Add(pageHost);
 
-            dlg.Content = layout;
+            // ---- 换成自绘标题栏 ----
+            //
+            // 为什么不用系统标题栏：实测 WS_MINIMIZEBOX 位已经清掉
+            // （日志 before=0x06CF0000 → after=0x06CD0000），
+            // 但「—」按钮还在画面上。SWP_FRAMECHANGED / WM_NCPAINT /
+            // InvalidateRect 都试过，无效。
+            //
+            // 唯一可靠的办法是不要系统标题栏，由 WPF 自己画。
+            // 这也和主面板一致（PanelWindow 就是 WindowStyle=None + 自绘按钮）。
+            DialogChrome.UseCustomTitleBar(dlg, layout);
 
             // Esc：先清搜索，再关闭（不影响主面板）
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
@@ -262,7 +271,9 @@ namespace Clover
         {
             try
             {
-                Grid g = dlg.Content as Grid;
+                // Content 现在是「自绘标题栏 + 原内容」的外层 Border，
+                // 真正的外壳 Grid 在它里面。要往下找一层。
+                Grid g = FindShellGrid(dlg.Content);
                 if (g == null) return false;
 
                 // pageHost 必须真的挂在这棵树上
@@ -275,6 +286,41 @@ namespace Clover
                 return true;
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// 从窗口内容里找外壳 Grid。
+        ///
+        /// 结构随 DialogChrome.UseCustomTitleBar 变过：
+        ///   · 之前：dlg.Content = Grid（直接就是外壳）
+        ///   · 现在：dlg.Content = Border → Grid（标题栏 + 内容）→ 外壳 Grid
+        /// 所以不能直接 `as Grid`，要往下钻。
+        /// </summary>
+        static Grid FindShellGrid(object content)
+        {
+            try
+            {
+                Grid g = content as Grid;
+                if (g != null) return g;
+
+                Border b = content as Border;
+                if (b != null)
+                {
+                    Grid inner = b.Child as Grid;
+                    if (inner != null)
+                    {
+                        // 外层 Grid 有两行（标题栏 / 内容），内容是第二行的那个
+                        if (inner.Children.Count >= 2)
+                        {
+                            Grid shell = inner.Children[1] as Grid;
+                            if (shell != null) return shell;
+                        }
+                        return inner;
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>测试用：pageHost 是否挂在视觉树上。</summary>

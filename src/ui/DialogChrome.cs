@@ -38,6 +38,143 @@ namespace Clover
     static class DialogChrome
     {
         /// <summary>
+        /// 把系统标题栏换成项目自绘的标题栏。
+        ///
+        /// ── 为什么必须自绘 ──
+        ///
+        /// 实测：`WS_MINIMIZEBOX` 样式位**确实清掉了**
+        /// （日志：before=0x06CF0000 hasMin=True → after=0x06CD0000 hasMin=False），
+        /// 但标题栏的「—」按钮**还在画面上**。
+        ///
+        /// 试过的手段都无效：
+        ///   · SetWindowPos + SWP_FRAMECHANGED
+        ///   · SendMessage(WM_NCPAINT)
+        ///   · InvalidateRect
+        ///   · SourceInitialized / Loaded 两个时机各改一次
+        ///
+        /// 说明这个按钮不是靠 WS_MINIMIZEBOX 位画的 —— 系统按窗口当前
+        /// 状态（可调整大小 + 有标题栏）重建了非客户区。
+        ///
+        /// 唯一可靠的办法：**不用系统标题栏**。设 WindowStyle=None 后
+        /// 系统一个按钮都不画，标题栏完全由 WPF 内容区自己画。
+        ///
+        /// 这也是主面板的做法（PanelWindow 就是 WindowStyle=None +
+        /// 自绘 min/max/close 三个按钮），风格统一。
+        /// </summary>
+        /// <param name="dlg">目标窗口</param>
+        /// <param name="content">窗口内容（标题栏会插在它上面）</param>
+        public static void UseCustomTitleBar(Window dlg, UIElement content)
+        {
+            try
+            {
+                if (dlg == null) return;
+
+                dlg.WindowStyle = WindowStyle.None;
+                dlg.ResizeMode = ResizeMode.CanResize;   // 保留边框拖拽缩放
+
+                // 用 WindowChrome 保留系统的边缘缩放热区 —— 只关掉标题栏，
+                // 不牺牲"拖边框改大小"。
+                System.Windows.Shell.WindowChrome chrome =
+                    new System.Windows.Shell.WindowChrome();
+                chrome.CaptionHeight = 0;                 // 没有系统标题栏
+                chrome.ResizeBorderThickness = new Thickness(4);
+                chrome.GlassFrameThickness = new Thickness(0);
+                chrome.UseAeroCaptionButtons = false;     // ★ 关键：不要系统按钮
+                System.Windows.Shell.WindowChrome.SetWindowChrome(dlg, chrome);
+
+                if (content != null)
+                    dlg.Content = BuildWithTitleBar(dlg, content);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 把原内容包进「自绘标题栏 + 内容」的 Grid。
+        ///
+        /// 标题栏只放一个关闭按钮 —— 没有最小化（这正是本次要的），
+        /// 也不放最大化（配置对话框不需要全屏）。
+        /// </summary>
+        static UIElement BuildWithTitleBar(Window dlg, UIElement content)
+        {
+            // WindowStyle=None 后窗口没有系统背景，必须自己给一层，
+            // 否则内容区直接透出桌面。
+            System.Windows.Controls.Border outer = new System.Windows.Controls.Border();
+            outer.Background = Ui.Bg;
+            outer.BorderBrush = Ui.Line;
+            outer.BorderThickness = new Thickness(1);
+
+            System.Windows.Controls.Grid root = new System.Windows.Controls.Grid();
+            root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
+            { Height = System.Windows.GridLength.Auto });
+            root.RowDefinitions.Add(new System.Windows.Controls.RowDefinition
+            { Height = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
+
+            // ---- 标题栏 ----
+            System.Windows.Controls.Border bar = new System.Windows.Controls.Border();
+            bar.Height = 36;
+            bar.Background = System.Windows.Media.Brushes.Transparent;
+            bar.MouseLeftButtonDown += delegate
+            {
+                // 拖标题栏移动窗口（WindowStyle=None 后系统不再自动处理）
+                try { dlg.DragMove(); } catch { }
+            };
+
+            System.Windows.Controls.Grid barGrid = new System.Windows.Controls.Grid();
+            barGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition());
+            barGrid.ColumnDefinitions.Add(new System.Windows.Controls.ColumnDefinition
+            { Width = System.Windows.GridLength.Auto });
+
+            System.Windows.Controls.TextBlock title = new System.Windows.Controls.TextBlock();
+            title.Text = dlg.Title ?? "";
+            title.FontFamily = Ui.YaHei;
+            title.FontSize = 12.5;
+            title.Foreground = Ui.Sub;
+            title.VerticalAlignment = VerticalAlignment.Center;
+            title.Margin = new Thickness(Ui.S.Lg, 0, 0, 0);
+            System.Windows.Controls.Grid.SetColumn(title, 0);
+            barGrid.Children.Add(title);
+
+            // 关闭按钮（只有一个，没有最小化/最大化）
+            System.Windows.Controls.Border close =
+                new System.Windows.Controls.Border();
+            close.Width = 32;
+            close.Height = 28;
+            close.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+            close.CornerRadius = new CornerRadius(Ui.R.Sm);
+            close.Background = System.Windows.Media.Brushes.Transparent;
+            close.Cursor = System.Windows.Input.Cursors.Hand;
+            close.ToolTip = "关闭";
+
+            System.Windows.Controls.TextBlock glyph =
+                new System.Windows.Controls.TextBlock();
+            glyph.Text = "\uE711";                    // Segoe MDL2 Close
+            glyph.FontFamily = Ui.Mdl;
+            glyph.FontSize = 11;
+            glyph.Foreground = Ui.Sub;
+            glyph.HorizontalAlignment = HorizontalAlignment.Center;
+            glyph.VerticalAlignment = VerticalAlignment.Center;
+            close.Child = glyph;
+
+            close.MouseEnter += delegate { close.Background = Ui.Hover; };
+            close.MouseLeave += delegate { close.Background = System.Windows.Media.Brushes.Transparent; };
+            close.MouseLeftButtonUp += delegate { try { dlg.Close(); } catch { } };
+
+            System.Windows.Controls.Grid.SetColumn(close, 1);
+            barGrid.Children.Add(close);
+
+            bar.Child = barGrid;
+            System.Windows.Controls.Grid.SetRow(bar, 0);
+            root.Children.Add(bar);
+
+            // ---- 原内容 ----
+            System.Windows.Controls.Grid.SetRow(content, 1);
+            root.Children.Add(content);
+
+            outer.Child = root;
+            return outer;
+        }
+
+        /// <summary>
         /// 在 `ShowDialog()` 之前调用。
         ///
         /// 做两件事：
@@ -49,6 +186,9 @@ namespace Clover
             try
             {
                 if (dlg == null) return;
+
+                // 诊断：确认 Attach 被调用
+                Diag("Attach 进入, title=" + dlg.Title);
 
                 // ---- 1. 去掉最小化按钮 ----
                 //
@@ -63,9 +203,10 @@ namespace Clover
                     try
                     {
                         IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                        Diag("SourceInitialized hwnd=" + hwnd);
                         Native.RemoveMinimizeBox(hwnd);
                     }
-                    catch { }
+                    catch (Exception ex) { Diag("SourceInitialized 异常: " + ex.Message); }
                 };
 
                 dlg.Loaded += delegate
@@ -73,9 +214,10 @@ namespace Clover
                     try
                     {
                         IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                        Diag("Loaded hwnd=" + hwnd);
                         Native.RemoveMinimizeBox(hwnd);
                     }
-                    catch { }
+                    catch (Exception ex) { Diag("Loaded 异常: " + ex.Message); }
                 };
 
                 // ---- 2. 拦截最小化命令（保险）----
@@ -158,6 +300,23 @@ namespace Clover
                 return new System.Windows.Interop.WindowInteropHelper(owner).Handle;
             }
             catch { return IntPtr.Zero; }
+        }
+
+        /// <summary>
+        /// 直接写日志文件，不依赖 Log 管道（core 层的 Log 要 Program 接线，
+        /// 排查阶段用最直接的方式确认代码有没有跑到）。
+        /// </summary>
+        static void Diag(string msg)
+        {
+            try
+            {
+                string p = System.IO.Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory, "dialog-chrome.log");
+                System.IO.File.AppendAllText(p,
+                    DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg
+                    + Environment.NewLine);
+            }
+            catch { }
         }
     }
 }

@@ -24,6 +24,15 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
+        // 64 位安全版本：GWL_STYLE 的返回值在 64 位系统上仍是 32 位，
+        // 但 SetWindowLong 在 64 位下是 GetWindowLong 的别名，
+        // 用 LongPtr 更规范（也是很多 WPF 项目踩过坑的地方）。
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+        static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+        static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
         /// <summary>GWL_STYLE：窗口样式位（WS_* 系列）。</summary>
         public const int GWL_STYLE = -16;
 
@@ -35,6 +44,14 @@ namespace Clover
         const uint SWP_NOMOVE = 0x0002;
         const uint SWP_NOZORDER = 0x0004;
         const uint SWP_FRAMECHANGED = 0x0020;
+
+        /// <summary>WM_NCPAINT：重画非客户区（标题栏 / 边框）。</summary>
+        const int WM_NCPAINT = 0x0085;
+
+        // SendMessage 在文件下方已有声明（第 162 行附近）
+
+        [DllImport("user32.dll")]
+        static extern bool InvalidateRect(IntPtr hWnd, IntPtr lpRect, bool bErase);
 
         /// <summary>
         /// 去掉标题栏的最小化按钮。
@@ -60,20 +77,70 @@ namespace Clover
             {
                 if (hwnd == IntPtr.Zero) return;
 
-                int style = GetWindowLong(hwnd, GWL_STYLE);
+                // 64 位系统用 LongPtr，32 位用 Long。
+                // 混用会让 SetWindowLong 写错宽度 —— 这是"改了样式但按钮还在"
+                // 的经典原因。
+                int before;
+                if (IntPtr.Size == 8)
+                    before = (int)GetWindowLongPtr64(hwnd, GWL_STYLE).ToInt64();
+                else
+                    before = GetWindowLong(hwnd, GWL_STYLE);
 
-                // ★ 注意：这里**不**提前 return。
-                //   上一版有 `if ((style & WS_MINIMIZEBOX) == 0) return;`，
-                //   结果第二次调用（Loaded 里）发现样式已经去掉就不再重画，
-                //   标题栏还留着按钮的残影。现在每次都强制重画。
-                if ((style & WS_MINIMIZEBOX) != 0)
-                    SetWindowLong(hwnd, GWL_STYLE, style & ~WS_MINIMIZEBOX);
+                int want = before & ~WS_MINIMIZEBOX;
+
+                if (IntPtr.Size == 8)
+                    SetWindowLongPtr64(hwnd, GWL_STYLE, new IntPtr(want));
+                else
+                    SetWindowLong(hwnd, GWL_STYLE, want);
 
                 // 样式改动后必须重画标题栏，否则按钮还在视觉上留着
                 SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+                // ★ SetWindowPos 只让系统"重新计算"非客户区，但 DWM 合成的
+                //   标题栏位图有缓存，按钮可能还在画面上。
+                //   显式发 WM_NCPAINT 强制重画非客户区（标题栏 + 边框）。
+                SendMessage(hwnd, WM_NCPAINT, new IntPtr(1), IntPtr.Zero);
+
+                // 再触发一次重绘：把客户区也标脏
+                InvalidateRect(hwnd, IntPtr.Zero, true);
+
+                int after;
+                if (IntPtr.Size == 8)
+                    after = (int)GetWindowLongPtr64(hwnd, GWL_STYLE).ToInt64();
+                else
+                    after = GetWindowLong(hwnd, GWL_STYLE);
+
+                // 实测日志：样式位到底改没改、改完还在不在
+                try
+                {
+                    string p = System.IO.Path.Combine(
+                        AppDomain.CurrentDomain.BaseDirectory, "dialog-chrome.log");
+                    System.IO.File.AppendAllText(p,
+                        DateTime.Now.ToString("HH:mm:ss.fff")
+                        + " RemoveMinimizeBox: hwnd=" + hwnd
+                        + " x64=" + (IntPtr.Size == 8)
+                        + " before=0x" + before.ToString("X8")
+                        + " hasMin=" + ((before & WS_MINIMIZEBOX) != 0)
+                        + " after=0x" + after.ToString("X8")
+                        + " hasMinAfter=" + ((after & WS_MINIMIZEBOX) != 0)
+                        + Environment.NewLine);
+                }
+                catch { }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // 不依赖 Log（Native 是最底层，测试套件不一定带 Log.cs）
+                try
+                {
+                    string p = System.IO.Path.Combine(
+                        AppDomain.CurrentDomain.BaseDirectory, "dialog-chrome.log");
+                    System.IO.File.AppendAllText(p,
+                        DateTime.Now.ToString("HH:mm:ss.fff")
+                        + " RemoveMinimizeBox 失败: " + ex.Message + Environment.NewLine);
+                }
+                catch { }
+            }
         }
 
         [DllImport("user32.dll")]
