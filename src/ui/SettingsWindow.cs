@@ -307,10 +307,9 @@ namespace Clover
 
             scroll.Content = col;
 
-            // 设置窗口不占任务栏，最小化后没有可靠的恢复入口。与“整理与隐藏”
-            // 共用只含“最大化/还原 + 关闭”的项目标题栏，避免系统主题留下灰色
-            // 的最小化占位；DialogChrome.Attach 仍会在 Win32 层拦截最小化命令。
-            DialogChrome.UseMaximizeCloseTitleBar(dlg, scroll);
+            // 设置窗口不占任务栏，与“外观”“整理与隐藏”共用只含「关闭」的
+            // 项目标题栏；仍可拖动和从边缘调整大小。
+            DialogChrome.UseCloseOnlyTitleBar(dlg, scroll);
 
             // Esc 关闭
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)

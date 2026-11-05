@@ -45,25 +45,18 @@ namespace Clover
                 dlg.Title = "外观";
                 dlg.Width = 420;
                 dlg.Height = 620;
-                // ── 用系统边框（同「整理与隐藏」窗口）──
-                //
-                // 之前是 None + AllowsTransparency 自绘标题栏，× 要自己画、
-                // 自己处理鼠标事件，还和边缘缩放热区互相抢事件（点 × 没反应）。
-                // 改用系统 WindowStyle 后，× / 拖动 / 缩放都由系统提供，
-                // 四边四角拖拽由 CanResizeWithGrip + WM_NCHITTEST 钩子保留。
+                // 与另外两个长期配置窗口统一使用项目标题栏，只保留「关闭」。
+                // 四边四角拖拽由 WindowChrome + WM_NCHITTEST 钩子保留。
                 dlg.Background = Ui.Bg;
-                // 无边框透明窗口也允许伸缩；右下角另加显式 ResizeGrip，
-                // 四条边另有透明的拖拽热区（见 AttachResizeHotspots）。
+                // 右下角另加显式 ResizeGrip，四条边还有拖拽热区。
                 dlg.ResizeMode = ResizeMode.CanResizeWithGrip;
                 dlg.MinWidth = 360;
                 dlg.MinHeight = 300;
                 // 最大不超过屏幕工作区。初值按主屏算，窗口移动/尺寸变化时
                 // 再按所在屏幕重算（多显示器时上限跟着走）。
                 ApplyWorkAreaLimits(dlg);
-            // 不占任务栏（这是配置对话框，一闪而过）。
-            // 配合 DialogChrome.Attach 去掉最小化按钮 ——
-            // 否则最小化后任务栏没图标，窗口再也找不回来。
-            dlg.ShowInTaskbar = false;
+                // 不占任务栏（这是配置对话框，一闪而过）。
+                dlg.ShowInTaskbar = false;
                 dlg.WindowStartupLocation = owner != null
                     ? WindowStartupLocation.CenterOwner
                     : WindowStartupLocation.CenterScreen;
@@ -858,7 +851,7 @@ namespace Clover
                 layout.Children.Add(footer);
 
                 root.Child = layout;
-                dlg.Content = root;
+                DialogChrome.UseCloseOnlyTitleBar(dlg, root);
 
                 // ---- 边缘拖拽 ----
                 //
@@ -1082,13 +1075,6 @@ namespace Clover
                     {
                         IntPtr h = new System.Windows.Interop.WindowInteropHelper(w).Handle;
                         if (h == IntPtr.Zero) return;
-                        // 去掉 WS_MAXIMIZEBOX：无边框窗口拖到屏幕顶边会被
-                        // Aero Snap 最大化，而最大化后四边四角无法缩放，
-                        // 用户就会觉得"窗口不能调整大小"。
-                        int style = Native.GetWindowLong(h, -16);
-                        style = style & ~0x00010000;   // WS_MAXIMIZEBOX
-                        Native.SetWindowLong(h, -16, style);
-
                         System.Windows.Interop.HwndSource src =
                             System.Windows.Interop.HwndSource.FromHwnd(h);
                         if (src != null) src.AddHook(ResizeHitTest);
@@ -1129,24 +1115,23 @@ namespace Clover
 
                 if (w <= 0 || h <= 0) return IntPtr.Zero;
 
-                // ── 让路给系统标题栏 ──
+                // ── 让路给项目标题栏 ──
                 //
-                // 系统标题栏（WS_CAPTION + WS_SYSMENU）提供 × / 最小化等，
-                // 其命中区域在顶部 ~30px。若我们在这里返回 HTTOP/HTRIGHT，
-                // 系统 × 就点不到。所以：
-                //   1. 顶部（y < 标题栏高）完全不接管 —— 交给系统；
+                // 项目标题栏顶部 36px 内含关闭按钮和拖动区域。若这里返回
+                // HTTOP/HTRIGHT，会吞掉按钮点击。所以：
+                //   1. 顶部（y < 标题栏高）不由这个兼容钩子接管；
                 //   2. 其余三边只在窗口最外圈 6px 接管。
-                double titleBarH = 32;   // 系统标题栏高度（含 × 按钮）
+                double titleBarH = 36;
                 double relY = p.Y;
                 double relX = p.X;
                 double band = ResizeBand;
 
                 bool left   = relX <= band && relY > titleBarH;
                 bool right  = relX >= w - band && relY > titleBarH;
-                bool top    = false;   // 顶部归系统标题栏
+                bool top    = false;   // 顶部由 WindowChrome 处理
                 bool bottom = relY >= h - band;
                 // 只有点落在「边缘带 ∩ 透明边距区」才接管缩放；
-                // 否则会把贴边控件（如标题栏 ×）的点击也吞掉。
+                // 否则会把贴边控件（如标题栏关闭按钮）的点击也吞掉。
 
                 int ht = 0;
                 if (left && top) ht = Native.HTTOPLEFT;

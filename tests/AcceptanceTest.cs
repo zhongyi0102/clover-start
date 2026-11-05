@@ -1509,16 +1509,20 @@ namespace Clover
                 return panel.IsVisible ? "调用 Hide 后仍可见" : "ok";
             });
 
-            // ---------- 外观窗口：能创建并关闭、不抛异常 ----------
+            // ---------- 外观窗口：能创建、标题栏仅关闭，并可正常关闭 ----------
             //
             // 为什么用源码级 + 运行时组合：
             //   · 运行时：真的调 AppearanceDialog.Show()，确认不抛异常
             //     （用后台线程 2 秒后关窗，避免 ShowDialog 阻塞测试）
             //   · 源码级：确认窗口里的控件类型齐全（预设按钮 / 滑块 / 色板 / 输入框）
-            Verify("外观窗口能创建并关闭、不抛异常", delegate
+            Verify("外观窗口能创建且标题栏只保留关闭", delegate
             {
                 bool threw = false;
                 string err = null;
+                bool inspected = false;
+                bool usesProjectChrome = false;
+                bool hiddenFromTaskbar = false;
+                List<string> appearanceActions = null;
 
                 // ShowDialog 是模态阻塞，用后台线程延时关窗
                 System.Threading.Thread closer = new System.Threading.Thread(delegate()
@@ -1532,7 +1536,15 @@ namespace Clover
                             {
                                 foreach (Window w in Application.Current.Windows)
                                 {
-                                    if (w.Title == "外观") { w.Close(); break; }
+                                    if (w.Title == "外观")
+                                    {
+                                        inspected = true;
+                                        usesProjectChrome = w.WindowStyle == WindowStyle.None;
+                                        hiddenFromTaskbar = !w.ShowInTaskbar;
+                                        appearanceActions = CollectDialogCaptionActions(w);
+                                        w.Close();
+                                        break;
+                                    }
                                 }
                             }));
                         }
@@ -1554,7 +1566,15 @@ namespace Clover
                 }
 
                 if (threw) return "外观窗口抛异常: " + err;
-                return "ok（创建 → 显示 → 关闭，全程无异常）";
+                if (!inspected) return "没有找到正在显示的外观窗口";
+                if (!usesProjectChrome) return "外观窗口仍在使用系统标题栏";
+                if (!hiddenFromTaskbar) return "外观窗口不应占任务栏";
+                if (appearanceActions == null || appearanceActions.Count != 1
+                    || appearanceActions[0] != "关闭窗口")
+                    return "标题栏应只有关闭，实际："
+                        + (appearanceActions == null ? "(未读取)"
+                            : string.Join(" / ", appearanceActions.ToArray()));
+                return "ok（项目标题栏，仅关闭）";
             });
 
             // ---------- 外观窗口的控件齐全（源码级）----------
@@ -1591,7 +1611,7 @@ namespace Clover
                     return "外观窗口缺最小尺寸保护（360x300）";
                 if (text.IndexOf("ApplyWorkAreaLimits", StringComparison.Ordinal) < 0)
                     return "外观窗口缺工作区上限（MaxWidth/MaxHeight）";
-                if (text.IndexOf("AttachResizeHotspots", StringComparison.Ordinal) < 0)
+                if (text.IndexOf("AttachResizeHook", StringComparison.Ordinal) < 0)
                     return "外观窗口缺四边拖拽热区";
                 if (text.IndexOf("Native.HTLEFT", StringComparison.Ordinal) < 0)
                     return "边缘热区没发 WM_NCLBUTTONDOWN";
@@ -1640,7 +1660,7 @@ namespace Clover
                 return "ok（区块/路径/三个按钮/接线/校验/锚点/默认项/数量 全在）";
             });
 
-            Verify("★设置窗口标题栏没有最小化按钮", delegate
+            Verify("★设置窗口标题栏只保留关闭按钮", delegate
             {
                 Window dlg = null;
                 try
@@ -1652,14 +1672,15 @@ namespace Clover
                     if (dlg.WindowStyle != WindowStyle.None) return "设置窗口仍在使用系统标题栏";
 
                     List<string> actions = CollectDialogCaptionActions(dlg);
-                    if (actions.Count != 2)
-                        return "标题栏应有 2 个动作，实际 " + actions.Count + "："
+                    if (actions.Count != 1)
+                        return "标题栏应有 1 个动作，实际 " + actions.Count + "："
                             + string.Join(" / ", actions.ToArray());
-                    bool hasMaximize = actions.Contains("最大化窗口") || actions.Contains("还原窗口");
-                    if (!hasMaximize || !actions.Contains("关闭窗口"))
-                        return "未保留最大化/还原与关闭：" + string.Join(" / ", actions.ToArray());
-                    if (actions.Contains("最小化窗口")) return "仍存在最小化按钮";
-                    return "ok（最大化/还原 + 关闭）";
+                    if (actions[0] != "关闭窗口")
+                        return "标题栏不是仅关闭：" + string.Join(" / ", actions.ToArray());
+                    if (actions.Contains("最小化窗口") || actions.Contains("最大化窗口")
+                        || actions.Contains("还原窗口"))
+                        return "仍存在最小化/最大化/还原按钮";
+                    return "ok（仅关闭）";
                 }
                 catch (Exception ex)
                 {

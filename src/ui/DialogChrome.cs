@@ -43,20 +43,24 @@ namespace Clover
     static class DialogChrome
     {
         /// <summary>
-        /// 为可调整大小的长期窗口使用项目标题栏。
+        /// 为可调整大小的长期配置窗口使用项目标题栏。
         ///
-        /// 系统标题栏在保留最大化能力时，部分 Windows 主题即使已经清掉
-        /// WS_MINIMIZEBOX，仍会绘制一个灰色的最小化占位。自绘后只提供
-        /// 「最大化/还原」与「关闭」，因此不会再出现那个无效入口。
+        /// 这些窗口不占任务栏，因此标题栏只提供「关闭」：不显示最小化的
+        /// 灰色占位，也不提供没有必要的最大化/还原入口。窗口仍可拖动并从
+        /// 四边调整大小。
         /// </summary>
-        public static void UseMaximizeCloseTitleBar(Window dlg, UIElement content)
+        public static void UseCloseOnlyTitleBar(Window dlg, UIElement content)
         {
             try
             {
                 if (dlg == null) return;
 
+                // 旧版位置记录可能保存了最大化状态；只保留关闭按钮后不能让
+                // 窗口以无还原入口的状态打开。
+                if (dlg.WindowState == WindowState.Maximized)
+                    dlg.WindowState = WindowState.Normal;
+
                 dlg.WindowStyle = WindowStyle.None;
-                dlg.ResizeMode = ResizeMode.CanResize;
 
                 WindowChrome chrome = new WindowChrome();
                 chrome.CaptionHeight = 0;
@@ -66,12 +70,14 @@ namespace Clover
                 chrome.UseAeroCaptionButtons = false;
                 WindowChrome.SetWindowChrome(dlg, chrome);
 
-                if (content != null) dlg.Content = BuildMaximizeCloseShell(dlg, content);
+                AttachCloseOnlySystemBehavior(dlg);
+
+                if (content != null) dlg.Content = BuildCloseOnlyShell(dlg, content);
             }
             catch { }
         }
 
-        static UIElement BuildMaximizeCloseShell(Window dlg, UIElement content)
+        static UIElement BuildCloseOnlyShell(Window dlg, UIElement content)
         {
             Border outer = new Border();
             outer.Background = Ui.Bg;
@@ -107,39 +113,12 @@ namespace Clover
             actions.Orientation = Orientation.Horizontal;
             actions.VerticalAlignment = VerticalAlignment.Stretch;
 
-            Button maximize = MakeCaptionButton("\uE922", "最大化", delegate
-            {
-                try
-                {
-                    if (dlg.WindowState == WindowState.Maximized)
-                        SystemCommands.RestoreWindow(dlg);
-                    else
-                        SystemCommands.MaximizeWindow(dlg);
-                }
-                catch { }
-            });
-            actions.Children.Add(maximize);
-
             Button close = MakeCaptionButton("\uE711", "关闭", delegate
             {
                 try { SystemCommands.CloseWindow(dlg); }
                 catch { try { dlg.Close(); } catch { } }
             });
             actions.Children.Add(close);
-
-            Action updateMaximize = delegate
-            {
-                try
-                {
-                    bool restored = dlg.WindowState != WindowState.Maximized;
-                    maximize.Content = MakeCaptionGlyph(restored ? "\uE922" : "\uE923");
-                    maximize.ToolTip = restored ? "最大化" : "还原";
-                    AutomationProperties.SetName(maximize, restored ? "最大化窗口" : "还原窗口");
-                }
-                catch { }
-            };
-            dlg.StateChanged += delegate { updateMaximize(); };
-            updateMaximize();
 
             Grid.SetColumn(actions, 1);
             barGrid.Children.Add(actions);
@@ -149,22 +128,16 @@ namespace Clover
             {
                 if (IsDescendantOf(e.OriginalSource as DependencyObject, actions)) return;
 
-                if (e.ClickCount == 2)
+                // 双击标题栏不再切换最大化；消费第二次按下，避免误触拖动。
+                if (e.ClickCount > 1)
                 {
-                    try
-                    {
-                        if (dlg.WindowState == WindowState.Maximized)
-                            SystemCommands.RestoreWindow(dlg);
-                        else
-                            SystemCommands.MaximizeWindow(dlg);
-                    }
-                    catch { }
                     e.Handled = true;
                     return;
                 }
 
                 try { dlg.DragMove(); }
                 catch { }
+                e.Handled = true;
             };
 
             Grid.SetRow(bar, 0);
@@ -175,6 +148,64 @@ namespace Clover
 
             outer.Child = root;
             return outer;
+        }
+
+        /// <summary>
+        /// 自绘按钮之外再从系统层禁用最小化/最大化，覆盖快捷键、系统菜单和
+        /// Aero Snap；窗口边框缩放能力由 WS_THICKFRAME / WindowChrome 保留。
+        /// </summary>
+        static void AttachCloseOnlySystemBehavior(Window dlg)
+        {
+            try
+            {
+                dlg.SourceInitialized += delegate
+                {
+                    try
+                    {
+                        IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                        Native.RemoveMinimizeAndMaximizeBoxes(hwnd);
+
+                        System.Windows.Interop.HwndSource src =
+                            System.Windows.Interop.HwndSource.FromHwnd(hwnd);
+                        if (src != null) src.AddHook(BlockMinimizeAndMaximize);
+                    }
+                    catch { }
+                };
+
+                // 某些主题会在窗口首次布局时重写样式，再清一次作为兜底。
+                dlg.Loaded += delegate
+                {
+                    try
+                    {
+                        IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                        Native.RemoveMinimizeAndMaximizeBoxes(hwnd);
+                    }
+                    catch { }
+                };
+            }
+            catch { }
+        }
+
+        static IntPtr BlockMinimizeAndMaximize(IntPtr hwnd, int msg, IntPtr wParam,
+            IntPtr lParam, ref bool handled)
+        {
+            try
+            {
+                const int WM_SYSCOMMAND = 0x0112;
+                const int SC_MINIMIZE = 0xF020;
+                const int SC_MAXIMIZE = 0xF030;
+
+                if (msg != WM_SYSCOMMAND) return IntPtr.Zero;
+
+                int cmd = wParam.ToInt32() & 0xFFF0;
+                if (cmd == SC_MINIMIZE || cmd == SC_MAXIMIZE)
+                {
+                    handled = true;
+                    return IntPtr.Zero;
+                }
+            }
+            catch { }
+            return IntPtr.Zero;
         }
 
         static Button MakeCaptionButton(string glyph, string name, Action onClick)

@@ -117,9 +117,9 @@ namespace Clover
             Grid.SetRow(pageHost, 1);
             layout.Children.Add(pageHost);
 
-            // 原生标题栏即使清掉 WS_MINIMIZEBOX，在部分 Windows 主题下仍会
-            // 留下截图中的灰色“—”占位。改用只含最大化/还原与关闭的标题栏。
-            DialogChrome.UseMaximizeCloseTitleBar(dlg, layout);
+            // 配置窗口不占任务栏，统一使用只含「关闭」的项目标题栏；仍可
+            // 拖动和从边缘调整大小。
+            DialogChrome.UseCloseOnlyTitleBar(dlg, layout);
 
             // Esc：先清搜索，再关闭（不影响主面板）
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
@@ -316,7 +316,7 @@ namespace Clover
             catch { return false; }
         }
 
-        /// <summary>测试用：标题栏动作的可访问名称（应只有最大化/还原和关闭）。</summary>
+        /// <summary>测试用：标题栏动作的可访问名称（应只有关闭）。</summary>
         internal List<string> TestCaptionActions()
         {
             List<string> actions = new List<string>();

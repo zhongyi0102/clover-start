@@ -30,6 +30,9 @@ namespace Clover
         /// <summary>WS_MINIMIZEBOX：标题栏的最小化按钮。</summary>
         public const int WS_MINIMIZEBOX = 0x00020000;
 
+        /// <summary>WS_MAXIMIZEBOX：标题栏的最大化按钮。</summary>
+        public const int WS_MAXIMIZEBOX = 0x00010000;
+
         // SetWindowPos 的 uFlags（只列本文件用到的）
         const uint SWP_NOSIZE = 0x0001;
         const uint SWP_NOMOVE = 0x0002;
@@ -56,15 +59,33 @@ namespace Clover
         /// </summary>
         public static void RemoveMinimizeBox(IntPtr hwnd)
         {
+            RemoveCaptionBoxes(hwnd, WS_MINIMIZEBOX, "RemoveMinimizeBox");
+        }
+
+        /// <summary>
+        /// 去掉标题栏的最小化与最大化能力，只保留关闭。
+        ///
+        /// 自绘标题栏虽然不会画这两个按钮，但仍需清掉 Win32 样式位：
+        /// 否则 Win+方向键、Aero Snap 或系统菜单仍可能把窗口最小化/最大化，
+        /// 而不占任务栏的配置窗口没有可靠的恢复入口。
+        /// </summary>
+        public static void RemoveMinimizeAndMaximizeBoxes(IntPtr hwnd)
+        {
+            RemoveCaptionBoxes(hwnd, WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+                "RemoveMinimizeAndMaximizeBoxes");
+        }
+
+        static void RemoveCaptionBoxes(IntPtr hwnd, int mask, string operation)
+        {
             try
             {
                 if (hwnd == IntPtr.Zero) return;
 
                 int style = GetWindowLong(hwnd, GWL_STYLE);
-                bool hadMin = (style & WS_MINIMIZEBOX) != 0;
+                bool hadBoxes = (style & mask) != 0;
 
-                if (hadMin)
-                    SetWindowLong(hwnd, GWL_STYLE, style & ~WS_MINIMIZEBOX);
+                if (hadBoxes)
+                    SetWindowLong(hwnd, GWL_STYLE, style & ~mask);
 
                 // ── 强制系统重建非客户区 ──
                 //
@@ -83,14 +104,14 @@ namespace Clover
                 SendMessage(hwnd, WM_NCPAINT, new IntPtr(1), IntPtr.Zero);
 
                 // 诊断：确认每次调用的样式状态
-                Diag("RemoveMinimizeBox: hwnd=" + hwnd
+                Diag(operation + ": hwnd=" + hwnd
                     + " before=0x" + style.ToString("X8")
-                    + " hadMin=" + hadMin
+                    + " removed=0x" + (style & mask).ToString("X8")
                     + " after=0x" + GetWindowLong(hwnd, GWL_STYLE).ToString("X8"));
             }
             catch (Exception ex)
             {
-                Diag("RemoveMinimizeBox 失败: " + ex.Message);
+                Diag(operation + " 失败: " + ex.Message);
             }
         }
 

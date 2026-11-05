@@ -119,16 +119,16 @@ namespace Clover
                 label + "：构造后页面有内容");
 
             List<string> captionActions = dlg.TestCaptionActions();
-            Check(captionActions.Count == 2,
-                "★" + label + "：标题栏只有两个动作",
+            Check(captionActions.Count == 1,
+                "★" + label + "：标题栏只有一个动作",
                 string.Join(" / ", captionActions.ToArray()));
-            bool hasMaximizeAction = captionActions.Contains("最大化窗口")
-                || captionActions.Contains("还原窗口");
-            Check(hasMaximizeAction && captionActions.Contains("关闭窗口"),
-                "★" + label + "：标题栏保留最大化/还原与关闭",
+            Check(captionActions.Count == 1 && captionActions[0] == "关闭窗口",
+                "★" + label + "：标题栏只保留关闭",
                 string.Join(" / ", captionActions.ToArray()));
-            Check(!captionActions.Contains("最小化窗口"),
-                "★★" + label + "：标题栏没有最小化按钮");
+            Check(!captionActions.Contains("最小化窗口")
+                    && !captionActions.Contains("最大化窗口")
+                    && !captionActions.Contains("还原窗口"),
+                "★★" + label + "：标题栏没有最小化/最大化/还原按钮");
 
             // ---- 切到另一个标签 ----
             OrganizeDialog.Tab other = (initial == OrganizeDialog.Tab.Desktop)
