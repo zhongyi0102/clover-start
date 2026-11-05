@@ -3563,6 +3563,45 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "设置低价值标记"); }
         }
 
+        /// <summary>磁贴右键菜单里「常用」相关的动作。</summary>
+        internal enum CommonMenuAction
+        {
+            /// <summary>不显示任何常用相关项。</summary>
+            None = 0,
+            /// <summary>「添加到常用」——固定到常用页。</summary>
+            Add,
+            /// <summary>「取消固定到常用」——只取消固定，保留使用记录。</summary>
+            Unpin,
+            /// <summary>「从常用移除」——取消固定 + 清零使用记录。</summary>
+            Remove
+        }
+
+        /// <summary>
+        /// 决定磁贴右键菜单该显示哪个「常用」动作。
+        ///
+        /// 抽成纯静态函数是为了能被测试直接调用 —— 这里曾经用
+        /// `inCommon = pinned || Usage > 0` 当门控，导致「全部」页里
+        /// **任何用过一次**的应用都既不显示「添加到常用」也不显示别的
+        /// （不在常用页 + 未固定 → 三个分支全不命中），
+        /// 而绝大多数应用都被启动过，于是这个功能形同不存在。
+        ///
+        /// 判定规则：
+        ///   · 在「常用」页            → Remove（取消固定 + 清零，彻底移出）
+        ///   · 不在常用页 + 已固定      → Unpin（只取消固定，保留使用记录）
+        ///   · 不在常用页 + 未固定      → Add（无论有没有使用记录，都能加）
+        /// </summary>
+        internal static CommonMenuAction CommonMenuFor(bool showingCommon, bool pinned, int usage)
+        {
+            if (showingCommon)
+            {
+                // 常用页里出现的每一条都能移除：固定项和纯使用记录项都算
+                return (pinned || usage > 0) ? CommonMenuAction.Remove : CommonMenuAction.Add;
+            }
+
+            // 不在常用页：已固定 → 取消固定；未固定 → 添加到常用
+            return pinned ? CommonMenuAction.Unpin : CommonMenuAction.Add;
+        }
+
         /// <summary>
         /// 固定 / 取消固定到「常用」（右键「添加到常用」/「取消固定到常用」）。
         /// 写入 `settings.json` 的 `pinnedCommon`，然后立即重渲染。
@@ -3651,51 +3690,56 @@ namespace Clover
                 cm.Items.Add(hide);
             }
 
-            // ---- 常用名单：添加到常用 / 从常用移除 ----
+            // ---- 常用名单：添加到常用 / 取消固定 / 从常用移除 ----
             //
-            // 「添加到常用」在**任何分类**都能用（包括「全部」页）：
+            // 「添加到常用」必须在**任何分类**都出现（包括「全部」页）：
             // 用户是在「全部」里翻到某个应用，才想起来"这个我要常用"。
-            // 已固定的条目反过来显示「取消固定」，同一位置切换。
+            //
+            // ★ 这里曾用 `inCommon = pinned || a.Usage > 0` 做门控，结果
+            //   「全部」页里**任何用过一次**的应用都落进 inCommon，却又不在
+            //   「常用」页、也没固定 —— 三个分支全不命中，菜单项直接消失。
+            //   绝大多数应用都被启动过，于是「添加到常用」基本看不到。
+            //   正确做法：按状态判定，不用"是否在常用"当门。
             bool pinned = IsPinnedCommon(a);
-            bool inCommon = pinned || a.Usage > 0;
-
-            if (!inCommon)
+            switch (CommonMenuFor(showingCommon, pinned, a.Usage))
             {
-                cm.Items.Add(new Separator());
+                case CommonMenuAction.Add:
+                    cm.Items.Add(new Separator());
 
-                MenuItem add = new MenuItem();
-                add.Header = "添加到常用";
-                add.ToolTip = "固定到「常用」页，不占用使用榜名额";
-                add.Click += delegate { SetPinnedCommon(a, true); };
-                cm.Items.Add(add);
-            }
-            else if (showingCommon)
-            {
-                cm.Items.Add(new Separator());
+                    MenuItem add = new MenuItem();
+                    add.Header = "添加到常用";
+                    add.ToolTip = "固定到「常用」页，不占用使用榜名额";
+                    add.Click += delegate { SetPinnedCommon(a, true); };
+                    cm.Items.Add(add);
+                    break;
 
-                MenuItem rm = new MenuItem();
-                rm.Header = "从常用移除";
-                rm.ToolTip = pinned ? "同时取消固定并清零使用记录（彻底移出常用）" : "清零使用记录";
-                rm.Click += delegate { RemoveFromCommon(a); };
-                cm.Items.Add(rm);
-            }
-            else if (pinned)
-            {
-                // 在「全部」页看到已固定项 → 提供取消固定。
-                //
-                // 这里只取消固定、**不清使用记录**（与「从常用移除」刻意不同）：
-                // 取消固定是"别再替我钉住了"，不是"我不用它了"。
-                // 有使用记录时它仍会留在常用页，所以文案必须如实说明，
-                // 否则用户点了发现它还在，会认为按钮失效。
-                cm.Items.Add(new Separator());
+                case CommonMenuAction.Remove:
+                    cm.Items.Add(new Separator());
 
-                MenuItem unpin = new MenuItem();
-                unpin.Header = "取消固定到常用";
-                unpin.ToolTip = a.Usage > 0
-                    ? "只取消固定；仍有使用记录，所以它可能继续留在「常用」页。要彻底移出请用「从常用移除」"
-                    : "取消固定后不再出现在「常用」页（无使用记录）";
-                unpin.Click += delegate { SetPinnedCommon(a, false); };
-                cm.Items.Add(unpin);
+                    MenuItem rm = new MenuItem();
+                    rm.Header = "从常用移除";
+                    rm.ToolTip = pinned ? "同时取消固定并清零使用记录（彻底移出常用）" : "清零使用记录";
+                    rm.Click += delegate { RemoveFromCommon(a); };
+                    cm.Items.Add(rm);
+                    break;
+
+                case CommonMenuAction.Unpin:
+                    // 「全部」页看到已固定项 → 取消固定。
+                    //
+                    // 这里只取消固定、**不清使用记录**（与「从常用移除」刻意不同）：
+                    // 取消固定是"别再替我钉住了"，不是"我不用它了"。
+                    // 有使用记录时它仍会留在常用页，所以文案必须如实说明，
+                    // 否则用户点了发现它还在，会认为按钮失效。
+                    cm.Items.Add(new Separator());
+
+                    MenuItem unpin = new MenuItem();
+                    unpin.Header = "取消固定到常用";
+                    unpin.ToolTip = a.Usage > 0
+                        ? "只取消固定；仍有使用记录，所以它可能继续留在「常用」页。要彻底移出请用「从常用移除」"
+                        : "取消固定后不再出现在「常用」页（无使用记录）";
+                    unpin.Click += delegate { SetPinnedCommon(a, false); };
+                    cm.Items.Add(unpin);
+                    break;
             }
 
             // ---- 低价值标记（手动纠正，优先于自动规则）----

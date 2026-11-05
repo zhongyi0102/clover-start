@@ -48,10 +48,53 @@ namespace Clover
             TestDedupAndCase();
             TestNoCap();
             TestUsageFilterReal();     // ★ 直接测生产函数 PanelWindow.IsCommonByUsage
+            TestMenuActionReal();      // ★ 直接测生产函数 PanelWindow.CommonMenuFor
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             Environment.Exit(failed == 0 ? 0 : 1);
+        }
+
+        // ---------- 6. ★生产行为：右键菜单项选择 ----------
+        //
+        // 回归背景：菜单曾经用 `inCommon = pinned || Usage > 0` 当门控。
+        // 在「全部」页里，任何用过一次的应用都落进 inCommon，却又不在常用页、
+        // 也没固定 —— 三个分支全不命中，菜单项直接消失。
+        // 绝大多数应用都被启动过，所以「添加到常用」几乎看不到。
+        static void TestMenuActionReal()
+        {
+            Console.WriteLine("--- 6. ★右键菜单项选择（生产函数 CommonMenuFor）---");
+
+            // 「全部」页（showingCommon=false）
+            Check(PanelWindow.CommonMenuFor(false, false, 0) == PanelWindow.CommonMenuAction.Add,
+                "★全部页 + 未固定 + 无使用记录 → 添加到常用");
+            Check(PanelWindow.CommonMenuFor(false, false, 7) == PanelWindow.CommonMenuAction.Add,
+                "★全部页 + 未固定 + 有使用记录 → 仍显示添加到常用（回归：原实现此处什么都不显示）");
+            Check(PanelWindow.CommonMenuFor(false, true, 0) == PanelWindow.CommonMenuAction.Unpin,
+                "全部页 + 已固定 → 取消固定到常用");
+            Check(PanelWindow.CommonMenuFor(false, true, 9) == PanelWindow.CommonMenuAction.Unpin,
+                "全部页 + 已固定 + 有使用记录 → 取消固定到常用");
+
+            // 「常用」页（showingCommon=true）
+            Check(PanelWindow.CommonMenuFor(true, true, 0) == PanelWindow.CommonMenuAction.Remove,
+                "常用页 + 已固定 → 从常用移除");
+            Check(PanelWindow.CommonMenuFor(true, false, 3) == PanelWindow.CommonMenuAction.Remove,
+                "常用页 + 未固定但有使用记录 → 从常用移除");
+
+            // 源码级：菜单里不得再出现旧的 inCommon 门控
+            string src = ReadSource();
+            if (src == null)
+            {
+                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow.Nav.cs）");
+            }
+            else
+            {
+                Check(!src.Contains("bool inCommon = pinned || a.Usage > 0"),
+                    "★菜单不再用 inCommon = pinned || Usage > 0 当门控");
+                Check(src.Contains("CommonMenuFor(showingCommon, pinned, a.Usage)"),
+                    "★菜单改走 CommonMenuFor 判定");
+            }
+            Console.WriteLine();
         }
 
         // ---------- 5. ★生产行为：使用榜分支必须过滤隐藏项 ----------
