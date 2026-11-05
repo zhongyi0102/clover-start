@@ -403,6 +403,8 @@
 
 ### 修复（Fixed）
 
+- 修复 worktree 残留 PowerShell 缓存导致的状态误报。
+
 - **外观参数只在「毛玻璃背景」菜单开关时生效**（本阶段发现的真实 bug）
   - `BlurRadius` / `TintStrength` / `Brightness` / `TintColor` 只在 `ApplyGlassSetting()` 里注入，
     而它**只被菜单开关调用**。启动走 `RefreshGlassSoon`、切主题走 `ApplyTheme` —— 两条路径都没注入
