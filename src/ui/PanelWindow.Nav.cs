@@ -941,6 +941,10 @@ namespace Clover
         ///
         /// 人工固定（`settings.PinnedCommon`）的条目**必定**在列表里，
         /// 哪怕 Usage 为 0；两者按路径去重。
+        ///
+        /// **两条分支都必须过滤 `Hidden`**：隐藏的语义是「不在任何分类里显示」
+        /// （见 HideReason），只在其中一条分支过滤，会让"隐藏但有使用记录"的
+        /// 应用重新出现在常用页上 —— 用户刚把它藏起来，它却还在。
         /// </summary>
         List<AppItem> CommonApps()
         {
@@ -962,13 +966,28 @@ namespace Clover
             // ---- 2. 使用榜（Usage > 0）----
             foreach (AppItem a in catalog.Apps)
             {
-                if (a == null || a.Usage <= 0) continue;
-                if (string.IsNullOrEmpty(a.Path)) continue;
+                if (!IsCommonByUsage(a)) continue;
                 if (seen.Add(a.Path)) list.Add(a);
             }
 
             list.Sort(RenderCompare);
             return list;
+        }
+
+        /// <summary>
+        /// 单条应用能否**因使用记录**进入「常用」页。
+        ///
+        /// 抽成静态纯函数是为了能被测试直接调用 —— 这里曾经漏掉 `Hidden` 判断，
+        /// 导致"隐藏但有使用记录"的应用重新出现在常用页上（用户刚藏起来，它却还在）。
+        /// 判定与「人工固定」分支必须一致：已隐藏的一律不进。
+        /// </summary>
+        internal static bool IsCommonByUsage(AppItem a)
+        {
+            if (a == null) return false;
+            if (a.Hidden) return false;                       // 已隐藏 → 不进
+            if (a.Usage <= 0) return false;                   // 没有使用记录 → 不进
+            if (string.IsNullOrEmpty(a.Path)) return false;   // 无路径 → 无法去重/固定
+            return true;
         }
 
         /// <summary>按路径找应用（忽略大小写）；找不到返回 null。</summary>
@@ -3656,18 +3675,25 @@ namespace Clover
 
                 MenuItem rm = new MenuItem();
                 rm.Header = "从常用移除";
-                rm.ToolTip = pinned ? "同时取消固定" : "清零使用记录";
+                rm.ToolTip = pinned ? "同时取消固定并清零使用记录（彻底移出常用）" : "清零使用记录";
                 rm.Click += delegate { RemoveFromCommon(a); };
                 cm.Items.Add(rm);
             }
             else if (pinned)
             {
-                // 在「全部」页看到已固定项 → 提供取消固定
+                // 在「全部」页看到已固定项 → 提供取消固定。
+                //
+                // 这里只取消固定、**不清使用记录**（与「从常用移除」刻意不同）：
+                // 取消固定是"别再替我钉住了"，不是"我不用它了"。
+                // 有使用记录时它仍会留在常用页，所以文案必须如实说明，
+                // 否则用户点了发现它还在，会认为按钮失效。
                 cm.Items.Add(new Separator());
 
                 MenuItem unpin = new MenuItem();
                 unpin.Header = "取消固定到常用";
-                unpin.ToolTip = "不再出现在「常用」页（使用记录保留）";
+                unpin.ToolTip = a.Usage > 0
+                    ? "只取消固定；仍有使用记录，所以它可能继续留在「常用」页。要彻底移出请用「从常用移除」"
+                    : "取消固定后不再出现在「常用」页（无使用记录）";
                 unpin.Click += delegate { SetPinnedCommon(a, false); };
                 cm.Items.Add(unpin);
             }

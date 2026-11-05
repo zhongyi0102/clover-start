@@ -40,17 +40,79 @@ namespace Clover
 
         static void Main()
         {
-            Console.WriteLine("=== 常用名单测试（人工固定 + 无上限）===");
+            Console.WriteLine("=== 常用名单测试（人工固定 + 无上限 + 隐藏过滤）===");
             Console.WriteLine();
 
             TestDefault();
             TestRoundTrip();
             TestDedupAndCase();
             TestNoCap();
+            TestUsageFilterReal();     // ★ 直接测生产函数 PanelWindow.IsCommonByUsage
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             Environment.Exit(failed == 0 ? 0 : 1);
+        }
+
+        // ---------- 5. ★生产行为：使用榜分支必须过滤隐藏项 ----------
+        //
+        // 回归背景：CommonApps() 的 usage 分支曾经只判 Usage > 0，
+        // 没判 Hidden —— 隐藏但有使用记录的应用会重新出现在「常用」页，
+        // 用户刚把它藏起来却还在。这里直接调用生产函数，不复制逻辑。
+        static void TestUsageFilterReal()
+        {
+            Console.WriteLine("--- 5. ★使用榜分支：隐藏项必须被过滤（生产函数）---");
+
+            AppItem normal = new AppItem();
+            normal.Path = @"C:\Apps\wechat.exe";
+            normal.Usage = 5;
+            normal.Hidden = false;
+
+            AppItem hidden = new AppItem();
+            hidden.Path = @"C:\Apps\secret.exe";
+            hidden.Usage = 99;          // 使用记录很多，但已隐藏
+            hidden.Hidden = true;
+
+            AppItem zero = new AppItem();
+            zero.Path = @"C:\Apps\never.exe";
+            zero.Usage = 0;
+            zero.Hidden = false;
+
+            AppItem noPath = new AppItem();
+            noPath.Path = "";
+            noPath.Usage = 3;
+            noPath.Hidden = false;
+
+            Check(PanelWindow.IsCommonByUsage(normal), "★有使用记录 + 未隐藏 → 进常用");
+            Check(!PanelWindow.IsCommonByUsage(hidden),
+                "★有使用记录但已隐藏 → 不进常用（回归：原实现会漏进来）");
+            Check(!PanelWindow.IsCommonByUsage(zero), "无使用记录 → 不进常用");
+            Check(!PanelWindow.IsCommonByUsage(noPath), "无路径 → 不进常用");
+            Check(!PanelWindow.IsCommonByUsage(null), "null → 不进常用");
+
+            // 两条分支一致：人工固定分支同样跳过隐藏项（源码级断言，
+            // 因为固定分支在实例方法里、依赖 catalog，不便直接构造）
+            string src = ReadSource();
+            if (src == null)
+            {
+                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow.Nav.cs）");
+            }
+            else
+            {
+                int start = src.IndexOf("List<AppItem> CommonApps()");
+                int end = start < 0 ? -1 : src.IndexOf("internal static bool IsCommonByUsage", start);
+                if (start < 0 || end < 0)
+                {
+                    Check(false, "★找得到 CommonApps() 与 IsCommonByUsage()");
+                }
+                else
+                {
+                    string body = src.Substring(start, end - start);
+                    Check(body.Contains("hit.Hidden"), "★人工固定分支过滤 Hidden");
+                    Check(body.Contains("IsCommonByUsage(a)"), "★使用榜分支走统一判定（含 Hidden）");
+                }
+            }
+            Console.WriteLine();
         }
 
         // ---------- 1. 默认空 ----------
