@@ -210,6 +210,17 @@ namespace Clover
         /// </summary>
         public List<string> LowValueUnmarked = new List<string>();
 
+        /// <summary>
+        /// **手动固定到「常用」**的应用路径（右键「添加到常用」写入）。
+        ///
+        /// 为什么不直接给 usage.json 加计数：
+        ///   · 计数会被「常用」按使用次数排序挤下去，用户点了可能看不见变化
+        ///   · 会污染「使用次数」的真实语义（没启动却 +1）
+        /// 这里是一份独立的人工名单：命中的应用**必定**出现在「常用」，
+        /// 且不占用使用榜的名额。
+        /// </summary>
+        public List<string> PinnedCommon = new List<string>();
+
         // ========== 桌面保持无快捷方式 ==========
 
         /// <summary>总开关：桌面快捷方式自动移到回收站。默认关闭。</summary>
@@ -381,6 +392,7 @@ namespace Clover
                 }
                 s.LowValueMarked = ReadStringList(d, "lowValueMarked");
                 s.LowValueUnmarked = ReadStringList(d, "lowValueUnmarked");
+                s.PinnedCommon = ReadStringList(d, "pinnedCommon");
 
                 // ---- 桌面保持无快捷方式 ----
                 s.DesktopCleanEnabled = ReadBool(d, "desktopCleanEnabled", false);
@@ -452,6 +464,7 @@ namespace Clover
                 d["filesSort"] = FilesSort;
                 d["lowValueMarked"] = LowValueMarked;
                 d["lowValueUnmarked"] = LowValueUnmarked;
+                d["pinnedCommon"] = PinnedCommon;
                 d["desktopCleanEnabled"] = DesktopCleanEnabled;
                 d["desktopCleanExisting"] = DesktopCleanExisting;
                 d["desktopEnabledAt"] = DesktopEnabledAt;

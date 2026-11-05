@@ -160,6 +160,7 @@ Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
     @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
 
+
 # 「文件」标签：自定义文件夹清单（路径校验 / 去重 / 上限 / 重命名 / 容错）
 Invoke-Suite 'FileFoldersTest' $baseRefs `
     (@((Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileFoldersTest.cs')))
@@ -237,6 +238,11 @@ $allSrc = @(
         Where-Object { $_.Name -ne 'Program.cs' } |
         ForEach-Object { $_.FullName })
 )
+
+# 「常用」名单：右键「添加到常用」的人工固定 + 无上限 + 隐藏项过滤。
+# 需要链接 ui 源码：直接调用生产函数 PanelWindow.IsCommonByUsage()。
+Invoke-Suite 'CommonPinTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'CommonPinTest.cs')))
 
 # CrashGuardTest 要真正调用 CrashGuard（依赖 ErrorLog/Ui），所以走全量源码
 Invoke-Suite 'CrashGuardTest' $wpfRefs `

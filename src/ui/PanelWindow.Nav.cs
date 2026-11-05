@@ -932,16 +932,94 @@ namespace Clover
             RenderApps();
         }
 
+        /// <summary>
+        /// 「常用」页的条目：使用榜 + 人工固定名单。
+        ///
+        /// **不设上限**：早期版本截断到前 12 个，导致右键「添加到常用」在
+        /// 使用榜已满时点了没反应 —— 用户看不到任何变化，以为功能坏了。
+        /// 现在全部列出，靠磁贴区自身滚动承载。
+        ///
+        /// 人工固定（`settings.PinnedCommon`）的条目**必定**在列表里，
+        /// 哪怕 Usage 为 0；两者按路径去重。
+        ///
+        /// **两条分支都必须过滤 `Hidden`**：隐藏的语义是「不在任何分类里显示」
+        /// （见 HideReason），只在其中一条分支过滤，会让"隐藏但有使用记录"的
+        /// 应用重新出现在常用页上 —— 用户刚把它藏起来，它却还在。
+        /// </summary>
         List<AppItem> CommonApps()
         {
             List<AppItem> list = new List<AppItem>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // ---- 1. 人工固定的（右键「添加到常用」）----
+            if (settings != null && settings.PinnedCommon != null && settings.PinnedCommon.Count > 0)
+            {
+                foreach (string p in settings.PinnedCommon)
+                {
+                    if (string.IsNullOrEmpty(p)) continue;
+                    AppItem hit = FindAppByPath(p);
+                    if (hit == null || hit.Hidden) continue;   // 已卸载 / 已隐藏 → 跳过
+                    if (seen.Add(hit.Path)) list.Add(hit);
+                }
+            }
+
+            // ---- 2. 使用榜（Usage > 0）----
             foreach (AppItem a in catalog.Apps)
             {
-                if (a.Usage > 0) list.Add(a);
+                if (!IsCommonByUsage(a)) continue;
+                if (seen.Add(a.Path)) list.Add(a);
             }
+
             list.Sort(RenderCompare);
-            if (list.Count > 12) list = list.GetRange(0, 12);
             return list;
+        }
+
+        /// <summary>
+        /// 单条应用能否**因使用记录**进入「常用」页。
+        ///
+        /// 抽成静态纯函数是为了能被测试直接调用 —— 这里曾经漏掉 `Hidden` 判断，
+        /// 导致"隐藏但有使用记录"的应用重新出现在常用页上（用户刚藏起来，它却还在）。
+        /// 判定与「人工固定」分支必须一致：已隐藏的一律不进。
+        /// </summary>
+        internal static bool IsCommonByUsage(AppItem a)
+        {
+            if (a == null) return false;
+            if (a.Hidden) return false;                       // 已隐藏 → 不进
+            if (a.Usage <= 0) return false;                   // 没有使用记录 → 不进
+            if (string.IsNullOrEmpty(a.Path)) return false;   // 无路径 → 无法去重/固定
+            return true;
+        }
+
+        /// <summary>按路径找应用（忽略大小写）；找不到返回 null。</summary>
+        AppItem FindAppByPath(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path) || catalog == null) return null;
+                foreach (AppItem a in catalog.Apps)
+                {
+                    if (a == null || string.IsNullOrEmpty(a.Path)) continue;
+                    if (string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase)) return a;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>该应用是否已被手动固定到「常用」。</summary>
+        bool IsPinnedCommon(AppItem a)
+        {
+            try
+            {
+                if (a == null || settings == null || settings.PinnedCommon == null) return false;
+                if (string.IsNullOrEmpty(a.Path)) return false;
+                foreach (string p in settings.PinnedCommon)
+                {
+                    if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+            catch { }
+            return false;
         }
 
 
@@ -3484,6 +3562,100 @@ namespace Clover
             }
             catch (Exception ex) { Ui.LogError(ex, "设置低价值标记"); }
         }
+
+        /// <summary>磁贴右键菜单里「常用」相关的动作。</summary>
+        internal enum CommonMenuAction
+        {
+            /// <summary>不显示任何常用相关项。</summary>
+            None = 0,
+            /// <summary>「添加到常用」——固定到常用页。</summary>
+            Add,
+            /// <summary>「取消固定到常用」——只取消固定，保留使用记录。</summary>
+            Unpin,
+            /// <summary>「从常用移除」——取消固定 + 清零使用记录。</summary>
+            Remove
+        }
+
+        /// <summary>
+        /// 决定磁贴右键菜单该显示哪个「常用」动作。
+        ///
+        /// 抽成纯静态函数是为了能被测试直接调用 —— 这里曾经用
+        /// `inCommon = pinned || Usage > 0` 当门控，导致「全部」页里
+        /// **任何用过一次**的应用都既不显示「添加到常用」也不显示别的
+        /// （不在常用页 + 未固定 → 三个分支全不命中），
+        /// 而绝大多数应用都被启动过，于是这个功能形同不存在。
+        ///
+        /// 判定规则：
+        ///   · 在「常用」页            → Remove（取消固定 + 清零，彻底移出）
+        ///   · 不在常用页 + 已固定      → Unpin（只取消固定，保留使用记录）
+        ///   · 不在常用页 + 未固定      → Add（无论有没有使用记录，都能加）
+        /// </summary>
+        internal static CommonMenuAction CommonMenuFor(bool showingCommon, bool pinned, int usage)
+        {
+            if (showingCommon)
+            {
+                // 常用页里出现的每一条都能移除：固定项和纯使用记录项都算
+                return (pinned || usage > 0) ? CommonMenuAction.Remove : CommonMenuAction.Add;
+            }
+
+            // 不在常用页：已固定 → 取消固定；未固定 → 添加到常用
+            return pinned ? CommonMenuAction.Unpin : CommonMenuAction.Add;
+        }
+
+        /// <summary>
+        /// 固定 / 取消固定到「常用」（右键「添加到常用」/「取消固定到常用」）。
+        /// 写入 `settings.json` 的 `pinnedCommon`，然后立即重渲染。
+        /// </summary>
+        void SetPinnedCommon(AppItem a, bool pinned)
+        {
+            try
+            {
+                if (a == null || settings == null || string.IsNullOrEmpty(a.Path)) return;
+                if (settings.PinnedCommon == null) settings.PinnedCommon = new List<string>();
+
+                // 先清掉旧记录（避免重复 / 大小写不同的重复项）
+                settings.PinnedCommon.RemoveAll(delegate(string p)
+                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+
+                if (pinned) settings.PinnedCommon.Add(a.Path);
+                settings.Save();
+
+                Ui.Log((pinned ? "添加到常用: " : "取消固定到常用: ") + a.Name);
+
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "设置常用固定"); }
+        }
+
+        /// <summary>
+        /// 「从常用移除」：既取消固定，也清零使用记录。
+        ///
+        /// 两件都做是刻意的 —— 用户说的是"我不想在这个页看到它"，
+        /// 只清计数的话固定项还留着，点了等于没反应。
+        /// </summary>
+        void RemoveFromCommon(AppItem a)
+        {
+            try
+            {
+                if (a == null || string.IsNullOrEmpty(a.Path)) return;
+
+                if (settings != null && settings.PinnedCommon != null)
+                {
+                    int n = settings.PinnedCommon.RemoveAll(delegate(string p)
+                    { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+                    if (n > 0) settings.Save();
+                }
+
+                if (usage != null) usage.Remove(a.Path);
+                a.Usage = 0;
+                a.LastUsed = 0;
+
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "从常用移除"); }
+        }
         void ShowTileMenu(AppItem a)
         {
             if (a == null || string.IsNullOrEmpty(a.Path)) return;
@@ -3518,23 +3690,56 @@ namespace Clover
                 cm.Items.Add(hide);
             }
 
-            // ---- 从常用移除（只在「常用」分类出现）----
-            if (showingCommon)
+            // ---- 常用名单：添加到常用 / 取消固定 / 从常用移除 ----
+            //
+            // 「添加到常用」必须在**任何分类**都出现（包括「全部」页）：
+            // 用户是在「全部」里翻到某个应用，才想起来"这个我要常用"。
+            //
+            // ★ 这里曾用 `inCommon = pinned || a.Usage > 0` 做门控，结果
+            //   「全部」页里**任何用过一次**的应用都落进 inCommon，却又不在
+            //   「常用」页、也没固定 —— 三个分支全不命中，菜单项直接消失。
+            //   绝大多数应用都被启动过，于是「添加到常用」基本看不到。
+            //   正确做法：按状态判定，不用"是否在常用"当门。
+            bool pinned = IsPinnedCommon(a);
+            switch (CommonMenuFor(showingCommon, pinned, a.Usage))
             {
-                cm.Items.Add(new Separator());
+                case CommonMenuAction.Add:
+                    cm.Items.Add(new Separator());
 
-                MenuItem rm = new MenuItem();
-                rm.Header = "从常用移除";
-                rm.IsEnabled = a.Usage > 0;
-                rm.Click += delegate
-                {
-                    if (usage != null) usage.Remove(a.Path);
-                    a.Usage = 0;
-                    a.LastUsed = 0;
-                    RebuildNav();
-                    RenderApps();
-                };
-                cm.Items.Add(rm);
+                    MenuItem add = new MenuItem();
+                    add.Header = "添加到常用";
+                    add.ToolTip = "固定到「常用」页，不占用使用榜名额";
+                    add.Click += delegate { SetPinnedCommon(a, true); };
+                    cm.Items.Add(add);
+                    break;
+
+                case CommonMenuAction.Remove:
+                    cm.Items.Add(new Separator());
+
+                    MenuItem rm = new MenuItem();
+                    rm.Header = "从常用移除";
+                    rm.ToolTip = pinned ? "同时取消固定并清零使用记录（彻底移出常用）" : "清零使用记录";
+                    rm.Click += delegate { RemoveFromCommon(a); };
+                    cm.Items.Add(rm);
+                    break;
+
+                case CommonMenuAction.Unpin:
+                    // 「全部」页看到已固定项 → 取消固定。
+                    //
+                    // 这里只取消固定、**不清使用记录**（与「从常用移除」刻意不同）：
+                    // 取消固定是"别再替我钉住了"，不是"我不用它了"。
+                    // 有使用记录时它仍会留在常用页，所以文案必须如实说明，
+                    // 否则用户点了发现它还在，会认为按钮失效。
+                    cm.Items.Add(new Separator());
+
+                    MenuItem unpin = new MenuItem();
+                    unpin.Header = "取消固定到常用";
+                    unpin.ToolTip = a.Usage > 0
+                        ? "只取消固定；仍有使用记录，所以它可能继续留在「常用」页。要彻底移出请用「从常用移除」"
+                        : "取消固定后不再出现在「常用」页（无使用记录）";
+                    unpin.Click += delegate { SetPinnedCommon(a, false); };
+                    cm.Items.Add(unpin);
+                    break;
             }
 
             // ---- 低价值标记（手动纠正，优先于自动规则）----
