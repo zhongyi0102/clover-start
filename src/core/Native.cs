@@ -61,17 +61,54 @@ namespace Clover
                 if (hwnd == IntPtr.Zero) return;
 
                 int style = GetWindowLong(hwnd, GWL_STYLE);
+                bool hadMin = (style & WS_MINIMIZEBOX) != 0;
 
-                // ★ 注意：这里**不**提前 return。
-                //   上一版有 `if ((style & WS_MINIMIZEBOX) == 0) return;`，
-                //   结果第二次调用（Loaded 里）发现样式已经去掉就不再重画，
-                //   标题栏还留着按钮的残影。现在每次都强制重画。
-                if ((style & WS_MINIMIZEBOX) != 0)
+                if (hadMin)
                     SetWindowLong(hwnd, GWL_STYLE, style & ~WS_MINIMIZEBOX);
 
-                // 样式改动后必须重画标题栏，否则按钮还在视觉上留着
+                // ── 强制系统重建非客户区 ──
+                //
+                // 只靠 SetWindowPos(SWP_FRAMECHANGED) 实测不够：样式位改了，
+                // 但 DWM 合成的标题栏位图没刷新，按钮还在画面上。
+                //
+                // 这里用三步逼它重画：
+                //   1. SetWindowPos + SWP_FRAMECHANGED —— 让系统重算非客户区
+                //   2. WM_SETREDRAW 关→开 —— 整窗标脏，强制重画
+                //   3. WM_NCPAINT —— 只重画标题栏/边框
                 SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+                SendMessage(hwnd, WM_SETREDRAW, IntPtr.Zero, IntPtr.Zero);
+                SendMessage(hwnd, WM_SETREDRAW, new IntPtr(1), IntPtr.Zero);
+                SendMessage(hwnd, WM_NCPAINT, new IntPtr(1), IntPtr.Zero);
+
+                // 诊断：确认每次调用的样式状态
+                Diag("RemoveMinimizeBox: hwnd=" + hwnd
+                    + " before=0x" + style.ToString("X8")
+                    + " hadMin=" + hadMin
+                    + " after=0x" + GetWindowLong(hwnd, GWL_STYLE).ToString("X8"));
+            }
+            catch (Exception ex)
+            {
+                Diag("RemoveMinimizeBox 失败: " + ex.Message);
+            }
+        }
+
+        /// <summary>WM_SETREDRAW：控制窗口重绘。</summary>
+        const int WM_SETREDRAW = 0x000B;
+
+        /// <summary>WM_NCPAINT：重画非客户区（标题栏 / 边框）。</summary>
+        const int WM_NCPAINT = 0x0085;
+
+        static void Diag(string msg)
+        {
+            try
+            {
+                string p = System.IO.Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory, "dialog-chrome.log");
+                System.IO.File.AppendAllText(p,
+                    DateTime.Now.ToString("HH:mm:ss.fff") + " " + msg
+                    + Environment.NewLine);
             }
             catch { }
         }

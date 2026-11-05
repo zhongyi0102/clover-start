@@ -143,7 +143,7 @@ namespace Clover
                 uiProbeRunning = true;
                 lastProbe = DateTime.Now;
 
-                SafeCall.RunAsync<Rect?>(delegate
+                SafeCall.RunWithDeadline<Rect?>(delegate
                 {
                     AutomationElement tray = AutomationElement.RootElement.FindFirst(
                         TreeScope.Children,

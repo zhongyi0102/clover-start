@@ -11,7 +11,8 @@ namespace Clover
     /// UIAutomation 永远等不到回复 → 必然超时，反而比不设超时更糟（每轮卡 2 秒）。
     ///
     /// 所以约定：
-    ///   - 界面线程上**不要**用 TryRun 等结果；用 RunAsync，结果回到界面线程再处理
+    ///   - 界面线程上**不要**用 TryRun 等结果；按语义选择 RunInBackground 或
+    ///     RunWithDeadline，结果回来后由调用方切回界面线程
     ///   - TryRun 只用于真正的后台线程（没有消息泵依赖的调用）
     /// </summary>
     static class SafeCall
@@ -20,16 +21,12 @@ namespace Clover
         public const int DefaultTimeoutMs = 2000;
 
         /// <summary>
-        /// 在后台线程执行 func 并把结果回调到调用方指定的调度器（通常是界面线程）。
-        /// 界面线程不阻塞：发起后立刻返回。
-        /// timeoutMs 只用于判断“要不要丢弃这次结果”，不会阻塞任何线程。
+        /// 纯后台执行：不设截止时间，完成或失败后恰好回调一次。
+        /// 回调发生在后台线程；需要操作 WPF 时由调用方切回 Dispatcher。
         /// </summary>
-        public static void RunAsync<T>(Func<T> func, int timeoutMs, Action<bool, T> onDone)
+        public static void RunInBackground<T>(Func<T> func, Action<bool, T> onDone)
         {
             if (func == null || onDone == null) return;
-            if (timeoutMs <= 0) timeoutMs = DefaultTimeoutMs;
-
-            DateTime started = DateTime.Now;
             ThreadPool.QueueUserWorkItem(delegate(object state)
             {
                 T result = default(T);
@@ -45,15 +42,66 @@ namespace Clover
                     ok = false;
                 }
 
-                double ms = (DateTime.Now - started).TotalMilliseconds;
-                if (ok && ms > timeoutMs)
-                {
-                    Log.Info("后台调用耗时 " + (int)ms + "ms 超过阈值 " + timeoutMs + "ms，结果仍采用");
-                }
-
                 try { onDone(ok, result); }
                 catch (Exception ex) { Log.Warn("后台调用回调失败: " + ex.Message); }
             });
+        }
+
+        /// <summary>
+        /// 带截止时间的异步执行。界面线程不会阻塞：
+        ///   · 截止时间内完成 → 回调真实结果；
+        ///   · 超时 → 立刻回调 false/默认值；底层调用继续自然结束，但迟到结果被丢弃。
+        /// 无论哪条路径，onDone 都恰好调用一次。
+        /// </summary>
+        public static void RunWithDeadline<T>(Func<T> func, int timeoutMs, Action<bool, T> onDone)
+        {
+            if (func == null || onDone == null) return;
+            if (timeoutMs <= 0) timeoutMs = DefaultTimeoutMs;
+
+            int completed = 0;
+            DateTime started = DateTime.Now;
+            Timer timer = null;
+
+            timer = new Timer(delegate(object state)
+            {
+                if (Interlocked.CompareExchange(ref completed, 1, 0) != 0) return;
+                Log.Info("后台调用超时(" + timeoutMs + "ms)，迟到结果将被丢弃");
+                try { onDone(false, default(T)); }
+                catch (Exception ex) { Log.Warn("后台调用超时回调失败: " + ex.Message); }
+                try { timer.Dispose(); } catch { }
+            }, null, timeoutMs, Timeout.Infinite);
+
+            ThreadPool.QueueUserWorkItem(delegate(object state)
+            {
+                T result = default(T);
+                bool ok = false;
+                try
+                {
+                    result = func();
+                    ok = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("后台调用失败: " + ex.GetType().Name + ": " + ex.Message);
+                }
+
+                double ms = (DateTime.Now - started).TotalMilliseconds;
+                if (Interlocked.CompareExchange(ref completed, 1, 0) != 0)
+                {
+                    Log.Info("后台调用在 " + (int)ms + "ms 后返回，结果已按截止时间丢弃");
+                    return;
+                }
+
+                try { timer.Dispose(); } catch { }
+                try { onDone(ok, result); }
+                catch (Exception ex) { Log.Warn("后台调用回调失败: " + ex.Message); }
+            });
+        }
+
+        /// <summary>兼容旧调用；新代码请显式选择 RunInBackground 或 RunWithDeadline。</summary>
+        public static void RunAsync<T>(Func<T> func, int timeoutMs, Action<bool, T> onDone)
+        {
+            RunWithDeadline(func, timeoutMs, onDone);
         }
 
         /// <summary>

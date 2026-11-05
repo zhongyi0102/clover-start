@@ -237,7 +237,7 @@ namespace Clover
             uiLayoutProbing = true;
             lastLayoutProbe = DateTime.Now;
 
-            SafeCall.RunAsync<bool>(delegate
+            SafeCall.RunWithDeadline<bool>(delegate
             {
                 AutomationElement tray = AutomationElement.RootElement.FindFirst(
                     TreeScope.Children,

@@ -79,7 +79,7 @@ namespace Clover
                 root.Margin = new Thickness(Ui.S.Xl);
 
                 // ---- 标题 ----
-                TextBlock title = Ui.T("更改「桌面文件」的存放目录", 14, Ui.Fg, FontWeights.SemiBold);
+                TextBlock title = Ui.T("更改「桌面收纳」的存放目录", 14, Ui.Fg, FontWeights.SemiBold);
                 root.Children.Add(title);
 
                 // ---- 数量（用户最先要看的）----

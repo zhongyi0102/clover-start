@@ -338,6 +338,12 @@ namespace Clover
             try
             {
                 if (e == null) return;
+                if (Ui.ReducedMotion)
+                {
+                    e.BeginAnimation(UIElement.OpacityProperty, null);
+                    e.Opacity = to;
+                    return;
+                }
                 DoubleAnimation a = new DoubleAnimation(to, TimeSpan.FromMilliseconds(FadeMs));
                 a.FillBehavior = FillBehavior.HoldEnd;
                 e.BeginAnimation(UIElement.OpacityProperty, a);

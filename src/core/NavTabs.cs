@@ -44,6 +44,9 @@ namespace Clover
         public static readonly string[] Reserved =
             new string[] { "常用", "全部", "文件", "桌面文件", "虚拟桌面" };
 
+        /// <summary>内置标签的新显示名；只阻止新建/重命名，不隐藏已有同名数据。</summary>
+        static readonly string[] ReservedDisplay = new string[] { "文件库", "桌面收纳" };
+
         /// <summary>一个自定义标签。</summary>
         public class Tab
         {
@@ -167,7 +170,7 @@ namespace Clover
                 string name = SanitizeName(rawName);
 
                 if (name.Length == 0) return "标签名不能为空。";
-                if (IsReserved(name)) return "「" + name + "」是内置标签，不能重复创建。";
+                if (IsReservedForCreate(name)) return "「" + name + "」是内置标签，不能重复创建。";
                 if (FindIndex(name) >= 0) return "已经有同名标签了。";
                 if (Items.Count >= MaxTabs) return "最多 " + MaxTabs + " 个自定义标签，请先删掉一些。";
 
@@ -193,7 +196,7 @@ namespace Clover
 
                 string name = SanitizeName(rawNewName);
                 if (name.Length == 0) return "标签名不能为空。";
-                if (IsReserved(name)) return "「" + name + "」是内置标签，不能使用。";
+                if (IsReservedForCreate(name)) return "「" + name + "」是内置标签，不能使用。";
 
                 int dup = FindIndex(name);
                 if (dup >= 0 && dup != i) return "已经有同名标签了。";
@@ -259,6 +262,18 @@ namespace Clover
                 {
                     if (string.Equals(r, name, StringComparison.OrdinalIgnoreCase)) return true;
                 }
+            }
+            catch { }
+            return false;
+        }
+
+        static bool IsReservedForCreate(string name)
+        {
+            if (IsReserved(name)) return true;
+            try
+            {
+                foreach (string r in ReservedDisplay)
+                    if (string.Equals(r, name, StringComparison.OrdinalIgnoreCase)) return true;
             }
             catch { }
             return false;

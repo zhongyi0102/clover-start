@@ -75,9 +75,8 @@ namespace Clover
             dlg.Owner = owner;
             dlg.Background = Ui.Bg;
             dlg.ResizeMode = ResizeMode.CanResize;
-            // 不占任务栏（这是配置对话框，一闪而过）。
-            // 配合 DialogChrome.Attach 去掉最小化按钮 ——
-            // 否则最小化后任务栏没图标，窗口再也找不回来。
+            // 不占任务栏（这是配置对话框，一闪而过），所以自绘标题栏不会
+            // 提供最小化入口；否则最小化后任务栏没有图标，窗口无法找回。
             dlg.ShowInTaskbar = false;
             dlg.MinWidth = 460;
             dlg.MinHeight = 480;
@@ -118,7 +117,9 @@ namespace Clover
             Grid.SetRow(pageHost, 1);
             layout.Children.Add(pageHost);
 
-            dlg.Content = layout;
+            // 原生标题栏即使清掉 WS_MINIMIZEBOX，在部分 Windows 主题下仍会
+            // 留下截图中的灰色“—”占位。改用只含最大化/还原与关闭的标题栏。
+            DialogChrome.UseMaximizeCloseTitleBar(dlg, layout);
 
             // Esc：先清搜索，再关闭（不影响主面板）
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
@@ -262,7 +263,7 @@ namespace Clover
         {
             try
             {
-                Grid g = dlg.Content as Grid;
+                Grid g = FindShellGrid(dlg.Content);
                 if (g == null) return false;
 
                 // pageHost 必须真的挂在这棵树上
@@ -275,6 +276,22 @@ namespace Clover
                 return true;
             }
             catch { return false; }
+        }
+
+        /// <summary>从「标题栏外壳 → 内容」结构里取回真正的页面外壳。</summary>
+        static Grid FindShellGrid(object content)
+        {
+            try
+            {
+                Grid direct = content as Grid;
+                if (direct != null) return direct;
+
+                Border outer = content as Border;
+                Grid chrome = outer == null ? null : outer.Child as Grid;
+                if (chrome == null || chrome.Children.Count < 2) return null;
+                return chrome.Children[1] as Grid;
+            }
+            catch { return null; }
         }
 
         /// <summary>测试用：pageHost 是否挂在视觉树上。</summary>
@@ -297,6 +314,38 @@ namespace Clover
                 return pageHost.Content != null;
             }
             catch { return false; }
+        }
+
+        /// <summary>测试用：标题栏动作的可访问名称（应只有最大化/还原和关闭）。</summary>
+        internal List<string> TestCaptionActions()
+        {
+            List<string> actions = new List<string>();
+            try
+            {
+                Border outer = dlg.Content as Border;
+                Grid chrome = outer == null ? null : outer.Child as Grid;
+                DependencyObject titleBar = chrome != null && chrome.Children.Count > 0
+                    ? chrome.Children[0] : null;
+                CollectCaptionActions(titleBar, actions);
+            }
+            catch { }
+            return actions;
+        }
+
+        static void CollectCaptionActions(DependencyObject node, List<string> actions)
+        {
+            if (node == null) return;
+
+            Button button = node as Button;
+            if (button != null)
+            {
+                string name = System.Windows.Automation.AutomationProperties.GetName(button);
+                if (!string.IsNullOrEmpty(name)) actions.Add(name);
+            }
+
+            int count = VisualTreeHelper.GetChildrenCount(node);
+            for (int i = 0; i < count; i++)
+                CollectCaptionActions(VisualTreeHelper.GetChild(node, i), actions);
         }
 
         public void Show()

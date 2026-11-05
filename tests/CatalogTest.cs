@@ -166,7 +166,8 @@ namespace Clover
             {
                 string p = Path.Combine(cfg, "t.json");
                 string json = "{\"apps\":[{\"name\":\"测试\",\"path\":\"C:\\\\x.exe\",\"category\":\"其他\"}]}";
-                JsonIO.WriteAtomic(p, json);
+                JsonIO.WriteResult firstWrite = JsonIO.WriteAtomic(p, json);
+                Check(firstWrite.Success, "JsonIO 写入返回成功", firstWrite.ErrorMessage);
                 string back = JsonIO.Read(p);
                 Check(back == json, "JsonIO 写入后可原样读回", back ?? "null");
 
@@ -175,6 +176,18 @@ namespace Clover
                 File.WriteAllText(p, "");
                 string fallback = JsonIO.Read(p);
                 Check(fallback != null && fallback.Contains("测试"), ".bak 回退有效", fallback ?? "null");
+
+                // 主文件非空但语法损坏，也必须回退（旧实现只判断非空，会把半截 JSON 返回）
+                File.WriteAllText(p, "{\"apps\":[", new UTF8Encoding(false));
+                JsonIO.ReadResult detailed = JsonIO.ReadDetailed(p);
+                Check(detailed.Success && detailed.UsedBackup,
+                    "★非空损坏 JSON 回退 .bak", detailed.PrimaryError ?? "无错误详情");
+                Check(detailed.Text != null && detailed.Text.Contains("测试"),
+                    "损坏回退返回有效备份内容", detailed.Text ?? "null");
+
+                JsonIO.WriteResult badWrite = JsonIO.WriteAtomic(null, "{}");
+                Check(!badWrite.Success && badWrite.Error != null,
+                    "★写入失败返回结构化错误", badWrite.ErrorMessage);
 
                 // 中文与特殊字符往返
                 string p2 = Path.Combine(cfg, "u.json");

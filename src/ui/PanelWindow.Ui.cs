@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -132,6 +134,7 @@ namespace Clover
             searchBox.VerticalContentAlignment = VerticalAlignment.Center;
             searchBox.Padding = new Thickness(0, 0, 8, 0);
             searchBox.TextChanged += delegate { OnSearchChanged(); };
+            AutomationProperties.SetName(searchBox, "搜索应用");
 
             fg.Children.Add(searchHint);
             fg.Children.Add(searchBox);
@@ -145,32 +148,29 @@ namespace Clover
             Grid.SetColumn(winButtons, 3);
             header.Children.Add(winButtons);
 
-            // 三个窗口按钮，从左到右：最小化 / 最大化·还原 / 关闭。
-            //
-            // 「最小化」和「关闭」行为相同（都是 HidePanel）—— 面板不是常规窗口，
-            // 它没有任务栏图标（ShowInTaskbar = false），真正最小化到任务栏会
-            // 变得不可恢复。所以两者都只是收起面板，区别在图标语义：
-            //   · 最小化（—）：用户以为"收起来，待会儿还要用"
-            //   · 关闭（×）：用户以为"用完了"
-            // 保留两个是照顾习惯 —— 很多人下意识点 —。
-
+            // 主面板的“最小化”不是系统任务栏最小化，而是收起到常驻四叶草；
+            // 可再次点击四叶草或使用全局快捷键恢复。按 Windows 惯例放在最左侧。
             minBtn = MakeHeaderButton("\uE921", delegate { HidePanel(); });
-            minBtn.ToolTip = "收起面板（等同于关闭）";
+            minBtn.ToolTip = "最小化到四叶草";
+            AutomationProperties.SetName(minBtn, "最小化主面板");
             winButtons.Children.Add(minBtn);
 
             maxBtn = MakeHeaderButton("\uE922", delegate { ToggleExpand(); });
             maxBtn.ToolTip = "最大化 / 还原";
+            AutomationProperties.SetName(maxBtn, "最大化或还原面板");
             winButtons.Children.Add(maxBtn);
 
             closeBtn = MakeHeaderButton("\uE711", delegate { HidePanel(); });
-            closeBtn.ToolTip = "关闭面板";
+            closeBtn.ToolTip = "收起面板";
+            AutomationProperties.SetName(closeBtn, "收起面板");
             winButtons.Children.Add(closeBtn);
 
             header.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {
                 DependencyObject d = e.OriginalSource as DependencyObject;
-                if (IsDescendantOf(d, searchBorder) || IsDescendantOf(d, minBtn)
-                    || IsDescendantOf(d, maxBtn) || IsDescendantOf(d, closeBtn)) return;
+                if (IsDescendantOf(d, searchBorder)
+                    || IsDescendantOf(d, minBtn) || IsDescendantOf(d, maxBtn)
+                    || IsDescendantOf(d, closeBtn)) return;
                 try { DragMove(); } catch { }
             };
 
@@ -208,33 +208,25 @@ namespace Clover
             Grid.SetColumn(navToggle, 0);
             navGrid.Children.Add(navToggle);
 
-            // 分类胶囊条：横向排列，**不用 ScrollViewer**。
-            //
-            // ★ 为什么去掉 ScrollViewer：
-            //   实测 navStack.ActualWidth = 0 / navScroll.ActualWidth = 0，
-            //   10 个胶囊全建出来了，但整条宽度被压成 0，只剩第一个可见。
-            //   根因：ScrollViewer 在"Auto 高度的行 + 横向内容"这个组合下，
-            //   测量阶段给内容无限宽、自己却算出 0 宽（WPF 已知的测量陷阱）。
-            //
-            //   改用 Grid + 横向 StackPanel 直接铺：
-            //   分类数量是有限的（7 个真实分类 + 常用/全部/桌面/收藏夹/隐藏 ≈ 12 个上限），
-            //   12 个 30px 高的胶囊横排远不会超出面板宽度，
-            //   所以根本不需要滚动条。
-            //
-            //   万一以后分类多到放不下，正确的做法是换 WrapPanel（换行），
-            //   而不是横向滚动 —— 滚动条在一条 34px 高的工具栏上很难用。
-            navStack = new StackPanel();
+            // 固定页 + 最多 10 个自定义桌面在 640px 最小宽度下放不进一行。
+            // WrapPanel 让自定义桌面自然换到第二行，避免横向滚动和裁切。
+            navStack = new WrapPanel();
             navStack.Orientation = Orientation.Horizontal;
             navStack.VerticalAlignment = VerticalAlignment.Center;
+            navStack.HorizontalAlignment = HorizontalAlignment.Stretch;
             navStack.Margin = new Thickness(Ui.S.Xs, Ui.S.Xs, Ui.S.Xs, Ui.S.Xs);
 
-            // navScroll 字段保留（折叠逻辑和 NavColumnValue 都引用它），
-            // 但现在它只是 navStack 的透明容器，不参与滚动。
+            // ScrollViewer 只作为既有折叠逻辑的容器；内容按可用宽度换行。
             navScroll = new ScrollViewer();
             navScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
             navScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            navScroll.HorizontalContentAlignment = HorizontalAlignment.Stretch;
             navScroll.VerticalAlignment = VerticalAlignment.Center;
             navScroll.Content = navStack;
+            // ScrollViewer 默认会给横向内容“无限宽”，WrapPanel 因此可能永远不换行。
+            // 明确跟随可视宽度，窄窗口或自定义桌面较多时才会产生真实的第二行。
+            navStack.SetBinding(FrameworkElement.WidthProperty,
+                new System.Windows.Data.Binding("ActualWidth") { Source = navScroll });
             Grid.SetColumn(navScroll, 1);
             navGrid.Children.Add(navScroll);
 
@@ -393,7 +385,7 @@ namespace Clover
             // ★ IsHitTestVisible 只关在 DropHint 自己（root）身上，
             //   绝不加在 deskCanvas 或 deskPanel 上 —— 框选绑在 deskCanvas，
             //   关掉它的命中就等于废掉框选。
-            deskDropHint = new DropHint("把文件拖到这里", null);
+            deskDropHint = new DropHint("把文件拖到桌面收纳", "文件会进入当前收纳目录，可在资源管理器中正常访问");
             Grid.SetRow(deskDropHint.Root, 2);
             Panel.SetZIndex(deskDropHint.Root, 5);   // 盖在图标之上，但不吃事件
             deskPanel.Children.Add(deskDropHint.Root);
@@ -451,9 +443,9 @@ namespace Clover
             // ---------------- footer ----------------
             Grid footer = new Grid();
             footer.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, 0);
-            TextBlock hint = Ui.T("Esc 关闭 · 点击面板外自动收起 · 右键四叶草按钮可设置", 11, Ui.Sub);
-            hint.HorizontalAlignment = HorizontalAlignment.Left;
-            footer.Children.Add(hint);
+            footerHint = Ui.T("Esc 收起 · 输入即可搜索应用 · 方向键选择，Enter 启动", 11, Ui.Sub);
+            footerHint.HorizontalAlignment = HorizontalAlignment.Left;
+            footer.Children.Add(footerHint);
             footerCount = Ui.T("", 11, Ui.Sub);
             footerCount.HorizontalAlignment = HorizontalAlignment.Right;
             footer.Children.Add(footerCount);
@@ -573,6 +565,7 @@ namespace Clover
             };
 
             RebuildNav();
+            UpdateContextChrome();
             RenderApps();
 
             // 恢复上次的侧栏收起状态（必须在 RebuildNav 之后：
@@ -662,21 +655,65 @@ namespace Clover
             return t;
         }
 
-        Border MakeHeaderButton(string glyph, Action action)
+        Button MakeHeaderButton(string glyph, Action action)
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Width = 32;
             b.Height = 32;
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.VerticalAlignment = VerticalAlignment.Center;
             b.Cursor = Cursors.Hand;
             b.Background = Brushes.Transparent;
+            b.BorderBrush = Brushes.Transparent;
+            b.BorderThickness = new Thickness(0);
+            b.Padding = new Thickness(0);
             b.Margin = new Thickness(2, 0, 0, 0);
-            b.Child = MakeGlyph(glyph);
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
-            b.MouseLeftButtonUp += delegate { if (action != null) action(); };
+            b.Template = MakeButtonTemplate(Ui.R.Sm);
+            b.Content = MakeGlyph(glyph);
+            b.Click += delegate { if (action != null) action(); };
+            b.MouseEnter += delegate { if (!b.IsKeyboardFocused) b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { if (!b.IsKeyboardFocused) b.Background = Brushes.Transparent; };
+            b.GotKeyboardFocus += delegate { b.Background = Ui.AccentSoft; };
+            b.LostKeyboardFocus += delegate { b.Background = Brushes.Transparent; };
             return b;
+        }
+
+        static ControlTemplate MakeButtonTemplate(double radius)
+        {
+            ControlTemplate template = new ControlTemplate(typeof(Button));
+            FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
+            border.Name = "ButtonChrome";
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(radius));
+            border.SetBinding(Border.BackgroundProperty,
+                new System.Windows.Data.Binding("Background")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+            border.SetBinding(Border.BorderBrushProperty,
+                new System.Windows.Data.Binding("BorderBrush")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+            border.SetBinding(Border.BorderThicknessProperty,
+                new System.Windows.Data.Binding("BorderThickness")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+
+            FrameworkElementFactory presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            border.AppendChild(presenter);
+            template.VisualTree = border;
+
+            Trigger pressed = new Trigger();
+            pressed.Property = Button.IsPressedProperty;
+            pressed.Value = true;
+            pressed.Setters.Add(new Setter(Border.OpacityProperty, 0.82, "ButtonChrome"));
+            template.Triggers.Add(pressed);
+            return template;
         }
 
         /// <summary>
@@ -685,22 +722,28 @@ namespace Clover
         /// 为什么单独做一个而不是靠双击分隔线：按钮更可发现，且状态一目了然
         /// （展开时显示 ◀、收起时显示 ▶）。
         /// </summary>
-        Border MakeNavToggle()
+        Button MakeNavToggle()
         {
-            Border b = new Border();
-            b.Width = 22;
-            b.Height = 22;
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            Button b = new Button();
+            b.Width = 32;
+            b.Height = 32;
             b.HorizontalAlignment = HorizontalAlignment.Right;
             b.VerticalAlignment = VerticalAlignment.Top;
             b.Margin = new Thickness(0, Ui.S.Xs, Ui.S.Sm, 0);
             b.Cursor = Cursors.Hand;
             b.Background = Brushes.Transparent;
+            b.BorderBrush = Brushes.Transparent;
+            b.BorderThickness = new Thickness(0);
+            b.Padding = new Thickness(0);
+            b.Template = MakeButtonTemplate(Ui.R.Sm);
             b.ToolTip = "收起 / 展开分类栏";
-            b.Child = MakeGlyph("\uE76B");   // ChevronLeft
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
-            b.MouseLeftButtonUp += delegate { ToggleNavCollapsed(); };
+            AutomationProperties.SetName(b, "收起或展开分类栏");
+            b.Content = MakeGlyph("\uE76B");   // ChevronLeft
+            b.Click += delegate { ToggleNavCollapsed(); };
+            b.MouseEnter += delegate { if (!b.IsKeyboardFocused) b.Background = Ui.Hover; };
+            b.MouseLeave += delegate { if (!b.IsKeyboardFocused) b.Background = Brushes.Transparent; };
+            b.GotKeyboardFocus += delegate { b.Background = Ui.AccentSoft; };
+            b.LostKeyboardFocus += delegate { b.Background = Brushes.Transparent; };
             return b;
         }
 
@@ -709,7 +752,7 @@ namespace Clover
         public const double NavWidthCollapsed = 44;
 
         /// <summary>侧栏折叠按钮（验收测试用来检查它真的落在侧栏区域内）。</summary>
-        public Border NavToggle { get { return navToggle; } }
+        public Button NavToggle { get { return navToggle; } }
         /// <summary>当前是否已收起。</summary>
         public bool NavIsCollapsed { get { return navCollapsed; } }
         /// <summary>
@@ -752,7 +795,7 @@ namespace Clover
                 // 切换箭头方向：横条用左右箭头语义（收起 = 往右折）
                 if (navToggle != null)
                 {
-                    navToggle.Child = MakeGlyph(navCollapsed ? "\uE76C" : "\uE76B");
+                    navToggle.Content = MakeGlyph(navCollapsed ? "\uE76C" : "\uE76B");
                 }
 
                 // 记住这个偏好：你在 dev-run 里反复重启时，不该每次都手动收起一遍
@@ -789,7 +832,7 @@ namespace Clover
                 // 顶部横条布局下没有"列宽"可调，收起 = 隐藏整条胶囊
                 if (navScroll != null) navScroll.Visibility = Visibility.Collapsed;
                 if (taskGrid != null) taskGrid.Visibility = Visibility.Collapsed;
-                if (navToggle != null) navToggle.Child = MakeGlyph("\uE76C");
+                if (navToggle != null) navToggle.Content = MakeGlyph("\uE76C");
 
                 Ui.Log("分类栏按上次设置收起");
             }

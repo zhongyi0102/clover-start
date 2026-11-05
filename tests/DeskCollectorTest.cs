@@ -4,7 +4,7 @@ using System.IO;
 namespace Clover
 {
     /// <summary>
-    /// 收纳桌面 / 放回桌面 / 撤销 的回归测试。
+    /// 收纳桌面 / 放回桌面的回归测试。
     ///
     /// **只用复制出来的临时文件，不碰真实桌面。**
     /// </summary>
@@ -43,11 +43,6 @@ namespace Clover
             TestCollect();
             TestCollectConflict();
             TestPutBack();
-            TestUndo();
-            TestUndoConflict();
-            TestUndoPartial();
-            TestUndoPersist();
-            TestHistoryLimit();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -140,157 +135,5 @@ namespace Clover
             finally { Clean(root); }
         }
 
-        static void TestUndo()
-        {
-            string root = NewRoot("undo");
-            try
-            {
-                string desk = Path.Combine(root, "deskfiles");
-                string desktop = Path.Combine(root, "desktop");
-                Directory.CreateDirectory(desk);
-                Directory.CreateDirectory(desktop);
-                File.WriteAllText(Path.Combine(desk, "u.txt"), "u");
-
-                DeskCollector.MoveResult moved = DeskCollector.PutBack(
-                    new System.Collections.Generic.List<string> { Path.Combine(desk, "u.txt") }, desktop);
-
-                DeskUndo undo = new DeskUndo(root);
-                undo.Load();
-                undo.Push("放回桌面", moved.Moved);
-
-                DeskUndo.UndoResult ur = undo.UndoLatest();
-                Check(ur.AllOk, "★撤销成功", string.Join(",", ur.Failed.ToArray()));
-                Check(ur.Restored == 1, "★撤销 1 个", Convert.ToString(ur.Restored));
-                Check(File.Exists(Path.Combine(desk, "u.txt")), "★文件已回到原位置");
-                Check(!File.Exists(Path.Combine(desktop, "u.txt")), "★桌面上的已移走");
-                Check(undo.Latest == null, "★撤销后历史清空");
-            }
-            finally { Clean(root); }
-        }
-
-        static void TestUndoConflict()
-        {
-            string root = NewRoot("uc");
-            try
-            {
-                string desk = Path.Combine(root, "deskfiles");
-                string desktop = Path.Combine(root, "desktop");
-                Directory.CreateDirectory(desk);
-                Directory.CreateDirectory(desktop);
-                File.WriteAllText(Path.Combine(desk, "c.txt"), "orig");
-
-                DeskCollector.MoveResult moved = DeskCollector.PutBack(
-                    new System.Collections.Generic.List<string> { Path.Combine(desk, "c.txt") }, desktop);
-
-                // 撤销前占住原位置
-                File.WriteAllText(Path.Combine(desk, "c.txt"), "blocker");
-
-                DeskUndo undo = new DeskUndo(root);
-                undo.Load();
-                undo.Push("放回桌面", moved.Moved);
-
-                DeskUndo.UndoResult ur = undo.UndoLatest();
-                Check(!ur.AllOk, "★原位置被占用时撤销失败");
-                Check(File.ReadAllText(Path.Combine(desk, "c.txt")) == "blocker",
-                    "★未覆盖已占用文件");
-                Check(File.Exists(Path.Combine(desktop, "c.txt")), "★桌面上文件保留");
-                Check(undo.Latest != null, "★失败时历史保留，可重试");
-            }
-            finally { Clean(root); }
-        }
-
-        static void TestUndoPartial()
-        {
-            string root = NewRoot("upart");
-            try
-            {
-                string desk = Path.Combine(root, "deskfiles");
-                string desktop = Path.Combine(root, "desktop");
-                Directory.CreateDirectory(desk);
-                Directory.CreateDirectory(desktop);
-                File.WriteAllText(Path.Combine(desk, "a.txt"), "a");
-                File.WriteAllText(Path.Combine(desk, "b.txt"), "b");
-
-                DeskCollector.MoveResult moved = DeskCollector.PutBack(
-                    new System.Collections.Generic.List<string>
-                    {
-                        Path.Combine(desk, "a.txt"), Path.Combine(desk, "b.txt")
-                    }, desktop);
-
-                // 只占住 a 的原位置；b 应能成功撤销。
-                File.WriteAllText(Path.Combine(desk, "a.txt"), "blocker");
-
-                DeskUndo undo = new DeskUndo(root);
-                undo.Load();
-                undo.Push("放回桌面", moved.Moved);
-                DeskUndo.UndoResult ur = undo.UndoLatest();
-
-                Check(ur.Restored == 1, "★部分撤销成功 1 个");
-                Check(ur.Failed.Count == 1, "★部分撤销失败 1 个");
-                Check(undo.Latest != null && undo.Latest.Entries.Count == 1,
-                    "★历史只保留失败项");
-                Check(File.Exists(Path.Combine(desk, "b.txt")), "★成功项已回原位");
-            }
-            finally { Clean(root); }
-        }
-
-        static void TestHistoryLimit()
-        {
-            string root = NewRoot("limit");
-            try
-            {
-                DeskUndo undo = new DeskUndo(root);
-                undo.Load();
-                for (int i = 0; i < 7; i++)
-                {
-                    DeskUndo.Entry e = new DeskUndo.Entry();
-                    e.From = Path.Combine(root, "from" + i);
-                    e.To = Path.Combine(root, "to" + i);
-                    e.Time = "t" + i;
-                    undo.Push("batch" + i,
-                        new System.Collections.Generic.List<DeskUndo.Entry> { e });
-                }
-
-                Check(undo.Batches.Count == 5, "★只保留最近 5 批");
-                Check(undo.Batches[0].Action == "batch6", "★最新批次排第一");
-                Check(undo.Batches[4].Action == "batch2", "★最旧保留到第 3 批");
-
-                DeskUndo reload = new DeskUndo(root);
-                reload.Load();
-                Check(reload.Batches.Count == 5, "★5 批历史持久化");
-            }
-            finally { Clean(root); }
-        }
-
-        static void TestUndoPersist()
-        {
-            string root = NewRoot("up");
-            try
-            {
-                string desk = Path.Combine(root, "deskfiles");
-                string desktop = Path.Combine(root, "desktop");
-                Directory.CreateDirectory(desk);
-                Directory.CreateDirectory(desktop);
-                File.WriteAllText(Path.Combine(desk, "p.txt"), "p");
-
-                DeskCollector.MoveResult moved = DeskCollector.PutBack(
-                    new System.Collections.Generic.List<string> { Path.Combine(desk, "p.txt") }, desktop);
-
-                DeskUndo a = new DeskUndo(root);
-                a.Load();
-                a.Push("放回桌面", moved.Moved);
-
-                // 重新加载（模拟重启）
-                DeskUndo b = new DeskUndo(root);
-                b.Load();
-                Check(b.Latest != null, "★重启后历史仍在");
-                Check(b.Latest.Entries.Count == 1, "★记录条数正确");
-
-                DeskUndo.UndoResult ur = b.UndoLatest();
-                Check(ur.AllOk, "★重启后仍可撤销");
-                Check(File.Exists(Path.Combine(desk, "p.txt")), "★文件回到原位");
-            }
-            finally { Clean(root); }
-        }
     }
 }

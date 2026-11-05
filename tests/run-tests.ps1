@@ -9,6 +9,11 @@
 #     FullscreenTest  真建无边框全屏窗口，验证全屏检测与恢复
 #     TaskbarCreatedTest  验证 TaskbarCreated 消息注册与接收
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
+# CI / 无桌面会话：追加 -CoreOnly，只跑不链接 WPF 界面的套件。
+param(
+    [switch]$CoreOnly
+)
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $srcDir = Join-Path $root 'src'
@@ -44,20 +49,72 @@ foreach ($n in @('WindowsBase', 'PresentationCore', 'PresentationFramework', 'UI
 }
 
 $script:failed = 0
+$script:executed = 0
+$script:startedAt = Get-Date
+$script:results = @()
+$script:desktopSuites = @(
+    'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest',
+    'IconTest', 'FullscreenTest', 'TaskbarCreatedTest', 'ActiveRowTest',
+    'MenuStructureTest', 'OrganizeShellTest', 'DeskRootDialogTest', 'DropHintTest',
+    'WindowPosTest', 'BackgroundStoreTest', 'WallpaperEngineTest'
+)
 
 function Invoke-Suite($name, $refs, $sources) {
+    if ($CoreOnly -and $script:desktopSuites -contains $name) {
+        Write-Host "===== $name（CoreOnly 跳过）=====" -ForegroundColor DarkGray
+        return
+    }
+
     Write-Host "===== $name =====" -ForegroundColor Cyan
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $status = 'passed'
+    $script:executed++
     $exe = Join-Path $outDir ($name + '.exe')
     & $csc /nologo /target:exe /codepage:65001 ('/out:' + $exe) $refs $sources 2>&1 |
         Where-Object { $_ -notmatch 'warning CS' }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "编译失败: $name" -ForegroundColor Red
         $script:failed++
+        $status = 'compile_failed'
+        $sw.Stop()
+        $script:results += [pscustomobject]@{
+            name=$name; status=$status; assertions=0; durationMs=[int]$sw.ElapsedMilliseconds
+        }
         return
     }
-    & $exe
-    if ($LASTEXITCODE -ne 0) { $script:failed++ }
+    $suiteOutput = @(& $exe 2>&1)
+    $suiteExitCode = $LASTEXITCODE
+    $suiteOutput | ForEach-Object { Write-Host $_ }
+    $assertions = @($suiteOutput | Where-Object { ([string]$_) -match '^\s*PASS\s' }).Count
+    if ($suiteExitCode -ne 0) { $script:failed++; $status = 'failed' }
+    $sw.Stop()
+    $script:results += [pscustomobject]@{
+        name=$name; status=$status; assertions=$assertions; durationMs=[int]$sw.ElapsedMilliseconds
+    }
     Write-Host ''
+}
+
+function Complete-TestRun {
+    $summaryPath = Join-Path $outDir 'test-summary.json'
+    [pscustomobject]@{
+        generatedAt = (Get-Date).ToString('o')
+        startedAt = $script:startedAt.ToString('o')
+        mode = $(if ($CoreOnly) { 'core-only' } else { 'full' })
+        suites = $script:executed
+        failed = $script:failed
+        passed = $script:executed - $script:failed
+        assertions = [int](($script:results | Measure-Object -Property assertions -Sum).Sum)
+        results = $script:results
+    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $summaryPath -Encoding UTF8
+
+    if ($script:failed -eq 0) {
+        Write-Host "全部测试通过（$script:executed 个套件）" -ForegroundColor Green
+        Write-Host "机器可读汇总: $summaryPath" -ForegroundColor DarkGray
+        exit 0
+    }
+
+    Write-Host "$($script:failed) 个套件失败" -ForegroundColor Red
+    exit 1
 }
 
 # ---------------- 单元测试 ----------------
@@ -168,8 +225,12 @@ Invoke-Suite 'FileFoldersTest' $baseRefs `
 # 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
 Invoke-Suite 'NavTabsTest' $baseRefs `
     (@((Join-Path $coreDir 'NavTabs.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'NavTabsTest.cs')))
+Invoke-Suite 'SafeCallTest' $baseRefs `
+    (@((Join-Path $coreDir 'SafeCall.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SafeCallTest.cs')))
+Invoke-Suite 'ScanServiceTest' $baseRefs `
+    (@((Join-Path $coreDir 'ScanService.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'ScanServiceTest.cs')))
 Invoke-Suite 'WatcherTest' $baseRefs `
-    ($baseRefs + $webRef + @((Join-Path $testDir 'WatcherTest.cs')))
+    @((Join-Path $testDir 'WatcherTest.cs'))
 # 「文件」标签：目录列举（过滤 / 排序 / 上限 / 只读）
 Invoke-Suite 'FilesTabTest' $baseRefs `
     (@((Join-Path $coreDir 'FileScanner.cs'), (Join-Path $coreDir 'FileFolders.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'FileExtGroups.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'FilesTabTest.cs')))
@@ -185,7 +246,7 @@ Invoke-Suite 'DeskRemovalTest' $baseRefs `
 # 拖入导入：过滤 exe/lnk / 移动 vs 复制 / 冲突改名 / 文件夹 / 占用 / 来源判定
 # （DeskImporter 现在引用 DesktopKeep.DesktopDirs 判来源，所以要带它及其依赖）
 Invoke-Suite 'DeskImporterTest' $baseRefs `
-    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'DesktopKeep.cs'), (Join-Path $coreDir 'DesktopCleaner.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
+    (@((Join-Path $coreDir 'DeskImporter.cs'), (Join-Path $coreDir 'DropSpec.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'DesktopKeep.cs'), (Join-Path $coreDir 'DesktopCleaner.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskImporterTest.cs')))
 # 放置规则：正常 / 全拒 / 混合 / 超数量 / 超大小 / 空输入 / 目录模式 / 按原因汇总
 Invoke-Suite 'DropSpecTest' $baseRefs `
     (@((Join-Path $coreDir 'DropSpec.cs'), (Join-Path $testDir 'DropSpecTest.cs')))
@@ -195,9 +256,9 @@ Invoke-Suite 'DropSummaryTest' $baseRefs `
 # 用户文件安全移动：临时副本核对 / 原子发布 / 失败保留源
 Invoke-Suite 'VerifiedFileMoveTest' $baseRefs `
     (@((Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $testDir 'VerifiedFileMoveTest.cs')))
-# 收纳桌面 / 放回桌面 / 撤销（含持久化）
+# 收纳桌面 / 放回桌面
 Invoke-Suite 'DeskCollectorTest' $baseRefs `
-    (@((Join-Path $coreDir 'DeskCollector.cs'), (Join-Path $coreDir 'DeskUndo.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskCollectorTest.cs')))
+    (@((Join-Path $coreDir 'DeskCollector.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskCollectorTest.cs')))
 # 旧桌面迁移冲突提示：同一冲突只弹一次，重启后仍记住
 Invoke-Suite 'DeskMigrationNoticeTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskMigrationNotice.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'DeskMigrationNoticeTest.cs')))
@@ -207,11 +268,6 @@ Invoke-Suite 'DropTargetTest' $baseRefs `
 # 虚拟桌面拖动手势：画布内自由摆放 / 边缘无缝切系统拖放
 Invoke-Suite 'DesktopDragGestureTest' $baseRefs `
     (@((Join-Path $coreDir 'DesktopDragGesture.cs'), (Join-Path $testDir 'DesktopDragGestureTest.cs')))
-
-# 自定义标签清单：新建 / 重命名 / 删除 / 上限 / 内置名 / 持久化 / 容错
-Invoke-Suite 'NavTabsTest' $baseRefs `
-    (@((Join-Path $coreDir 'NavTabs.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'NavTabsTest.cs')))
-
 
 # 「全部」页：低价值条目识别规则
 Invoke-Suite 'LowValueTest' $baseRefs `
@@ -332,24 +388,39 @@ Invoke-Suite 'BackgroundStoreTest' $wpfRefs `
 # Wallpaper Engine 集成：目录 / 解析 / 穿越防护 / 视频复制 / 暗度 / 回退
 Invoke-Suite 'WallpaperEngineTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'WallpaperEngineTest.cs')))
+
+if ($CoreOnly) {
+    Complete-TestRun
+}
+
 $acceptanceReport = Join-Path $outDir 'acceptance-report.json'
 Write-Host '===== AcceptanceTest =====' -ForegroundColor Cyan
 $accExe = Join-Path $outDir 'AcceptanceTest.exe'
+$acceptanceSw = [System.Diagnostics.Stopwatch]::StartNew()
+$acceptanceStatus = 'passed'
 & $csc /nologo /target:exe /codepage:65001 ('/out:' + $accExe) $wpfRefs ($allSrc + @((Join-Path $testDir 'AcceptanceTest.cs'))) 2>&1 |
     Where-Object { $_ -notmatch 'warning CS' }
 if ($LASTEXITCODE -ne 0) {
     Write-Host '编译失败: AcceptanceTest' -ForegroundColor Red
     $script:failed++
+    $acceptanceStatus = 'compile_failed'
 } else {
-    & $accExe --report $acceptanceReport
-    if ($LASTEXITCODE -ne 0) { $script:failed++ }
+    $acceptanceOutput = @(& $accExe --report $acceptanceReport 2>&1)
+    $acceptanceExitCode = $LASTEXITCODE
+    $acceptanceOutput | ForEach-Object { Write-Host $_ }
+    $acceptanceAssertions = @($acceptanceOutput |
+        Where-Object { ([string]$_) -match '^\s*PASS\s' }).Count
+    if ($acceptanceExitCode -ne 0) { $script:failed++; $acceptanceStatus = 'failed' }
 }
+$acceptanceSw.Stop()
 Write-Host ''
 
-if ($script:failed -eq 0) {
-    Write-Host '全部测试通过' -ForegroundColor Green
-    exit 0
-} else {
-    Write-Host "$($script:failed) 个套件失败" -ForegroundColor Red
-    exit 1
+$script:executed++
+$script:results += [pscustomobject]@{
+    name = 'AcceptanceTest'
+    status = $acceptanceStatus
+    assertions = $(if ($acceptanceStatus -eq 'compile_failed') { 0 } else { $acceptanceAssertions })
+    durationMs = [int]$acceptanceSw.ElapsedMilliseconds
 }
+
+Complete-TestRun

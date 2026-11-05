@@ -224,9 +224,9 @@ namespace Clover
             }
             col.Children.Add(chkHideTaskbar);
 
-            // ---------- 桌面文件 ----------
-            StackPanel deskHeader = SectionHeader("桌面文件",
-                "「桌面文件」标签把桌面上的东西收进一个真实文件夹。"
+            // ---------- 桌面收纳 ----------
+            StackPanel deskHeader = SectionHeader("桌面收纳",
+                "「桌面收纳」把桌面上的东西收进一个真实文件夹。"
                 + "存放目录可以改到别的盘，改完立即生效。");
             sectionAnchors[Section.DeskFiles] = deskHeader;
             col.Children.Add(deskHeader);
@@ -306,7 +306,11 @@ namespace Clover
             col.Children.Add(rollbackHint);
 
             scroll.Content = col;
-            dlg.Content = scroll;
+
+            // 设置窗口不占任务栏，最小化后没有可靠的恢复入口。与“整理与隐藏”
+            // 共用只含“最大化/还原 + 关闭”的项目标题栏，避免系统主题留下灰色
+            // 的最小化占位；DialogChrome.Attach 仍会在 Win32 层拦截最小化命令。
+            DialogChrome.UseMaximizeCloseTitleBar(dlg, scroll);
 
             // Esc 关闭
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
@@ -528,7 +532,7 @@ namespace Clover
             {
                 if (panel == null)
                 {
-                    MessageBox.Show(dlg, "主面板还没准备好，稍后再试。", "四叶草 · 桌面文件",
+                    MessageBox.Show(dlg, "主面板还没准备好，稍后再试。", "四叶草 · 桌面收纳",
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -541,7 +545,7 @@ namespace Clover
                 DeskRootChange.Check pre = DeskRootChange.Validate(picked, CurrentDeskRoot());
                 if (!pre.Ok)
                 {
-                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面文件",
+                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面收纳",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -553,11 +557,11 @@ namespace Clover
                 {
                     RefreshValues();
                     MessageBox.Show(dlg, "存放目录已改为：\r\n" + CurrentDeskRoot(),
-                        "四叶草 · 桌面文件", MessageBoxButton.OK, MessageBoxImage.Information);
+                        "四叶草 · 桌面收纳", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
-                    MessageBox.Show(dlg, err, "四叶草 · 桌面文件",
+                    MessageBox.Show(dlg, err, "四叶草 · 桌面收纳",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     RefreshValues();
                 }
@@ -594,7 +598,7 @@ namespace Clover
                     DeskRootChange.SafeFull(CurrentDeskRoot()),
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    MessageBox.Show(dlg, "已经是默认目录了。", "四叶草 · 桌面文件",
+                    MessageBox.Show(dlg, "已经是默认目录了。", "四叶草 · 桌面收纳",
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -614,7 +618,7 @@ namespace Clover
                 DeskRootChange.Check pre = DeskRootChange.Validate(target, CurrentDeskRoot());
                 if (!pre.Ok)
                 {
-                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面文件",
+                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面收纳",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -626,11 +630,11 @@ namespace Clover
                 {
                     RefreshValues();
                     MessageBox.Show(dlg, "存放目录已改为：\r\n" + CurrentDeskRoot(),
-                        "四叶草 · 桌面文件", MessageBoxButton.OK, MessageBoxImage.Information);
+                        "四叶草 · 桌面收纳", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
-                    MessageBox.Show(dlg, err, "四叶草 · 桌面文件",
+                    MessageBox.Show(dlg, err, "四叶草 · 桌面收纳",
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     RefreshValues();
                 }
@@ -646,7 +650,7 @@ namespace Clover
                 using (System.Windows.Forms.FolderBrowserDialog fbd =
                     new System.Windows.Forms.FolderBrowserDialog())
                 {
-                    fbd.Description = "选择「桌面文件」的存放目录（所有桌面文件夹会建在它下面）";
+                    fbd.Description = "选择「桌面收纳」的存放目录（所有收纳桌面会建在它下面）";
                     fbd.ShowNewFolderButton = true;
 
                     try
@@ -664,7 +668,7 @@ namespace Clover
             {
                 Ui.LogError(ex, "选目录对话框");
                 MessageBox.Show(dlg, "打不开选目录对话框：" + ex.Message,
-                    "四叶草 · 桌面文件", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    "四叶草 · 桌面收纳", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return null;
             }
         }

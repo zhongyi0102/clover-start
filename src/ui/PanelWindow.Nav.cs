@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Controls.Primitives;
@@ -30,7 +31,7 @@ namespace Clover
         /// 磁贴是 96px 宽的网格项，不像 Dock 条那样有"把邻居挤开"的空间，
         /// 1.6 会明显盖住相邻磁贴的图标。1.25 是"看得出放大但不越界"的平衡点。
         /// </summary>
-        const double IconHoverScale = 1.25;
+        const double IconHoverScale = 1.06;
 
         /// <summary>
         /// 悬停时图标**上浮**的像素数。
@@ -41,18 +42,13 @@ namespace Clover
         ///
         /// 用负值是往上（WPF 的 Y 轴向下为正）。
         /// </summary>
-        const double IconLiftPx = 4.0;
+        const double IconLiftPx = 1.0;
 
         /// <summary>
-        /// 点击时的**弹跳**高度与时长。
-        ///
-        /// GlassBoard 的做法：0 → -7px → 0，420ms，
-        /// 上去用 EaseOut（快起慢收）、回来用 EaseIn（慢起快收）。
-        /// 这里用 -6px / 350ms：幅度略小、时长略短，
-        /// 因为磁贴是"启动应用"的高频操作，反馈要快、不能拖。
+        /// 按下态只移动 1px，并控制在 80ms 内。启动应用属于高频操作，
+        /// 不使用会抢注意力的弹跳动画。
         /// </summary>
-        const double IconBouncePx = 6.0;
-        const int IconBounceMs = 350;
+        const double IconPressPx = 1.0;
 
         /// <summary>
         /// 拖拽让位/落入的动画时长（毫秒）。
@@ -94,34 +90,9 @@ namespace Clover
         static readonly DoubleAnimation IconLiftDown = FrozenShift(-IconLiftPx, 0.0, 160);
 
         /// <summary>
-        /// 点击弹跳（关键帧：0 → -6px → 0）。
-        ///
-        /// 为什么用 DoubleAnimationUsingKeyFrames 而不是两个动画串起来：
-        /// 关键帧能保证"上去再回来"是一个连续动作，
-        /// 中间不会被别的动画打断；而且只占一个动画槽，
-        /// 磁贴被复用（滚动重建）时不会残留半截动画。
+        /// 按下反馈。松手/离开时仍沿用悬停复位动画。
         /// </summary>
-        static DoubleAnimationUsingKeyFrames BuildBounce()
-        {
-            DoubleAnimationUsingKeyFrames a = new DoubleAnimationUsingKeyFrames();
-            a.Duration = TimeSpan.FromMilliseconds(IconBounceMs);
-
-            CubicEase up = new CubicEase();
-            up.EasingMode = EasingMode.EaseOut;
-            up.Freeze();
-
-            CubicEase down = new CubicEase();
-            down.EasingMode = EasingMode.EaseIn;
-            down.Freeze();
-
-            a.KeyFrames.Add(new LinearDoubleKeyFrame(0.0, KeyTime.FromPercent(0.0)));
-            a.KeyFrames.Add(new EasingDoubleKeyFrame(-IconBouncePx, KeyTime.FromPercent(0.45), up));
-            a.KeyFrames.Add(new EasingDoubleKeyFrame(0.0, KeyTime.FromPercent(1.0), down));
-            a.Freeze();
-            return a;
-        }
-
-        static readonly DoubleAnimationUsingKeyFrames IconBounce = BuildBounce();
+        static readonly DoubleAnimation IconPress = FrozenShift(-IconLiftPx, IconPressPx, 80);
 
         /// <summary>
         /// 位移动画（起点终点明确，可冻结共享）。
@@ -330,15 +301,17 @@ namespace Clover
                           : (catalog.Apps.Count - catalog.HiddenItems().Count));
 
                 // 显示名
-                string label = c == "" ? "全部" : c;   // 空串 → 全部，其余用内部名
+                string label = DisplayCategoryName(c);
 
                 // 分类项：横向胶囊按钮
-                Border item = new Border();
+                Button item = new Button();
                 item.Height = 30;
-                item.CornerRadius = new CornerRadius(item.Height / 2);
                 item.Margin = new Thickness(0, 2, 4, 2);
                 item.Padding = new Thickness(10, 0, 10, 0);
                 item.Background = Brushes.Transparent;
+                item.BorderBrush = Brushes.Transparent;
+                item.BorderThickness = new Thickness(0);
+                item.Template = MakeButtonTemplate(item.Height / 2);
                 item.Cursor = Cursors.Hand;
 
                 Grid g = new Grid();
@@ -378,14 +351,30 @@ namespace Clover
                 Grid.SetColumn(cnt, 1);
                 g.Children.Add(cnt);
 
-                item.Child = g;
-                item.MouseEnter += delegate { if (current != c) item.Background = Ui.Hover; };
-                item.MouseLeave += delegate { if (current != c) item.Background = Brushes.Transparent; };
-                item.MouseLeftButtonUp += delegate
+                item.Content = g;
+                item.SnapsToDevicePixels = true;
+                AutomationProperties.SetName(item, label + "标签");
+                item.MouseEnter += delegate
+                {
+                    if (current != c && !item.IsKeyboardFocused) item.Background = Ui.Hover;
+                };
+                item.MouseLeave += delegate
+                {
+                    if (current != c && !item.IsKeyboardFocused) item.Background = Brushes.Transparent;
+                };
+                item.Click += delegate
                 {
                     // 先把当前分类的滚动位置存下来（必须在改 current 之前）
                     SaveScrollOffset();
                     SwitchCategory(c);
+                };
+                item.GotKeyboardFocus += delegate
+                {
+                    if (current != c) item.Background = Ui.AccentSoft;
+                };
+                item.LostKeyboardFocus += delegate
+                {
+                    if (current != c) item.Background = Brushes.Transparent;
                 };
 
                 // 右键：只有额外自定义桌面能改名/删除；内置四个不给菜单
@@ -417,24 +406,34 @@ namespace Clover
             navStack.Children.Add(MakeAddTabButton());
         }
 
+        static string DisplayCategoryName(string category)
+        {
+            if (string.IsNullOrEmpty(category)) return "全部";
+            if (category == FilesCategory) return "文件库";
+            if (category == VirtualDesktopCategory) return "桌面收纳";
+            return category;
+        }
+
         /// <summary>
         /// 标签栏末尾的圆形「+」：新建标签。
         ///
         /// 样式对齐「文件」页来源行末尾那个 +：圆形（CornerRadius = 高度/2）、
         /// 半透明浅灰底、悬停变深。
         /// </summary>
-        Border MakeAddTabButton()
+        Button MakeAddTabButton()
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Width = 30;
             b.Height = 30;
-            b.CornerRadius = new CornerRadius(b.Height / 2);
             b.Margin = new Thickness(0, 2, 4, 2);
             b.Cursor = Cursors.Hand;
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(1);
+            b.Padding = new Thickness(0);
+            b.Template = MakeButtonTemplate(b.Height / 2);
             b.ToolTip = "新建桌面";
+            AutomationProperties.SetName(b, "新建桌面");
 
             TextBlock t = new TextBlock();
             t.Text = "+";
@@ -443,17 +442,19 @@ namespace Clover
             t.Foreground = Ui.Sub;
             t.HorizontalAlignment = HorizontalAlignment.Center;
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            b.Content = t;
 
             b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
-            b.MouseLeftButtonUp += delegate { PromptNewTab(); };
+            b.MouseLeave += delegate { b.Background = b.IsKeyboardFocused ? Ui.AccentSoft : Ui.SearchBg; };
+            b.GotKeyboardFocus += delegate { b.Background = Ui.AccentSoft; };
+            b.LostKeyboardFocus += delegate { b.Background = b.IsMouseOver ? Ui.Hover : Ui.SearchBg; };
+            b.Click += delegate { PromptNewTab(); };
             return b;
         }
 
         /// <summary>新建标签：弹小输入框，回车确认。</summary>
         /// <summary>自定义标签的右键菜单：重命名 / 删除。</summary>
-        void ShowTabMenu(string name, Border anchor)
+        void ShowTabMenu(string name, FrameworkElement anchor)
         {
             try
             {
@@ -929,6 +930,13 @@ namespace Clover
             if (searchSuppress) return;
             if (searchHint != null)
                 searchHint.Visibility = searchBox.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            // 桌面收纳已载入时只切现有图标的 Visibility，不重新列目录、清选择或写坐标。
+            if (IsDeskTab(current) && deskView != null)
+            {
+                deskView.ApplyFilter(searchBox.Text);
+                return;
+            }
             RenderApps();
         }
 
@@ -973,6 +981,41 @@ namespace Clover
             list.Sort(RenderCompare);
             return list;
         }
+
+        /// <summary>让搜索语义与底部快捷提示随当前页面变化。</summary>
+        void UpdateContextChrome()
+        {
+            try
+            {
+                string searchName;
+                string hint;
+                string footer;
+                if (current == FilesCategory)
+                {
+                    searchName = "筛选文件库";
+                    hint = "筛选当前文件来源…";
+                    footer = "文件库 · 浏览多个来源；Delete 移到回收站，F5 刷新";
+                }
+                else if (IsDeskTab(current))
+                {
+                    searchName = "搜索桌面收纳";
+                    hint = "搜索桌面收纳中的文件…";
+                    footer = "桌面收纳 · 文件存放在真实目录；可拖入、框选和自由摆放";
+                }
+                else
+                {
+                    searchName = "搜索应用";
+                    hint = "搜索应用（支持拼音 / 首字母）…";
+                    footer = "Esc 收起 · 输入即可搜索应用 · 方向键选择，Enter 启动";
+                }
+
+                if (searchHint != null) searchHint.Text = hint;
+                if (searchBox != null) AutomationProperties.SetName(searchBox, searchName);
+                if (footerHint != null) footerHint.Text = footer;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "更新页面提示"); }
+        }
+
 
         /// <summary>
         /// 单条应用能否**因使用记录**进入「常用」页。
@@ -1266,6 +1309,7 @@ namespace Clover
                 current = next;
                 SaveLastCategory();
                 UpdateNav();
+                UpdateContextChrome();
 
                 // 进入文件标签：重置瞬时状态，从干净状态开始
                 if (willFiles && filesView != null)
@@ -1335,10 +1379,8 @@ namespace Clover
         }
 
         /// <summary>
-        /// 重建「桌面文件」页顶部的按钮行。
-        ///
-        /// 按钮：收纳桌面 / 放回桌面 / 撤销上一批。
-        /// 撤销按钮只在有历史时出现。
+        /// 重建「桌面收纳」页顶部的按钮行。
+        /// 这里只保留两个明确动作：收纳桌面 / 放回桌面。
         /// </summary>
         void RebuildDeskToolRow()
         {
@@ -1352,14 +1394,6 @@ namespace Clover
 
                 deskToolRow.Children.Add(MakeDeskToolButton(
                     "放回桌面", "把选中（或全部）文件移回桌面", delegate { PutBackToDesktopBatch(); }));
-
-                DeskUndo.Batch latest = deskUndo == null ? null : deskUndo.Latest;
-                if (latest != null)
-                {
-                    string label = "撤销「" + latest.Action + "」(" + latest.Entries.Count + ")";
-                    deskToolRow.Children.Add(MakeDeskToolButton(
-                        label, "把上一批文件移回原位置", delegate { UndoLastBatch(); }));
-                }
             }
             catch (Exception ex) { Ui.LogError(ex, "重建桌面工具行"); }
         }
@@ -1442,9 +1476,6 @@ namespace Clover
 
                 DeskCollector.MoveResult r = DeskCollector.Collect(paths, dest);
 
-                if (r.AnyMoved && deskUndo != null)
-                    deskUndo.Push("收纳桌面", r.Moved);
-
                 ReportMoveResult("收纳桌面", r, dest);
                 RefreshDeskAfterMove();
             }
@@ -1474,7 +1505,7 @@ namespace Clover
                 root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
                 TextBlock title = Ui.T("将收纳 " + scan.Items.Count + " 个文件到「"
-                    + VirtualDesktopCategory + "」", 14, Ui.Fg, FontWeights.SemiBold);
+                    + DisplayCategoryName(VirtualDesktopCategory) + "」", 14, Ui.Fg, FontWeights.SemiBold);
                 Grid.SetRow(title, 0);
                 root.Children.Add(title);
 
@@ -1524,7 +1555,7 @@ namespace Clover
                 Border cancel = MakeDeskToolButton("取消", "不做任何改动", delegate { dlg.Close(); });
 
                 Border confirm = MakeDeskToolButton("确认收纳",
-                    "把这些文件移进当前桌面文件夹", delegate { ok = true; dlg.Close(); });
+                    "把这些文件移进当前收纳目录", delegate { ok = true; dlg.Close(); });
                 confirm.Background = Ui.Accent;
                 TextBlock ct = confirm.Child as TextBlock;
                 if (ct != null) ct.Foreground = Brushes.White;
@@ -1578,54 +1609,18 @@ namespace Clover
                     return;
                 }
 
+                if (!TextPromptDialog.Confirm(this, "放回桌面",
+                    "将 " + paths.Count + " 项放回真实桌面？\r\n\r\n"
+                    + "同名项目会自动改名，不会覆盖桌面上的现有文件。",
+                    "放回桌面")) return;
+
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 DeskCollector.MoveResult r = DeskCollector.PutBack(paths, desktop);
-
-                if (r.AnyMoved && deskUndo != null)
-                    deskUndo.Push("放回桌面", r.Moved);
 
                 ReportMoveResult("放回桌面", r, desktop);
                 RefreshDeskAfterMove();
             }
             catch (Exception ex) { Ui.LogError(ex, "放回桌面"); }
-        }
-
-        /// <summary>撤销最近一批。</summary>
-        void UndoLastBatch()
-        {
-            try
-            {
-                if (deskUndo == null) return;
-
-                DeskUndo.Batch latest = deskUndo.Latest;
-                if (latest == null) return;
-
-                if (!TextPromptDialog.Confirm(this, "撤销",
-                    "把上一批（" + latest.Action + "，" + latest.Entries.Count
-                    + " 个文件）移回原位置？\r\n\r\n原位置已被占用的文件会跳过，不会覆盖。",
-                    "撤销")) return;
-
-                DeskUndo.UndoResult r = deskUndo.UndoLatest();
-
-                string msg = "已撤销 " + r.Restored + " 个文件。";
-                if (!r.AllOk)
-                {
-                    msg += "\r\n\r\n" + r.Failed.Count + " 个未能撤销：";
-                    for (int i = 0; i < r.Failed.Count && i < 5; i++)
-                    {
-                        msg += "\r\n  · " + r.Failed[i];
-                        if (i < r.Reasons.Count && !string.IsNullOrEmpty(r.Reasons[i]))
-                            msg += "（" + r.Reasons[i] + "）";
-                    }
-                }
-
-                MessageBox.Show(this, msg, "四叶草 · 撤销",
-                    MessageBoxButton.OK,
-                    r.AllOk ? MessageBoxImage.Information : MessageBoxImage.Warning);
-
-                RefreshDeskAfterMove();
-            }
-            catch (Exception ex) { Ui.LogError(ex, "撤销上一批"); }
         }
 
         /// <summary>搬运结果汇总提示。</summary>
@@ -1702,6 +1697,7 @@ namespace Clover
                 // 尺寸变了才能算空位，先跑一次布局
                 deskCanvas.UpdateLayout();
                 deskView.Load(name);
+                deskView.ApplyFilter(searchBox == null ? "" : searchBox.Text);
 
                 RebuildDeskToolRow();
 
@@ -2134,6 +2130,29 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "测试：设置 showFilesTab"); }
         }
 
+        /// <summary>测试用：临时替换自定义桌面，验证导航换行；不写磁盘。</summary>
+        internal void TestSetCustomTabs(IEnumerable<string> names)
+        {
+            try
+            {
+                if (customTabs == null) return;
+                customTabs.Items.Clear();
+                if (names != null)
+                {
+                    foreach (string raw in names)
+                    {
+                        string name = NavTabs.SanitizeName(raw);
+                        if (name.Length == 0 || NavTabs.IsReserved(name)) continue;
+                        if (customTabs.FindIndex(name) >= 0) continue;
+                        if (customTabs.Items.Count >= NavTabs.MaxTabs) break;
+                        customTabs.Items.Add(new NavTabs.Tab(name));
+                    }
+                }
+                RebuildNav();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "测试：设置自定义桌面"); }
+        }
+
         /// <summary>测试用：切到某个分类。</summary>
         internal void TestSwitchCategory(string cat)
         {
@@ -2341,13 +2360,28 @@ namespace Clover
             }
         }
 
-        /// <summary>测试用：设置搜索框文字（不触发渲染）。</summary>
+        /// <summary>测试用：设置搜索框文字，走与用户输入相同的 TextChanged 路径。</summary>
         internal void TestSetSearchText(string text)
         {
             try
             {
+                if (searchBox != null) searchBox.Text = text ?? "";
             }
             catch (Exception ex) { Ui.LogError(ex, "测试：设置搜索文字"); }
+        }
+
+        /// <summary>测试用：当前页面的搜索提示。</summary>
+        internal string TestSearchHint()
+        {
+            try { return searchHint == null ? "" : (searchHint.Text ?? ""); }
+            catch { return ""; }
+        }
+
+        /// <summary>测试用：当前页面的底部快捷提示。</summary>
+        internal string TestFooterHint()
+        {
+            try { return footerHint == null ? "" : (footerHint.Text ?? ""); }
+            catch { return ""; }
         }
 
         /// <summary>测试用：全局搜索结果面板是否可见。</summary>
@@ -2376,6 +2410,24 @@ namespace Clover
         {
             try { return deskPanel != null && deskPanel.Visibility == Visibility.Visible; }
             catch { return false; }
+        }
+
+        /// <summary>测试用：读取桌面收纳页顶部操作按钮的显示文字。</summary>
+        internal List<string> TestDeskToolLabels()
+        {
+            List<string> labels = new List<string>();
+            try
+            {
+                if (deskToolRow == null) return labels;
+                foreach (UIElement child in deskToolRow.Children)
+                {
+                    Border button = child as Border;
+                    TextBlock text = button == null ? null : button.Child as TextBlock;
+                    if (text != null) labels.Add(text.Text ?? "");
+                }
+            }
+            catch { }
+            return labels;
         }
 
         /// <summary>测试用：桌面页与图标画布的实际高度。</summary>
@@ -2628,16 +2680,22 @@ namespace Clover
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
                 // 悬停：放大 + 上浮（参考 GlassBoard 的 Dock 悬停）。
                 // 只动 RenderTransform，不触发布局重排。
-                iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomIn);
-                iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomIn);
-                iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftUp);
+                if (!Ui.ReducedMotion)
+                {
+                    iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomIn);
+                    iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomIn);
+                    iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftUp);
+                }
             };
             b.MouseLeave += delegate
             {
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Brushes.Transparent;
-                iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomOut);
-                iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomOut);
-                iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftDown);
+                if (!Ui.ReducedMotion)
+                {
+                    iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, IconZoomOut);
+                    iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, IconZoomOut);
+                    iconLift.BeginAnimation(TranslateTransform.YProperty, IconLiftDown);
+                }
             };
             b.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {
@@ -2648,11 +2706,9 @@ namespace Clover
                 // 不会怀疑是没点中。
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Pressed;
 
-                // 点击弹跳：0 → -6px → 0。
-                // 与悬停上浮共用 TranslateTransform.Y，所以会覆盖悬停状态 ——
-                // 这是有意的：弹跳结束后图标停在上浮位置（鼠标还在磁贴上），
-                // 视觉上连贯。若弹跳后回到 0 再上浮，会看到"抖两下"。
-                iconLift.BeginAnimation(TranslateTransform.YProperty, IconBounce);
+                // 高频操作只给短促按压反馈，不用弹跳拖慢体感。
+                if (!Ui.ReducedMotion)
+                    iconLift.BeginAnimation(TranslateTransform.YProperty, IconPress);
 
                 // 鼠标点击磁贴时，键盘选中跟随到它，方向键从当前位置继续
                 SelectTile(renderedApps.IndexOf(a), false);
@@ -3004,6 +3060,13 @@ namespace Clover
                     double cur = tt.X;
                     if (Math.Abs(cur - dx) < 0.5) continue;
 
+                    if (Ui.ReducedMotion)
+                    {
+                        tt.BeginAnimation(TranslateTransform.XProperty, null);
+                        tt.X = dx;
+                        continue;
+                    }
+
                     DoubleAnimation anim = new DoubleAnimation(dx, TimeSpan.FromMilliseconds(DragShiftMs));
                     anim.EasingFunction = FrozenCubic();
                     tt.BeginAnimation(TranslateTransform.XProperty, anim);
@@ -3071,6 +3134,13 @@ namespace Clover
                     if (tt == null) continue;
                     if (Math.Abs(tt.X) < 0.5) continue;
 
+                    if (Ui.ReducedMotion)
+                    {
+                        tt.BeginAnimation(TranslateTransform.XProperty, null);
+                        tt.X = 0;
+                        continue;
+                    }
+
                     DoubleAnimation back = new DoubleAnimation(0.0, TimeSpan.FromMilliseconds(DragShiftMs));
                     back.EasingFunction = FrozenCubic();
                     tt.BeginAnimation(TranslateTransform.XProperty, back);
@@ -3103,6 +3173,14 @@ namespace Clover
                 }
 
                 Border ghost = dragGhost;
+
+                if (Ui.ReducedMotion)
+                {
+                    HideDragGhost();
+                    if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
+                    CommitDrag(a, target);
+                    return;
+                }
 
                 // 目标格的中心坐标（tilePanel 坐标系）
                 double cellW = TileWidthPx + 4;

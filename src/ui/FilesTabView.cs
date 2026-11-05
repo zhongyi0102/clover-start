@@ -13,8 +13,8 @@ namespace Clover
     /// <summary>
     /// 「文件」标签的界面：来源胶囊行 + 排序行 + 文件列表 + 右键菜单 + 多选 + 键盘。
     ///
-    /// **只读浏览与打开**。不移动、不删除、不重命名、不改内容、不递归、
-    /// 不监视、不读文件内容、不做缩略图、不做全盘搜索。
+    /// 聚合浏览与轻量文件管理。支持打开、重命名、新建、剪切/粘贴、
+    /// 移到回收站和撤销；不递归、不监视、不做全盘搜索。
     ///
     /// 数据来源全部是 FileFolders（用户手动添加），不内置桌面或任何固定来源。
     ///
@@ -26,8 +26,9 @@ namespace Clover
     ///   · Ctrl+A    全选
     ///   · Ctrl+点击  切换单项选中
     ///   · Shift+点击 范围选中
-    ///   · Ctrl+C    把选中的文件放进剪贴板（FileDrop，只读）
-    ///   · 拖出       DoDragDrop(Copy) —— 只允许复制，不允许移动
+    ///   · Ctrl+C/X/V 复制 / 剪切 / 粘贴
+    ///   · Delete     移到回收站（先确认，可撤销）
+    ///   · 拖出       交给系统拖放目标决定复制或移动
     ///
     /// **拖动排序只对应用磁贴有效**：文件列表行不参与 tilePanel 的拖动换位逻辑。
     /// </summary>
@@ -195,11 +196,31 @@ namespace Clover
                     dropHint.SetTitle("把文件夹拖进来", DropSpec.FolderHintText());
                 }
 
-                // 提示层始终显示（这一页没有"空态才显示"的语义 ——
-                // 用户任何时候都可能想加来源）。
-                dropHint.SetVisible(true);
+                // 来源存在后收起大型提示，避免它长期占据文件列表上方；
+                // 真正拖入窗口时由 PanelWindow 临时显示并点亮。
+                dropHint.SetVisible(have == 0);
             }
             catch (Exception ex) { Ui.LogError(ex, "刷新放置提示"); }
+        }
+
+        /// <summary>拖入期间临时显示来源提示；离开后恢复为空状态策略。</summary>
+        public void SetDropCue(bool on)
+        {
+            try
+            {
+                if (dropHint == null) return;
+                if (on)
+                {
+                    dropHint.SetVisible(true);
+                    dropHint.SetActive(true);
+                }
+                else
+                {
+                    dropHint.SetActive(false);
+                    RefreshDropHint();
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "切换文件库拖入提示"); }
         }
 
         /// <summary>
@@ -850,7 +871,7 @@ namespace Clover
                 if (!HasSources)
                 {
                     ClearList();
-                    SetNotice("点上面的「+」添加要读取的文件夹");
+                    SetNotice("文件库还没有来源。点上面的「+」或拖入文件夹开始使用；这里浏览来源，不会自动搬动文件。");
                     cached = null;
                     return;
                 }
@@ -862,7 +883,7 @@ namespace Clover
                 if (srcs.Count == 0)
                 {
                     ClearList();
-                    SetNotice("点上面的「+」添加要读取的文件夹");
+                    SetNotice("文件库还没有可用来源。点上面的「+」或拖入文件夹开始使用。");
                     cached = null;
                     return;
                 }
@@ -1679,6 +1700,12 @@ namespace Clover
                 {
                     if (kv.Value == null || !set.Contains(kv.Key)) continue;
                     Border row = kv.Value;
+                    if (Ui.ReducedMotion)
+                    {
+                        row.BeginAnimation(UIElement.OpacityProperty, null);
+                        row.Visibility = Visibility.Collapsed;
+                        continue;
+                    }
                     DoubleAnimation fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(120));
                     fade.Completed += delegate
                     {

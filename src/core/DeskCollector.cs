@@ -20,6 +20,14 @@ namespace Clover
     /// </summary>
     public static class DeskCollector
     {
+        /// <summary>一条已完成的移动记录，仅用于结果汇总与审计日志。</summary>
+        public class MoveEntry
+        {
+            public string From = "";
+            public string To = "";
+            public string Time = "";
+        }
+
         /// <summary>不收纳的扩展名（应用类）。</summary>
         static readonly string[] BlockedExt =
         {
@@ -45,7 +53,7 @@ namespace Clover
         /// <summary>搬运结果。</summary>
         public class MoveResult
         {
-            public List<DeskUndo.Entry> Moved = new List<DeskUndo.Entry>();
+            public List<MoveEntry> Moved = new List<MoveEntry>();
             public List<string> Failed = new List<string>();
             public List<string> Reasons = new List<string>();
 
@@ -232,7 +240,7 @@ namespace Clover
                             continue;
                         }
 
-                        DeskUndo.Entry e = new DeskUndo.Entry();
+                        MoveEntry e = new MoveEntry();
                         e.From = src;
                         e.To = moved.Target;
                         e.Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -304,7 +312,7 @@ namespace Clover
                             continue;
                         }
 
-                        DeskUndo.Entry e = new DeskUndo.Entry();
+                        MoveEntry e = new MoveEntry();
                         e.From = src;
                         e.To = moved.Target;
                         e.Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");

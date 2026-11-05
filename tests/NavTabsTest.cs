@@ -93,6 +93,8 @@ namespace Clover
             Check(NavTabs.IsReserved("全部"), "全部 是内置");
             Check(NavTabs.IsReserved("文件"), "文件 是内置");
             Check(NavTabs.IsReserved("虚拟桌面"), "★虚拟桌面 是内置");
+            Check(!NavTabs.IsReserved("文件库"), "文件库 不是内部存储键");
+            Check(!NavTabs.IsReserved("桌面收纳"), "桌面收纳 不是内部存储键");
             Check(!NavTabs.IsReserved("游戏"), "游戏 不是内置");
             Check(!NavTabs.IsReserved(""), "空串不是内置");
             Check(!NavTabs.IsReserved(null), "null 不是内置");
@@ -136,6 +138,10 @@ namespace Clover
                 Check(e6 != null, "★文件 被拒绝", e6 ?? "");
                 string e6b = t.Add("虚拟桌面");
                 Check(e6b != null, "★虚拟桌面 被拒绝", e6b ?? "");
+                string e6c = t.Add("文件库");
+                Check(e6c != null, "★文件库显示名被拒绝", e6c ?? "");
+                string e6d = t.Add("桌面收纳");
+                Check(e6d != null, "★桌面收纳显示名被拒绝", e6d ?? "");
 
                 // 空名
                 string e7 = t.Add("   ");
@@ -187,6 +193,10 @@ namespace Clover
                 // 改成内置名
                 string e3 = t.Rename("娱乐", "常用");
                 Check(e3 != null, "★改成内置名被拒绝", e3 ?? "");
+                string e3b = t.Rename("娱乐", "文件库");
+                Check(e3b != null, "★改成文件库显示名被拒绝", e3b ?? "");
+                string e3c = t.Rename("娱乐", "桌面收纳");
+                Check(e3c != null, "★改成桌面收纳显示名被拒绝", e3c ?? "");
 
                 // 改成空
                 string e4 = t.Rename("娱乐", "  ");

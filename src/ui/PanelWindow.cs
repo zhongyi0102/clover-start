@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -43,8 +44,8 @@ namespace Clover
         /// <summary>上次浏览的分类（重启后恢复到它，见 config\last-category.json）。</summary>
         string lastCatPath;
         Border searchBorder;
-        Border minBtn;              // 最小化（与关闭同行为：HidePanel）
-        Border closeBtn;
+        Button minBtn;
+        Button closeBtn;
         UsageStore usage;
         List<string> hiddenCats;
         bool taskMenuOpen;
@@ -54,7 +55,7 @@ namespace Clover
         List<AppItem> renderedApps = new List<AppItem>();
         string orderPath;
         Border rootBorder;
-        Border maxBtn;
+        Button maxBtn;
         bool expanded;
         /// <summary>
         /// 面板外边距（root 的 Margin），供 PositionPanel 算展开/还原尺寸。
@@ -96,7 +97,7 @@ namespace Clover
         /// </summary>
         // Border dropHighlight;   // 已移除：见 SetDropHighlight 的说明
 
-        StackPanel navStack;
+        WrapPanel navStack;
 
         /// <summary>用户自定义标签（+ 号新建的），持久化在 config\nav-tabs.json。</summary>
         NavTabs customTabs;
@@ -104,9 +105,6 @@ namespace Clover
         /// <summary>旧标签迁移冲突提示（面板首次显示时弹一次）。</summary>
         string deskMigrationNotice;
         DeskMigrationNotice deskMigrationNoticeStore;
-
-        /// <summary>收纳/放回桌面的撤销历史（最近 5 批，持久化）。</summary>
-        DeskUndo deskUndo;
 
         // ---- 虚拟桌面（自定义标签）----
         Canvas deskCanvas;
@@ -148,6 +146,7 @@ namespace Clover
         DropHint filesDropHint;
         TextBox searchBox;
         TextBlock searchHint;
+        TextBlock footerHint;
         TextBlock footerCount;
 
         /// <summary>
@@ -165,7 +164,7 @@ namespace Clover
         /// <summary>侧栏下半部分（任务栏列表，折叠时隐藏）。</summary>
         Grid taskGrid;
         /// <summary>侧栏收起/展开的切换按钮。</summary>
-        Border navToggle;
+        Button navToggle;
         /// <summary>侧栏是否已收起。</summary>
         bool navCollapsed;
 
@@ -217,7 +216,7 @@ namespace Clover
             new Dictionary<string, Grid>(StringComparer.OrdinalIgnoreCase);
 
         List<string> navCats = new List<string>();
-        List<Border> navItems = new List<Border>();
+        List<Button> navItems = new List<Button>();
         List<Border> navBars = new List<Border>();
         List<TextBlock> navNames = new List<TextBlock>();
         List<TextBlock> navCounts = new List<TextBlock>();
@@ -320,9 +319,6 @@ namespace Clover
 
                 virtualDesks.EnsureDesk(VirtualDesktopCategory);
                 virtualDesks.Save();
-
-                deskUndo = new DeskUndo(baseDir);
-                deskUndo.Load();
             }
             catch (Exception ex) { Ui.LogError(ex, "初始化默认虚拟桌面"); }
 
@@ -723,39 +719,37 @@ namespace Clover
                     // 用户手动拖动面板时 SaveLayout 才把 needPosition 清掉。
                     PositionPanel();
                 }
-                Opacity = 0;
+                Opacity = Ui.ReducedMotion ? 1 : 0;
                 Show();
             }
             Activate();
             IntPtr h = new WindowInteropHelper(this).Handle;
             if (h != IntPtr.Zero) Native.SetForegroundWindow(h);
 
-            // 复用同一个 reveal 动画对象，避免每次显示都新建 DoubleAnimation
-            // （实测反复开关面板会造成托管堆持续增长）。
-            // 用 Ui.ReusableEnter：带 EaseOut 缓动，且**未冻结**
-            // —— 因为下面每回合都要改 From（从当前透明度起）。
-            if (showAnim == null)
+            if (Ui.ReducedMotion)
             {
-                showAnim = Ui.ReusableEnter(1, 150);
-            }
-            showAnim.From = 0;
-            BeginAnimation(OpacityProperty, showAnim);
-
-            // 轻微上移：淡入的同时从下方 8px 升到原位，让面板"活"一下。
-            //
-            // 用 rootBorder 的 RenderTransform 而不是改 Top/Margin：
-            // RenderTransform 是布局之后应用的渲染变换，**不会触发布局重排**，
-            // 也不会和新窗口位置打架（面板位置由 layout.json 记住，不能动）。
-            // showShift 已由 BuildUi 接好，这里只跑动画。
-            if (showShift != null)
-            {
-                if (showShiftAnim == null)
+                BeginAnimation(OpacityProperty, null);
+                Opacity = 1;
+                if (showShift != null)
                 {
-                    // EaseOut：快起慢收，面板"落"得稳，不像被推到位置就急停
-                    showShiftAnim = Ui.ReusableEnter(0, 160);
+                    showShift.BeginAnimation(TranslateTransform.YProperty, null);
+                    showShift.Y = 0;
                 }
-                showShiftAnim.From = ShowShiftPx;
-                showShift.BeginAnimation(TranslateTransform.YProperty, showShiftAnim);
+            }
+            else
+            {
+                // 复用动画对象，避免反复开关面板持续制造 Clock。
+                if (showAnim == null) showAnim = Ui.ReusableEnter(1, 150);
+                showAnim.From = 0;
+                BeginAnimation(OpacityProperty, showAnim);
+
+                // 只动 RenderTransform，不触发布局重排。
+                if (showShift != null)
+                {
+                    if (showShiftAnim == null) showShiftAnim = Ui.ReusableEnter(0, 160);
+                    showShiftAnim.From = ShowShiftPx;
+                    showShift.BeginAnimation(TranslateTransform.YProperty, showShiftAnim);
+                }
             }
 
             if (searchBox != null) searchBox.Focus();
@@ -765,7 +759,7 @@ namespace Clover
             // 为什么不能立即做：此刻面板正从透明淡入 + 从下方上移，
             // 窗口位置还没稳定，截到的背景会错位。
             // 160 ms 是 showShiftAnim 的时长，加一点余量。
-            RefreshGlassSoon(220);
+            RefreshGlassSoon(Ui.ReducedMotion ? 20 : 220);
 
             // 面板已显示：立即按当前环境恢复/保持暂停；后续变化由自适应定时器接管。
             RefreshVideoPolicy();
@@ -1099,6 +1093,8 @@ namespace Clover
                 // 否则在「常用」「全部」页拖文件进来，光标是禁止的、
                 // 却有个提示框在说"松开即可放入"—— 自相矛盾。
                 bool accepts = DropCursor.PageAcceptsDrop(current, IsDeskTab(current));
+                if (!internalDrag && accepts && current == FilesCategory && filesView != null)
+                    filesView.SetDropCue(true);
                 SetDropHighlight(!internalDrag && accepts);
 
                 e.Handled = true;
@@ -1279,13 +1275,6 @@ namespace Clover
                     deskView.ReloadAndPlace(current, r.Imported, dropX, dropY);
                     if (virtualDesks != null) virtualDesks.Save();
 
-                    // 每次成功复制都写「原路径 → 新路径」，便于事后追溯。
-                    try
-                    {
-                        foreach (DeskUndo.Entry entry in r.Moved)
-                            Ui.Log("拖入复制: " + entry.From + " → " + entry.To);
-                    }
-                    catch { }
                 }
 
                 // 失败才用模态框（少数场景，必须让用户看见）；
@@ -1455,7 +1444,9 @@ namespace Clover
                     deskDropHint.SetActive(on);
 
                 // 「文件」标签的来源提示层同理
-                if (filesDropHint != null && filesDropHint.Visible)
+                if (current == FilesCategory && filesView != null)
+                    filesView.SetDropCue(on);
+                else if (filesDropHint != null && filesDropHint.Visible)
                     filesDropHint.SetActive(on);
             }
             catch (Exception ex) { Ui.LogError(ex, "拖放高亮"); }
@@ -1509,6 +1500,18 @@ namespace Clover
             try { if (videoBackdrop != null) videoBackdrop.ApplyPolicy(false, false, VideoBackdrop.IsOnBattery()); }
             catch { }
             SaveLayout();
+            if (Ui.ReducedMotion)
+            {
+                BeginAnimation(OpacityProperty, null);
+                Opacity = 1;
+                if (showShift != null)
+                {
+                    showShift.BeginAnimation(TranslateTransform.YProperty, null);
+                    showShift.Y = 0;
+                }
+                Hide();
+                return;
+            }
             // 复用单个动画对象，避免每次隐藏都新建 DoubleAnimation + Clock
             // （实测反复开关面板会造成托管堆持续增长）。
             if (hideAnim == null)
@@ -1564,7 +1567,9 @@ namespace Clover
                     Top = wa.Top;
                     Width = wa.Width;
                     Height = wa.Height;
-                    maxBtn.Child = MakeGlyph("\uE923");
+                    maxBtn.Content = MakeGlyph("\uE923");
+                    maxBtn.ToolTip = "还原";
+                    AutomationProperties.SetName(maxBtn, "还原面板");
                     Ui.Log("expand -> " + Width + "x" + Height);
                 }
                 else
@@ -1579,7 +1584,9 @@ namespace Clover
                     Top = normalRect.Y;
                     Width = normalRect.Width;
                     Height = normalRect.Height;
-                    maxBtn.Child = MakeGlyph("\uE922");
+                    maxBtn.Content = MakeGlyph("\uE922");
+                    maxBtn.ToolTip = "最大化";
+                    AutomationProperties.SetName(maxBtn, "最大化面板");
                     Ui.Log("restore -> " + Left + "," + Top + " " + Width + "x" + Height);
                 }
             }

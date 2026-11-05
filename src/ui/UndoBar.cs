@@ -191,9 +191,17 @@ namespace Clover
                 keepBtn.Visibility = keep == null ? Visibility.Collapsed : Visibility.Visible;
 
                 root.Visibility = Visibility.Visible;
-                root.Opacity = 0;
-                DoubleAnimation fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150));
-                root.BeginAnimation(UIElement.OpacityProperty, fade);
+                if (Ui.ReducedMotion)
+                {
+                    root.BeginAnimation(UIElement.OpacityProperty, null);
+                    root.Opacity = 1;
+                }
+                else
+                {
+                    root.Opacity = 0;
+                    DoubleAnimation fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150));
+                    root.BeginAnimation(UIElement.OpacityProperty, fade);
+                }
 
                 NotifyVisibility(true);
 
@@ -239,13 +247,23 @@ namespace Clover
                 undoAction = null;
                 if (root == null) return;
 
-                DoubleAnimation fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(120));
-                fade.Completed += delegate
+                if (Ui.ReducedMotion)
                 {
-                    try { root.Visibility = Visibility.Collapsed; } catch { }
+                    root.BeginAnimation(UIElement.OpacityProperty, null);
+                    root.Opacity = 1;
+                    root.Visibility = Visibility.Collapsed;
                     NotifyVisibility(false);
-                };
-                root.BeginAnimation(UIElement.OpacityProperty, fade);
+                }
+                else
+                {
+                    DoubleAnimation fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(120));
+                    fade.Completed += delegate
+                    {
+                        try { root.Visibility = Visibility.Collapsed; } catch { }
+                        NotifyVisibility(false);
+                    };
+                    root.BeginAnimation(UIElement.OpacityProperty, fade);
+                }
             }
             catch { }
         }

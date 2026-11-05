@@ -221,6 +221,22 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "载入虚拟桌面"); }
         }
 
+        /// <summary>按文件名筛选当前桌面；不改变坐标或选择数据。</summary>
+        public void ApplyFilter(string query)
+        {
+            try
+            {
+                string q = (query ?? "").Trim();
+                foreach (Item it in items)
+                {
+                    if (it == null || it.Host == null) continue;
+                    bool visible = q.Length == 0 || Pinyin.Matches(it.Name, q);
+                    it.Host.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "筛选桌面收纳"); }
+        }
+
         /// <summary>找一个当前没被占用的格子（按列往下走，到底换列）。</summary>
         void FindFreeSlot(ref double x, ref double y, double viewH)
         {

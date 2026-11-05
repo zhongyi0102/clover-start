@@ -1,0 +1,34 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-core-tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and verify core layering
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+
+      - name: Run non-desktop tests
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1 -CoreOnly
+
+      - name: Upload test summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-test-summary
+          path: tests/bin/test-summary.json
+          if-no-files-found: warn
+
+# 真正创建 WPF 窗口、抢前台焦点或探测任务栏的套件依赖交互式桌面会话，
+# 不在 GitHub 托管 runner 中制造假失败；发布前在真实 Windows 桌面运行完整 run-tests.ps1。

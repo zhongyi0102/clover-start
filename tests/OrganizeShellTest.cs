@@ -19,14 +19,14 @@ namespace Clover
     /// 而且不抛任何异常、日志里也没有痕迹。
     ///
     /// 这类错误靠肉眼只能发现"点了没反应"，很难定位。用断言钉死：
-    /// 无论怎么切标签，宿主窗口的 Content 必须始终是外壳 Grid，
+    /// 无论怎么切标签，自绘标题栏下面的页面外壳 Grid 都必须保留，
     /// pageHost 必须始终挂在视觉树上。
     ///
     /// ── 测什么 ──
     ///
     ///   · 两种入口（Desktop / Hidden）分别构造
     ///   · 每个入口下：初始状态、切到另一标签、来回 5 次
-    ///   · 每次都检查：Content 是 Grid、pageHost 在树上、页面有内容
+    ///   · 每次都检查：标题栏外壳完整、pageHost 在树上、页面有内容
     ///
     /// ── 不测什么 ──
     ///
@@ -118,6 +118,18 @@ namespace Clover
             Check(dlg.TestPageHasContent(),
                 label + "：构造后页面有内容");
 
+            List<string> captionActions = dlg.TestCaptionActions();
+            Check(captionActions.Count == 2,
+                "★" + label + "：标题栏只有两个动作",
+                string.Join(" / ", captionActions.ToArray()));
+            bool hasMaximizeAction = captionActions.Contains("最大化窗口")
+                || captionActions.Contains("还原窗口");
+            Check(hasMaximizeAction && captionActions.Contains("关闭窗口"),
+                "★" + label + "：标题栏保留最大化/还原与关闭",
+                string.Join(" / ", captionActions.ToArray()));
+            Check(!captionActions.Contains("最小化窗口"),
+                "★★" + label + "：标题栏没有最小化按钮");
+
             // ---- 切到另一个标签 ----
             OrganizeDialog.Tab other = (initial == OrganizeDialog.Tab.Desktop)
                 ? OrganizeDialog.Tab.Hidden
@@ -162,7 +174,7 @@ namespace Clover
                 Window w = dlg.TestWindow;
                 string t = w == null || w.Content == null ? "(null)" : w.Content.GetType().Name;
                 Console.WriteLine("  dlg.Content = " + t
-                    + "（应为 Grid；若是 ScrollViewer 说明又被页面覆盖了）");
+                    + "（应为标题栏 Border；若是 ScrollViewer 说明又被页面覆盖了）");
             }
             catch { }
 

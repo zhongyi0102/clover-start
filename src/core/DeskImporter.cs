@@ -40,15 +40,6 @@ namespace Clover
             /// <summary>成功复制进来的文件名（用于落位）。</summary>
             public List<string> Imported = new List<string>();
 
-            /// <summary>
-            /// 成功复制的「原路径 → 新路径」记录（供日志追溯）。
-            ///
-            /// 字段名保留 `Moved` 是为了不改调用方（PanelWindow 的日志循环），
-            /// 但语义已经是「复制」。**这些记录不能拿去撤销** ——
-            /// 撤销会把副本移回原处、覆盖原文件，而原文件本来就没动过。
-            /// </summary>
-            public List<DeskUndo.Entry> Moved = new List<DeskUndo.Entry>();
-
             /// <summary>被过滤掉的（.exe/.lnk 等），不提示。</summary>
             public List<string> Skipped = new List<string>();
 
@@ -296,12 +287,6 @@ namespace Clover
                 if (!done.Ok) throw new IOException(done.Message);
 
                 r.Imported.Add(Path.GetFileName(done.Target));
-
-                DeskUndo.Entry rec = new DeskUndo.Entry();
-                rec.From = src;
-                rec.To = done.Target;
-                rec.Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                r.Moved.Add(rec);
 
                 // 记一条能区分「搬走」和「复制」的日志：
                 // 出了问题时用户/我们需要一眼看出源文件该不该还在。

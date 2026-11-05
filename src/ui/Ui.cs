@@ -56,6 +56,20 @@ namespace Clover
         /// <summary>当前已应用的主题（System 会被解析成 Light 或 Dark）。</summary>
         public static ThemeMode AppliedTheme = ThemeMode.Light;
 
+        /// <summary>尊重 Windows“关闭动画效果”；环境变量供自动化验证使用。</summary>
+        public static bool ReducedMotion
+        {
+            get
+            {
+                try
+                {
+                    if (Environment.GetEnvironmentVariable("CLOVER_REDUCE_MOTION") == "1") return true;
+                    return !SystemParameters.ClientAreaAnimation;
+                }
+                catch { return false; }
+            }
+        }
+
         /// <summary>主题切换后的回调（各窗口用它重画临时控件上的颜色）。</summary>
         public static Action ThemeChanged = delegate { };
 

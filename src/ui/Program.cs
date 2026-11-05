@@ -70,6 +70,7 @@ namespace Clover
                 delegate(string dir) { ErrorLog.Init(dir); });
             Settings.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
             CategoryOverrides.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
+            JsonIO.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
 
             // ---------- 看门狗模式：无界面，只等主进程退出后还原系统状态 ----------
             if (guard)

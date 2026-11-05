@@ -1,5 +1,10 @@
 using System;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Shell;
 
 namespace Clover
 {
@@ -38,6 +43,209 @@ namespace Clover
     static class DialogChrome
     {
         /// <summary>
+        /// 为可调整大小的长期窗口使用项目标题栏。
+        ///
+        /// 系统标题栏在保留最大化能力时，部分 Windows 主题即使已经清掉
+        /// WS_MINIMIZEBOX，仍会绘制一个灰色的最小化占位。自绘后只提供
+        /// 「最大化/还原」与「关闭」，因此不会再出现那个无效入口。
+        /// </summary>
+        public static void UseMaximizeCloseTitleBar(Window dlg, UIElement content)
+        {
+            try
+            {
+                if (dlg == null) return;
+
+                dlg.WindowStyle = WindowStyle.None;
+                dlg.ResizeMode = ResizeMode.CanResize;
+
+                WindowChrome chrome = new WindowChrome();
+                chrome.CaptionHeight = 0;
+                chrome.ResizeBorderThickness = new Thickness(6);
+                chrome.GlassFrameThickness = new Thickness(0);
+                chrome.CornerRadius = new CornerRadius(0);
+                chrome.UseAeroCaptionButtons = false;
+                WindowChrome.SetWindowChrome(dlg, chrome);
+
+                if (content != null) dlg.Content = BuildMaximizeCloseShell(dlg, content);
+            }
+            catch { }
+        }
+
+        static UIElement BuildMaximizeCloseShell(Window dlg, UIElement content)
+        {
+            Border outer = new Border();
+            outer.Background = Ui.Bg;
+            outer.BorderBrush = Ui.Line;
+            outer.BorderThickness = new Thickness(1);
+
+            Grid root = new Grid();
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition
+            { Height = new GridLength(1, GridUnitType.Star) });
+
+            Border bar = new Border();
+            bar.Height = 36;
+            bar.Background = Ui.Bg;
+            bar.BorderBrush = Ui.Line;
+            bar.BorderThickness = new Thickness(0, 0, 0, 1);
+
+            Grid barGrid = new Grid();
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition());
+            barGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            TextBlock title = new TextBlock();
+            title.Text = dlg.Title ?? "";
+            title.FontFamily = Ui.YaHei;
+            title.FontSize = 12.5;
+            title.Foreground = Ui.Fg;
+            title.VerticalAlignment = VerticalAlignment.Center;
+            title.Margin = new Thickness(Ui.S.Lg, 0, 0, 0);
+            Grid.SetColumn(title, 0);
+            barGrid.Children.Add(title);
+
+            StackPanel actions = new StackPanel();
+            actions.Orientation = Orientation.Horizontal;
+            actions.VerticalAlignment = VerticalAlignment.Stretch;
+
+            Button maximize = MakeCaptionButton("\uE922", "最大化", delegate
+            {
+                try
+                {
+                    if (dlg.WindowState == WindowState.Maximized)
+                        SystemCommands.RestoreWindow(dlg);
+                    else
+                        SystemCommands.MaximizeWindow(dlg);
+                }
+                catch { }
+            });
+            actions.Children.Add(maximize);
+
+            Button close = MakeCaptionButton("\uE711", "关闭", delegate
+            {
+                try { SystemCommands.CloseWindow(dlg); }
+                catch { try { dlg.Close(); } catch { } }
+            });
+            actions.Children.Add(close);
+
+            Action updateMaximize = delegate
+            {
+                try
+                {
+                    bool restored = dlg.WindowState != WindowState.Maximized;
+                    maximize.Content = MakeCaptionGlyph(restored ? "\uE922" : "\uE923");
+                    maximize.ToolTip = restored ? "最大化" : "还原";
+                    AutomationProperties.SetName(maximize, restored ? "最大化窗口" : "还原窗口");
+                }
+                catch { }
+            };
+            dlg.StateChanged += delegate { updateMaximize(); };
+            updateMaximize();
+
+            Grid.SetColumn(actions, 1);
+            barGrid.Children.Add(actions);
+            bar.Child = barGrid;
+
+            bar.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
+            {
+                if (IsDescendantOf(e.OriginalSource as DependencyObject, actions)) return;
+
+                if (e.ClickCount == 2)
+                {
+                    try
+                    {
+                        if (dlg.WindowState == WindowState.Maximized)
+                            SystemCommands.RestoreWindow(dlg);
+                        else
+                            SystemCommands.MaximizeWindow(dlg);
+                    }
+                    catch { }
+                    e.Handled = true;
+                    return;
+                }
+
+                try { dlg.DragMove(); }
+                catch { }
+            };
+
+            Grid.SetRow(bar, 0);
+            root.Children.Add(bar);
+
+            Grid.SetRow(content, 1);
+            root.Children.Add(content);
+
+            outer.Child = root;
+            return outer;
+        }
+
+        static Button MakeCaptionButton(string glyph, string name, Action onClick)
+        {
+            Button button = new Button();
+            button.Width = 46;
+            button.Height = 34;
+            button.Background = Brushes.Transparent;
+            button.BorderThickness = new Thickness(0);
+            button.Padding = new Thickness(0);
+            button.Cursor = Cursors.Hand;
+            button.Template = MakeCaptionButtonTemplate();
+            button.ToolTip = name;
+            AutomationProperties.SetName(button, name + "窗口");
+            button.Content = MakeCaptionGlyph(glyph);
+            button.Click += delegate { if (onClick != null) onClick(); };
+            button.MouseEnter += delegate { if (!button.IsKeyboardFocused) button.Background = Ui.Hover; };
+            button.MouseLeave += delegate { if (!button.IsKeyboardFocused) button.Background = Brushes.Transparent; };
+            button.GotKeyboardFocus += delegate { button.Background = Ui.AccentSoft; };
+            button.LostKeyboardFocus += delegate { button.Background = Brushes.Transparent; };
+            return button;
+        }
+
+        static ControlTemplate MakeCaptionButtonTemplate()
+        {
+            ControlTemplate template = new ControlTemplate(typeof(Button));
+            FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(Ui.R.Sm));
+            border.SetBinding(Border.BackgroundProperty,
+                new System.Windows.Data.Binding("Background")
+                {
+                    RelativeSource = new System.Windows.Data.RelativeSource(
+                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
+                });
+
+            FrameworkElementFactory presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            border.AppendChild(presenter);
+            template.VisualTree = border;
+            return template;
+        }
+
+        static TextBlock MakeCaptionGlyph(string glyph)
+        {
+            TextBlock text = new TextBlock();
+            text.Text = glyph;
+            text.FontFamily = Ui.Mdl;
+            text.FontSize = 11;
+            text.Foreground = Ui.Fg;
+            text.HorizontalAlignment = HorizontalAlignment.Center;
+            text.VerticalAlignment = VerticalAlignment.Center;
+            return text;
+        }
+
+        static bool IsDescendantOf(DependencyObject child, DependencyObject ancestor)
+        {
+            try
+            {
+                DependencyObject current = child;
+                while (current != null)
+                {
+                    if (current == ancestor) return true;
+                    current = VisualTreeHelper.GetParent(current);
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        /// <summary>
         /// 在 `ShowDialog()` 之前调用。
         ///
         /// 做两件事：
@@ -74,6 +282,28 @@ namespace Clover
                     {
                         IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
                         Native.RemoveMinimizeBox(hwnd);
+
+                        // ★ Loaded 时样式位已经是 hasMin=False，但按钮还画在
+                        //   画面上 —— 说明系统是在 Loaded **之后**才最终画出
+                        //   非客户区的。用 Dispatcher 排到渲染之后再来一次。
+                        dlg.Dispatcher.BeginInvoke(
+                            new Action(delegate
+                            {
+                                try
+                                {
+                                    Native.RemoveMinimizeBox(hwnd);
+                                    // 再排一轮：有些主题/DPI 下要两帧
+                                    dlg.Dispatcher.BeginInvoke(
+                                        new Action(delegate
+                                        {
+                                            try { Native.RemoveMinimizeBox(hwnd); }
+                                            catch { }
+                                        }),
+                                        System.Windows.Threading.DispatcherPriority.ContextIdle);
+                                }
+                                catch { }
+                            }),
+                            System.Windows.Threading.DispatcherPriority.Loaded);
                     }
                     catch { }
                 };

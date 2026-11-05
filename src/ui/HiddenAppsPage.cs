@@ -665,8 +665,16 @@ namespace Clover
                 Border el = idx >= 0 ? rows[idx].Element : null;
                 if (el != null)
                 {
-                    DoubleAnimation fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(120));
-                    el.BeginAnimation(UIElement.OpacityProperty, fade);
+                    if (Ui.ReducedMotion)
+                    {
+                        el.BeginAnimation(UIElement.OpacityProperty, null);
+                        el.Opacity = 0;
+                    }
+                    else
+                    {
+                        DoubleAnimation fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(120));
+                        el.BeginAnimation(UIElement.OpacityProperty, fade);
+                    }
                 }
 
                 bool ok = panel.RestoreHidden(a);

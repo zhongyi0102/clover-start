@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Input;
@@ -187,6 +188,11 @@ namespace Clover
                     new JavaScriptSerializer().Serialize(oldRoot), new UTF8Encoding(false));
             }
 
+            // 旧版本可能留下撤销历史。新界面必须忽略它，不能让撤销按钮复活。
+            File.WriteAllText(Path.Combine(root, "config", "desk-undo.json"),
+                "{\"batches\":[{\"action\":\"放回桌面\",\"entries\":[{\"from\":\"old\",\"to\":\"new\"}]}]}",
+                new UTF8Encoding(false));
+
             // ---------- 2. 真实创建 PanelWindow ----------
             PanelWindow panel = null;
 
@@ -240,43 +246,42 @@ namespace Clover
                 return "ok（共 " + visualCount + " 个可视元素）";
             });
 
-            // ---------- 4. 分类栏只保留「常用」「全部」两个标签 ----------
-            //
-            // 【本阶段改动】原来是"左侧分类栏生成了条目（≥2 个）"，
-            // 现在界面只保留两个标签，断言改成**精确等于 2**。
-            // ---------- 3b. 窗口按钮：最小化 / 最大化 / 关闭 三个都在 ----------
-            //
-            // 「最小化」曾被移除（理由是和关闭同行为），但用户习惯点 —，
-            // 所以恢复。行为仍是 HidePanel（面板无任务栏图标，真最小化会不可恢复）。
-            Verify("★窗口按钮：最小化/最大化/关闭 三个都在", delegate
+            // ---------- 3b. 主面板窗口按钮：最小化 / 最大化 / 收起 ----------
+            Verify("★主面板窗口按钮：最小化/最大化/收起三个原生按钮", delegate
             {
-                // 从 header 的可视树里找三个按钮（它们都是 32x32 的 Border）
                 int btnCount = 0;
                 List<string> tips = new List<string>();
                 CollectWindowButtons(panel, ref btnCount, tips);
 
                 if (btnCount != 3) return "应有 3 个窗口按钮，实际 " + btnCount;
-                if (!tips.Contains("收起面板（等同于关闭）")) return "缺少最小化按钮的 tooltip";
+                if (!tips.Contains("最小化到四叶草")) return "缺少最小化按钮的 tooltip";
                 if (!tips.Contains("最大化 / 还原")) return "缺少最大化按钮的 tooltip";
-                if (!tips.Contains("关闭面板")) return "缺少关闭按钮的 tooltip";
-                return "ok（最小化 / 最大化 / 关闭）";
+                if (!tips.Contains("收起面板")) return "缺少收起按钮的 tooltip";
+                if (tips.Count != 3 || tips[0] != "最小化到四叶草"
+                    || tips[1] != "最大化 / 还原" || tips[2] != "收起面板")
+                    return "按钮顺序不对：" + string.Join(" / ", tips.ToArray());
+
+                Button minimize = FindWindowButtonByTip(panel, "最小化到四叶草");
+                if (minimize == null) return "找不到最小化按钮";
+                if (AutomationProperties.GetName(minimize) != "最小化主面板")
+                    return "最小化按钮缺少正确的可访问名称";
+                if (!minimize.Focusable || !minimize.IsTabStop)
+                    return "最小化按钮不能通过键盘聚焦";
+                return "ok（最小化 / 最大化 / 收起）";
             });
 
-            // ---------- 3c. 点最小化 → 面板收起（与关闭同行为） ----------
-            Verify("★点最小化按钮 → 面板收起", delegate
+            // ---------- 3c. 点最小化 → 面板隐藏到四叶草 ----------
+            Verify("★点最小化按钮 → 主面板隐藏到四叶草", delegate
             {
                 panel.ShowPanel();
                 if (!panel.IsVisible) return "ShowPanel 后不可见";
 
-                Border min = FindWindowButtonByTip(panel, "收起面板（等同于关闭）");
-                if (min == null) return "找不到最小化按钮";
+                Button minimize = FindWindowButtonByTip(panel, "最小化到四叶草");
+                if (minimize == null) return "找不到最小化按钮";
 
-                // 直接调 panel.HidePanel()（按钮的 Click 处理器就是它）
-                //
-                // 为什么不 RaiseEvent：WPF 的 MouseLeftButtonUp 是直接事件，
-                // 合成它需要完整的 MouseDevice 状态，测试里造不出来。
-                // 直接调 HidePanel 验证的是按钮绑定的同一个行为。
-                panel.HidePanel();
+                // 直接触发 Button.Click 路由事件，验证按钮本身确实接到了 HidePanel。
+                // 不伪造鼠标设备状态，避免无人值守环境里的命中测试差异。
+                minimize.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
 
                 // 收起有 110ms 淡出动画，而 Hide() 是在动画的 Completed 回调里调的。
                 // **不能用 Thread.Sleep** —— 那会阻塞 UI 线程，动画永远跑不完，
@@ -284,33 +289,72 @@ namespace Clover
                 // 正确做法：用 DispatcherFrame 泵消息，让动画真正推进。
                 WaitForDispatcher(600);
                 if (panel.IsVisible) return "点最小化后仍可见";
-                return "ok（面板已收起）";
+                return "ok（主面板已隐藏，可从四叶草恢复）";
             });
 
             // 恢复面板：3c 把它收起了，后续断言需要可见的面板
             panel.ShowPanel();
             WaitForDispatcher(400);
 
-            // ---------- 4. 分类栏：默认四个标签（常用/全部/文件/桌面文件）----------
-            //
-            // 「桌面文件」是内置默认标签，不需要用户手动创建。
-            Verify("★分类栏默认四个标签（常用/全部/文件/桌面文件）", delegate
+            // ---------- 4. 分类栏：内部键兼容，界面使用清晰显示名 ----------
+            Verify("★分类栏默认四个标签（常用/全部/文件库/桌面收纳）", delegate
             {
-                List<Border> navItems = FindNavItems(panel);
+                List<Button> navItems = FindNavItems(panel);
                 if (navItems == null) return "找不到分类栏容器";
                 if (navItems.Count != 4)
                     return "分类标签应恰好 4 个，实际 " + navItems.Count;
-                return "ok（4 个）";
+
+                List<string> labels = new List<string>();
+                foreach (Button b in navItems)
+                    labels.Add(AutomationProperties.GetName(b));
+
+                if (!labels.Contains("文件库标签")) return "缺少显示名“文件库”";
+                if (!labels.Contains("桌面收纳标签")) return "缺少显示名“桌面收纳”";
+                if (labels.Contains("文件标签") || labels.Contains("桌面文件标签"))
+                    return "仍显示内部兼容键：" + string.Join(" / ", labels.ToArray());
+                return "ok（" + string.Join(" / ", labels.ToArray()) + "）";
+            });
+
+            Verify("★分类栏使用 WrapPanel，可在窄窗口自然换行", delegate
+            {
+                double oldWidth = panel.Width;
+                try
+                {
+                    panel.Width = Math.Max(panel.MinWidth, 640);
+                    panel.TestSetCustomTabs(new string[]
+                    {
+                        "工作资料", "个人项目", "学习笔记", "影音素材", "临时收纳",
+                        "客户文件", "设计资源", "旅行计划", "家庭资料", "归档文件"
+                    });
+                    WaitForDispatcher(150);
+                    panel.UpdateLayout();
+
+                    WrapPanel wrap = FindNavWrapPanel(panel);
+                    if (wrap == null) return "导航容器不是 WrapPanel";
+                    ScrollViewer host = wrap.Parent as ScrollViewer;
+                    if (host == null) return "WrapPanel 不在 ScrollViewer 中";
+                    if (host.HorizontalScrollBarVisibility != ScrollBarVisibility.Disabled)
+                        return "仍启用了横向滚动条";
+                    if (wrap.ActualHeight < 50)
+                        return "14 个标签仍挤在一行，高度只有 " + Math.Round(wrap.ActualHeight);
+                    return "ok（窄窗口高度 " + Math.Round(wrap.ActualHeight) + "，已换行）";
+                }
+                finally
+                {
+                    panel.TestSetCustomTabs(new string[0]);
+                    panel.Width = oldWidth;
+                    panel.UpdateLayout();
+                }
             });
 
             // ---------- 4b. showFilesTab=false → 仍有三个标签 ----------
-            Verify("★showFilesTab=false 时仍有常用/全部/桌面文件", delegate
+            Verify("★showFilesTab=false 时仍有常用/全部/桌面收纳", delegate
             {
                 try
                 {
                     // 直接改 settings 对象并重建标签栏
                     panel.TestSetShowFilesTab(false);
-                    List<Border> navItems = FindNavItems(panel);
+                    List<Button> navItems = FindNavItems(panel);
                     if (navItems == null) return "找不到分类栏容器";
                     if (navItems.Count != 3)
                         return "应恰好 3 个，实际 " + navItems.Count;
@@ -320,6 +364,34 @@ namespace Clover
                 {
                     panel.TestSetShowFilesTab(true);   // 恢复，别影响后续断言
                 }
+            });
+
+            Verify("★搜索与底部提示随页面切换", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("常用");
+                    if (panel.TestSearchHint().IndexOf("应用", StringComparison.Ordinal) < 0)
+                        return "常用页搜索提示不含“应用”：" + panel.TestSearchHint();
+                    if (panel.TestFooterHint().IndexOf("Enter 启动", StringComparison.Ordinal) < 0)
+                        return "常用页底部提示错误：" + panel.TestFooterHint();
+
+                    panel.TestSwitchCategory("文件");
+                    if (panel.TestSearchHint().IndexOf("文件来源", StringComparison.Ordinal) < 0)
+                        return "文件库搜索提示错误：" + panel.TestSearchHint();
+                    if (panel.TestFooterHint().IndexOf("文件库", StringComparison.Ordinal) < 0)
+                        return "文件库底部提示错误：" + panel.TestFooterHint();
+
+                    panel.TestSwitchCategory("桌面文件");
+                    if (panel.TestSearchHint().IndexOf("桌面收纳", StringComparison.Ordinal) < 0)
+                        return "桌面收纳搜索提示错误：" + panel.TestSearchHint();
+                    if (panel.TestFooterHint().IndexOf("真实目录", StringComparison.Ordinal) < 0)
+                        return "桌面收纳底部提示错误：" + panel.TestFooterHint();
+
+                    panel.TestSwitchCategory("常用");
+                    return "ok（三类页面文案互相区分）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
             });
 
             // ---------- 4c. 内置「桌面文件」可渲染，并自动创建目录 ----------
@@ -347,6 +419,30 @@ namespace Clover
                     if (!Directory.Exists(folder)) return "目录未自动创建：" + folder;
                     panel.TestSwitchCategory("常用");
                     return "ok（目录已创建）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            Verify("★桌面收纳只保留收纳/放回，不显示撤销", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("桌面文件");
+                    WaitForDispatcher(200);
+                    List<string> labels = panel.TestDeskToolLabels();
+                    panel.TestSwitchCategory("常用");
+
+                    if (labels.Count != 2)
+                        return "应有 2 个操作，实际 " + labels.Count + "：" + string.Join(" / ", labels.ToArray());
+                    if (labels[0] != "收纳桌面" || labels[1] != "放回桌面")
+                        return "操作顺序或文字不对：" + string.Join(" / ", labels.ToArray());
+                    foreach (string label in labels)
+                        if (label.IndexOf("撤销", StringComparison.Ordinal) >= 0)
+                            return "仍出现撤销操作：" + label;
+                    return "ok（旧历史存在时仍只有收纳桌面 / 放回桌面）";
                 }
                 catch (Exception ex)
                 {
@@ -1045,8 +1141,10 @@ namespace Clover
                     if (Math.Abs(r - Ui.R.Lg) < 0.1) continue;  // 16
                     if (Math.Abs(r - 2) < 0.1) continue;        // 2 = 1px 细条（选中条/分隔）
                     if (Math.Abs(r - 4) < 0.1) continue;        // 4 = 8px 小圆点（正圆）
-                    if (Math.Abs(r - b.Height / 2) < 0.6) continue; // 胶囊（搜索框）
-                    bad.Add(string.Format("{0}（高 {1:N0}）", r, b.Height));
+                    double h = b.Height;
+                    if (double.IsNaN(h) || h <= 0) h = b.ActualHeight;
+                    if (h > 0 && Math.Abs(r - h / 2) < 0.6) continue; // 胶囊（含 Button 模板边框）
+                    bad.Add(string.Format("{0}（高 {1:N0}）", r, h));
                 }
                 if (bad.Count > 0)
                     return "发现不在体系内的圆角: " + string.Join(" / ", bad.ToArray());
@@ -1117,7 +1215,7 @@ namespace Clover
             // 一旦落在错的地方，用户点不到（表现是"点了没反应"）。
             Verify("★侧栏折叠按钮落在侧栏区域内", delegate
             {
-                Border t = panel.NavToggle;
+                Button t = panel.NavToggle;
                 if (t == null) return "navToggle 为 null（按钮没建立）";
 
                 // 前置等待已轮询过；这里再兜一次（后面的 Verify 可能改了状态）
@@ -1173,7 +1271,7 @@ namespace Clover
             // WPF 里后来的子元素会盖住先加的（同一个 Grid 单元格尤其容易踩）。
             Verify("★折叠按钮那个点上点得到它（无遮挡）", delegate
             {
-                Border t = panel.NavToggle;
+                Button t = panel.NavToggle;
                 if (t == null) return "navToggle 为 null";
 
                 // 与上一条用同一套等待：位置对但没布局完，命中测试同样会返回 null
@@ -1500,12 +1598,12 @@ namespace Clover
                 return "ok（预设/滑块/色板/输入框/恢复默认/防抖/松手提交/窗口伸缩/边缘拖拽 全在）";
             });
 
-            // ---------- 设置窗口里确实有「桌面文件」区块（源码级）----------
+            // ---------- 设置窗口里确实有「桌面收纳」区块（源码级）----------
             //
             // 三选一弹窗本身没法在无人值守里点，但「入口存在」是可以静态断言的：
             // 用户必须能在设置里看到当前路径、并能点「更改…」/「打开目录」/「恢复默认」。
             // 曾经踩过的坑：功能写好了、数据层也测了，但界面上一个入口都没有。
-            Verify("★设置窗口含「桌面文件」区块（路径/更改/打开/恢复默认）", delegate
+            Verify("★设置窗口含「桌面收纳」区块（路径/更改/打开/恢复默认）", delegate
             {
                 string srcDir = FindSourceDir();
                 if (srcDir == null) return "找不到 src 目录";
@@ -1513,8 +1611,8 @@ namespace Clover
                 if (!File.Exists(path)) return "找不到 SettingsWindow.cs";
                 string text = File.ReadAllText(path, Encoding.UTF8);
 
-                if (text.IndexOf("SectionHeader(\"桌面文件\"", StringComparison.Ordinal) < 0)
-                    return "设置窗口没有「桌面文件」区块";
+                if (text.IndexOf("SectionHeader(\"桌面收纳\"", StringComparison.Ordinal) < 0)
+                    return "设置窗口没有「桌面收纳」区块";
                 if (text.IndexOf("InfoRow(\"存放目录\"", StringComparison.Ordinal) < 0)
                     return "没有显示当前存放目录";
                 if (text.IndexOf("SmallButton(\"更改…\"", StringComparison.Ordinal) < 0)
@@ -1542,11 +1640,42 @@ namespace Clover
                 return "ok（区块/路径/三个按钮/接线/校验/锚点/默认项/数量 全在）";
             });
 
-            // ---------- 设置窗口：「桌面文件」区块真的画出来了（运行时）----------
+            Verify("★设置窗口标题栏没有最小化按钮", delegate
+            {
+                Window dlg = null;
+                try
+                {
+                    dlg = SettingsWindow.BuildForTest(null, Settings.Load(root), panel, root,
+                        SettingsWindow.Section.General);
+                    if (dlg == null) return "构造返回 null";
+                    if (dlg.ShowInTaskbar) return "设置窗口不应占任务栏";
+                    if (dlg.WindowStyle != WindowStyle.None) return "设置窗口仍在使用系统标题栏";
+
+                    List<string> actions = CollectDialogCaptionActions(dlg);
+                    if (actions.Count != 2)
+                        return "标题栏应有 2 个动作，实际 " + actions.Count + "："
+                            + string.Join(" / ", actions.ToArray());
+                    bool hasMaximize = actions.Contains("最大化窗口") || actions.Contains("还原窗口");
+                    if (!hasMaximize || !actions.Contains("关闭窗口"))
+                        return "未保留最大化/还原与关闭：" + string.Join(" / ", actions.ToArray());
+                    if (actions.Contains("最小化窗口")) return "仍存在最小化按钮";
+                    return "ok（最大化/还原 + 关闭）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+                finally
+                {
+                    try { if (dlg != null) dlg.Close(); } catch { }
+                }
+            });
+
+            // ---------- 设置窗口：「桌面收纳」区块真的画出来了（运行时）----------
             //
             // 上面那条是源码级（确认有这段代码），这条是运行时（确认控件树里真有）。
             // 两者缺一不可：源码级防"接线断了"，运行时防"写进去了但没画出来"。
-            Verify("★设置窗口运行时：桌面文件区块 + 三个按钮 + 滚到该区块", delegate
+            Verify("★设置窗口运行时：桌面收纳区块 + 三个按钮 + 滚到该区块", delegate
             {
                 Window dlg = null;
                 try
@@ -1565,7 +1694,7 @@ namespace Clover
 
                     string[] need = new string[]
                     {
-                        "桌面文件", "存放目录", "更改…", "打开目录", "恢复默认", "搬过去"
+                        "桌面收纳", "存放目录", "更改…", "打开目录", "恢复默认", "搬过去"
                     };
                     foreach (string n in need)
                     {
@@ -1585,7 +1714,7 @@ namespace Clover
                     ScrollViewer sv = FindScrollViewer(dlg.Content as DependencyObject);
                     if (sv == null) return "找不到 ScrollViewer";
                     if (sv.VerticalOffset <= 0)
-                        return "没有滚到「桌面文件」区块（偏移 " + Math.Round(sv.VerticalOffset)
+                        return "没有滚到「桌面收纳」区块（偏移 " + Math.Round(sv.VerticalOffset)
                             + "，可滚 " + Math.Round(sv.ScrollableHeight) + "）";
 
                     return "ok（偏移 " + Math.Round(sv.VerticalOffset) + " / "
@@ -1683,7 +1812,7 @@ namespace Clover
                 int elapsed = 0;
                 while (elapsed < timeoutMs)
                 {
-                    Border t = panel.NavToggle;
+                    Button t = panel.NavToggle;
                     if (t != null && t.IsVisible && t.ActualWidth > 0 && t.ActualHeight > 0)
                         return true;
 
@@ -1703,7 +1832,7 @@ namespace Clover
                 }
 
                 // 最后一轮：再确认一次
-                Border last = panel.NavToggle;
+                Button last = panel.NavToggle;
                 return last != null && last.IsVisible && last.ActualWidth > 0 && last.ActualHeight > 0;
             }
             catch { return false; }
@@ -1722,7 +1851,7 @@ namespace Clover
             {
                 if (panel == null) return "panel 为 null";
 
-                Border t = panel.NavToggle;
+                Button t = panel.NavToggle;
                 if (t == null) return "navToggle 为 null";
 
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
@@ -1759,17 +1888,18 @@ namespace Clover
             catch (Exception ex) { return "诊断失败: " + ex.Message; }
         }
 
-        /// <summary>递归收集窗口按钮（32x32 且带 tooltip 的 Border）。</summary>
+        /// <summary>递归收集标题栏窗口按钮。</summary>
         static void CollectWindowButtons(DependencyObject d, ref int count, List<string> tips)
         {
             if (d == null) return;
             try
             {
-                Border b = d as Border;
-                if (b != null && b.Width == 32 && b.Height == 32 && b.ToolTip is string)
+                Button b = d as Button;
+                string tip = b == null ? null : b.ToolTip as string;
+                if (b != null && b.Width == 32 && b.Height == 32 && IsWindowButtonTip(tip))
                 {
                     count++;
-                    tips.Add((string)b.ToolTip);
+                    tips.Add(tip);
                 }
 
                 int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
@@ -1780,12 +1910,12 @@ namespace Clover
         }
 
         /// <summary>按 tooltip 找窗口按钮。</summary>
-        static Border FindWindowButtonByTip(DependencyObject d, string tip)
+        static Button FindWindowButtonByTip(DependencyObject d, string tip)
         {
             if (d == null) return null;
             try
             {
-                Border b = d as Border;
+                Button b = d as Button;
                 if (b != null && b.Width == 32 && b.Height == 32
                     && b.ToolTip is string && (string)b.ToolTip == tip)
                     return b;
@@ -1793,12 +1923,54 @@ namespace Clover
                 int n = System.Windows.Media.VisualTreeHelper.GetChildrenCount(d);
                 for (int i = 0; i < n; i++)
                 {
-                    Border r = FindWindowButtonByTip(System.Windows.Media.VisualTreeHelper.GetChild(d, i), tip);
+                    Button r = FindWindowButtonByTip(System.Windows.Media.VisualTreeHelper.GetChild(d, i), tip);
                     if (r != null) return r;
                 }
             }
             catch { }
             return null;
+        }
+
+        static bool IsWindowButtonTip(string tip)
+        {
+            return tip == "最小化到四叶草"
+                || tip == "最大化 / 还原" || tip == "最大化" || tip == "还原"
+                || tip == "收起面板";
+        }
+
+        /// <summary>读取项目自绘对话框标题栏里的按钮可访问名称。</summary>
+        static List<string> CollectDialogCaptionActions(Window dlg)
+        {
+            List<string> actions = new List<string>();
+            try
+            {
+                Border outer = dlg == null ? null : dlg.Content as Border;
+                Grid chrome = outer == null ? null : outer.Child as Grid;
+                DependencyObject titleBar = chrome != null && chrome.Children.Count > 0
+                    ? chrome.Children[0] : null;
+                CollectAccessibleButtonNames(titleBar, actions);
+            }
+            catch { }
+            return actions;
+        }
+
+        static void CollectAccessibleButtonNames(DependencyObject node, List<string> names)
+        {
+            if (node == null) return;
+            try
+            {
+                Button button = node as Button;
+                if (button != null)
+                {
+                    string name = AutomationProperties.GetName(button);
+                    if (!string.IsNullOrEmpty(name)) names.Add(name);
+                }
+
+                int count = VisualTreeHelper.GetChildrenCount(node);
+                for (int i = 0; i < count; i++)
+                    CollectAccessibleButtonNames(VisualTreeHelper.GetChild(node, i), names);
+            }
+            catch { }
         }
 
         /// <summary>把控件树里所有 TextBlock 的文字收集起来（判断"真的画出来了"）。</summary>
@@ -1893,58 +2065,50 @@ namespace Clover
             return n;
         }
 
-        /// <summary>找左侧分类栏（StackPanel 里装着一堆 Border）。</summary>
-        static List<Border> FindNavItems(PanelWindow panel)
+        /// <summary>找到顶部分类栏里的原生按钮（不含末尾“新建桌面”按钮）。</summary>
+        static List<Button> FindNavItems(PanelWindow panel)
         {
-            List<Border> best = new List<Border>();
+            List<Button> best = new List<Button>();
             try
             {
-                // 分类栏是 ScrollViewer 里的横向 StackPanel（顶部胶囊条）。
-                //
-                // 判定"这堆子项是分类胶囊"的依据从"高度 == 34"改成
-                // "高度在 24..40 之间且是 Border" —— 布局改造后胶囊高度是 30，
-                // 写死 34 会让断言假失败。用区间而不是精确值，
-                // 以后微调高度（28/32）也不用改测试。
                 foreach (ScrollViewer sv in FindAll<ScrollViewer>(panel))
                 {
-                    StackPanel sp = sv.Content as StackPanel;
-                    if (sp == null) continue;
-                    if (sp.Children.Count <= best.Count) continue;
+                    WrapPanel wrap = sv.Content as WrapPanel;
+                    if (wrap == null) continue;
 
-                    bool looksLikeNav = false;
-                    foreach (object o in sp.Children)
+                    List<Button> items = new List<Button>();
+                    foreach (object o in wrap.Children)
                     {
-                        Border b = o as Border;
-                        if (b != null && b.Height >= 24 && b.Height <= 40) { looksLikeNav = true; break; }
-                    }
-                    if (!looksLikeNav) continue;
-
-                    List<Border> items = new List<Border>();
-                    foreach (object o in sp.Children)
-                    {
-                        Border b = o as Border;
+                        Button b = o as Button;
                         if (b == null) continue;
-
-                        // 末尾的圆形 + 按钮（新建标签）不是分类胶囊，不计入。
-                        bool isPlus = false;
-                        try
-                        {
-                            if (Math.Abs(b.Width - b.Height) < 0.5)
-                            {
-                                TextBlock tb = b.Child as TextBlock;
-                                if (tb != null && tb.Text == "+") isPlus = true;
-                            }
-                        }
-                        catch { }
-                        if (isPlus) continue;
-
-                        items.Add(b);
+                        string name = AutomationProperties.GetName(b) ?? "";
+                        if (name.EndsWith("标签", StringComparison.Ordinal)) items.Add(b);
                     }
-                    best = items;
+                    if (items.Count > best.Count) best = items;
                 }
             }
             catch { }
             return best;
+        }
+
+        static WrapPanel FindNavWrapPanel(PanelWindow panel)
+        {
+            try
+            {
+                foreach (ScrollViewer sv in FindAll<ScrollViewer>(panel))
+                {
+                    WrapPanel wrap = sv.Content as WrapPanel;
+                    if (wrap == null) continue;
+                    foreach (object o in wrap.Children)
+                    {
+                        Button b = o as Button;
+                        if (b != null && (AutomationProperties.GetName(b) ?? "").EndsWith("标签", StringComparison.Ordinal))
+                            return wrap;
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         /// <summary>数应用磁贴（TileWidthPx × TileHeightPx 的 Border）。</summary>
