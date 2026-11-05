@@ -18,8 +18,6 @@
 
 ## [未发布]
 
-- 修复 worktree 残留 PowerShell 缓存导致的状态误报。
-
 ### 新增（Added）
 
 - **「桌面文件」存放目录可配置**
@@ -404,6 +402,8 @@
   - 相关右键菜单（打开 / 在资源管理器中显示 / 固定到收藏夹 / 复制路径）已删
 
 ### 修复（Fixed）
+
+- 修复 worktree 残留 PowerShell 缓存导致的状态误报。
 
 - **外观参数只在「毛玻璃背景」菜单开关时生效**（本阶段发现的真实 bug）
   - `BlurRadius` / `TintStrength` / `Brightness` / `TintColor` 只在 `ApplyGlassSetting()` 里注入，
