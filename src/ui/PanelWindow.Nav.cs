@@ -932,16 +932,75 @@ namespace Clover
             RenderApps();
         }
 
+        /// <summary>
+        /// 「常用」页的条目：使用榜 + 人工固定名单。
+        ///
+        /// **不设上限**：早期版本截断到前 12 个，导致右键「添加到常用」在
+        /// 使用榜已满时点了没反应 —— 用户看不到任何变化，以为功能坏了。
+        /// 现在全部列出，靠磁贴区自身滚动承载。
+        ///
+        /// 人工固定（`settings.PinnedCommon`）的条目**必定**在列表里，
+        /// 哪怕 Usage 为 0；两者按路径去重。
+        /// </summary>
         List<AppItem> CommonApps()
         {
             List<AppItem> list = new List<AppItem>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // ---- 1. 人工固定的（右键「添加到常用」）----
+            if (settings != null && settings.PinnedCommon != null && settings.PinnedCommon.Count > 0)
+            {
+                foreach (string p in settings.PinnedCommon)
+                {
+                    if (string.IsNullOrEmpty(p)) continue;
+                    AppItem hit = FindAppByPath(p);
+                    if (hit == null || hit.Hidden) continue;   // 已卸载 / 已隐藏 → 跳过
+                    if (seen.Add(hit.Path)) list.Add(hit);
+                }
+            }
+
+            // ---- 2. 使用榜（Usage > 0）----
             foreach (AppItem a in catalog.Apps)
             {
-                if (a.Usage > 0) list.Add(a);
+                if (a == null || a.Usage <= 0) continue;
+                if (string.IsNullOrEmpty(a.Path)) continue;
+                if (seen.Add(a.Path)) list.Add(a);
             }
+
             list.Sort(RenderCompare);
-            if (list.Count > 12) list = list.GetRange(0, 12);
             return list;
+        }
+
+        /// <summary>按路径找应用（忽略大小写）；找不到返回 null。</summary>
+        AppItem FindAppByPath(string path)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(path) || catalog == null) return null;
+                foreach (AppItem a in catalog.Apps)
+                {
+                    if (a == null || string.IsNullOrEmpty(a.Path)) continue;
+                    if (string.Equals(a.Path, path, StringComparison.OrdinalIgnoreCase)) return a;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>该应用是否已被手动固定到「常用」。</summary>
+        bool IsPinnedCommon(AppItem a)
+        {
+            try
+            {
+                if (a == null || settings == null || settings.PinnedCommon == null) return false;
+                if (string.IsNullOrEmpty(a.Path)) return false;
+                foreach (string p in settings.PinnedCommon)
+                {
+                    if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return true;
+                }
+            }
+            catch { }
+            return false;
         }
 
 
@@ -3484,6 +3543,61 @@ namespace Clover
             }
             catch (Exception ex) { Ui.LogError(ex, "设置低价值标记"); }
         }
+
+        /// <summary>
+        /// 固定 / 取消固定到「常用」（右键「添加到常用」/「取消固定到常用」）。
+        /// 写入 `settings.json` 的 `pinnedCommon`，然后立即重渲染。
+        /// </summary>
+        void SetPinnedCommon(AppItem a, bool pinned)
+        {
+            try
+            {
+                if (a == null || settings == null || string.IsNullOrEmpty(a.Path)) return;
+                if (settings.PinnedCommon == null) settings.PinnedCommon = new List<string>();
+
+                // 先清掉旧记录（避免重复 / 大小写不同的重复项）
+                settings.PinnedCommon.RemoveAll(delegate(string p)
+                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+
+                if (pinned) settings.PinnedCommon.Add(a.Path);
+                settings.Save();
+
+                Ui.Log((pinned ? "添加到常用: " : "取消固定到常用: ") + a.Name);
+
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "设置常用固定"); }
+        }
+
+        /// <summary>
+        /// 「从常用移除」：既取消固定，也清零使用记录。
+        ///
+        /// 两件都做是刻意的 —— 用户说的是"我不想在这个页看到它"，
+        /// 只清计数的话固定项还留着，点了等于没反应。
+        /// </summary>
+        void RemoveFromCommon(AppItem a)
+        {
+            try
+            {
+                if (a == null || string.IsNullOrEmpty(a.Path)) return;
+
+                if (settings != null && settings.PinnedCommon != null)
+                {
+                    int n = settings.PinnedCommon.RemoveAll(delegate(string p)
+                    { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+                    if (n > 0) settings.Save();
+                }
+
+                if (usage != null) usage.Remove(a.Path);
+                a.Usage = 0;
+                a.LastUsed = 0;
+
+                RebuildNav();
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "从常用移除"); }
+        }
         void ShowTileMenu(AppItem a)
         {
             if (a == null || string.IsNullOrEmpty(a.Path)) return;
@@ -3518,23 +3632,44 @@ namespace Clover
                 cm.Items.Add(hide);
             }
 
-            // ---- 从常用移除（只在「常用」分类出现）----
-            if (showingCommon)
+            // ---- 常用名单：添加到常用 / 从常用移除 ----
+            //
+            // 「添加到常用」在**任何分类**都能用（包括「全部」页）：
+            // 用户是在「全部」里翻到某个应用，才想起来"这个我要常用"。
+            // 已固定的条目反过来显示「取消固定」，同一位置切换。
+            bool pinned = IsPinnedCommon(a);
+            bool inCommon = pinned || a.Usage > 0;
+
+            if (!inCommon)
+            {
+                cm.Items.Add(new Separator());
+
+                MenuItem add = new MenuItem();
+                add.Header = "添加到常用";
+                add.ToolTip = "固定到「常用」页，不占用使用榜名额";
+                add.Click += delegate { SetPinnedCommon(a, true); };
+                cm.Items.Add(add);
+            }
+            else if (showingCommon)
             {
                 cm.Items.Add(new Separator());
 
                 MenuItem rm = new MenuItem();
                 rm.Header = "从常用移除";
-                rm.IsEnabled = a.Usage > 0;
-                rm.Click += delegate
-                {
-                    if (usage != null) usage.Remove(a.Path);
-                    a.Usage = 0;
-                    a.LastUsed = 0;
-                    RebuildNav();
-                    RenderApps();
-                };
+                rm.ToolTip = pinned ? "同时取消固定" : "清零使用记录";
+                rm.Click += delegate { RemoveFromCommon(a); };
                 cm.Items.Add(rm);
+            }
+            else if (pinned)
+            {
+                // 在「全部」页看到已固定项 → 提供取消固定
+                cm.Items.Add(new Separator());
+
+                MenuItem unpin = new MenuItem();
+                unpin.Header = "取消固定到常用";
+                unpin.ToolTip = "不再出现在「常用」页（使用记录保留）";
+                unpin.Click += delegate { SetPinnedCommon(a, false); };
+                cm.Items.Add(unpin);
             }
 
             // ---- 低价值标记（手动纠正，优先于自动规则）----

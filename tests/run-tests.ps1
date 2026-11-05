@@ -159,6 +159,10 @@ Invoke-Suite 'PinyinTest' $baseRefs `
 Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
     @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
+# 「常用」名单：右键「添加到常用」的人工固定 + 无上限（回归：原实现截断 12 个）
+Invoke-Suite 'CommonPinTest' ($baseRefs + $webRef) `
+    @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'CommonPinTest.cs'))
+
 
 # 「文件」标签：自定义文件夹清单（路径校验 / 去重 / 上限 / 重命名 / 容错）
 Invoke-Suite 'FileFoldersTest' $baseRefs `
