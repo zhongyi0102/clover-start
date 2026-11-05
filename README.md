@@ -843,6 +843,23 @@ desktop-backup\            旧版本移走的桌面快捷方式（程序不再�
 > 它包含版本号和构建时间戳，每次编译都会重写。
 > 所以 `git clone` 后**必须先跑一次 `build.ps1`**，否则编译会缺 `BuildInfo` 类。
 
+> **⚠️ 必须用 Windows PowerShell 5.1 跑 `build.ps1` / `run-tests.ps1`，不能用 PowerShell 7（`pwsh`）。**
+>
+> 原因：`build.ps1` 的 `Resolve-Refs` 先找 `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\`，
+> 但 WPF 的 `PresentationFramework` / `PresentationCore` / `WindowsBase` **不在那个目录**
+> （它们在 GAC：`C:\Windows\Microsoft.NET\assembly\GAC_MSIL\`）。
+> 找不到时脚本回退到 `[System.Reflection.Assembly]::LoadWithPartialName()`，
+> 而 PowerShell 7 会解析到自己携带的 **.NET 10** WPF 程序集，
+> 与 `csc.exe`（.NET Framework 4.8）不兼容，报 `CS0012: 类型"System.Object"在未引用的程序集中定义`。
+>
+> 正确调用：
+> ```powershell
+> C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File build.ps1
+> C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
+> ```
+>
+> 另一个坑：编译前必须先关掉正在运行的 `CloverStart.exe`，否则 `CS0016: 无法写入输出文件`（被进程占用）。
+
 `install.ps1` 会先请求旧实例通过 `--exit` 正常退出，只有超时无响应时才强制结束，避免升级安装被记成异常退出。
 
 ## 改完源码立刻看效果
