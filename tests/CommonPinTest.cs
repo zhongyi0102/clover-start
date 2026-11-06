@@ -49,10 +49,110 @@ namespace Clover
             TestNoCap();
             TestUsageFilterReal();     // ★ 直接测生产函数 PanelWindow.IsCommonByUsage
             TestMenuActionReal();      // ★ 直接测生产函数 PanelWindow.CommonMenuFor
+            TestPinnedOrderReal();     // ★ 新固定项进入常用首位
+            TestContentSignatureReal();// ★ 固定名单变化触发重绘
+            TestTileInteractionColors();// ★ 磁贴悬停不能变成不透明白块
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             Environment.Exit(failed == 0 ? 0 : 1);
+        }
+
+        // ---------- 9. ★磁贴交互色必须保持半透明 ----------
+        static void TestTileInteractionColors()
+        {
+            Console.WriteLine("--- 9. ★磁贴悬停 / 按下色（浅色与深色）---");
+
+            Ui.ApplyTheme(Ui.ThemeMode.Light);
+            Check(Ui.TileHover.Color.A > 0 && Ui.TileHover.Color.A < 255,
+                "★浅色磁贴悬停为半透明", "Alpha=" + Ui.TileHover.Color.A);
+            Check(Ui.TilePressed.Color.A > Ui.TileHover.Color.A && Ui.TilePressed.Color.A < 255,
+                "★浅色磁贴按下更明显且仍半透明",
+                "Hover=" + Ui.TileHover.Color.A + " Pressed=" + Ui.TilePressed.Color.A);
+
+            Ui.ApplyTheme(Ui.ThemeMode.Dark);
+            Check(Ui.TileHover.Color.A > 0 && Ui.TileHover.Color.A < 255,
+                "★深色磁贴悬停为半透明", "Alpha=" + Ui.TileHover.Color.A);
+            Check(Ui.TilePressed.Color.A > Ui.TileHover.Color.A && Ui.TilePressed.Color.A < 255,
+                "★深色磁贴按下更明显且仍半透明",
+                "Hover=" + Ui.TileHover.Color.A + " Pressed=" + Ui.TilePressed.Color.A);
+
+            // 清回默认，避免影响同进程后续检查。
+            Ui.ApplyTheme(Ui.ThemeMode.Light);
+
+            // 令牌透明还不够，生产磁贴也必须真的使用组件令牌；否则改了令牌
+            // 却仍绑定全局 Ui.Hover，截图里的不透明白块会原样复发。
+            string src = ReadSource();
+            if (src != null)
+            {
+                int start = src.IndexOf("Border MakeTile(AppItem a)");
+                int end = start < 0 ? -1 : src.IndexOf("void BeginDragVisual", start);
+                string body = start >= 0 && end > start ? src.Substring(start, end - start) : "";
+                Check(body.Contains("b.Background = Ui.TileHover"),
+                    "★生产磁贴悬停绑定 TileHover");
+                Check(body.Contains("b.Background = Ui.TilePressed"),
+                    "★生产磁贴按下绑定 TilePressed");
+                Check(src.Contains("ReferenceEquals(sourceTile, selectedTile)")
+                    && src.Contains("sourceTile.IsMouseOver"),
+                    "★右键菜单关闭后按键盘选中/鼠标状态恢复磁贴背景");
+            }
+            Console.WriteLine();
+        }
+
+        // ---------- 8. ★内容签名必须识别固定名单的内容与顺序 ----------
+        static void TestContentSignatureReal()
+        {
+            Console.WriteLine("--- 8. ★固定名单变化触发重绘 ---");
+
+            List<string> one = new List<string> { "app-a", "app-b" };
+            List<string> changed = new List<string> { "app-a", "app-c" };
+            List<string> reordered = new List<string> { "app-b", "app-a" };
+
+            string s1 = PanelWindow.PathListSignature(one);
+            Check(s1 != PanelWindow.PathListSignature(changed),
+                "★数量相同但固定项变化 → 签名变化");
+            Check(s1 != PanelWindow.PathListSignature(reordered),
+                "★固定项顺序变化 → 签名变化");
+            Check(s1 == PanelWindow.PathListSignature(new List<string> { "app-a", "app-b" }),
+                "相同固定名单 → 签名稳定");
+
+            string src = ReadSource();
+            if (src != null)
+            {
+                int start = src.IndexOf("string CurrentContentSig()");
+                int end = start < 0 ? -1 : src.IndexOf("void SaveScrollOffset()", start);
+                string body = start >= 0 && end > start ? src.Substring(start, end - start) : "";
+                Check(body.Contains("settings.PinnedCommon"),
+                    "★CurrentContentSig() 纳入 PinnedCommon");
+            }
+            Console.WriteLine();
+        }
+
+        // ---------- 7. ★新固定项必须立即出现在常用首位 ----------
+        static void TestPinnedOrderReal()
+        {
+            Console.WriteLine("--- 7. ★固定状态同步到常用排序（生产函数）---");
+
+            string store = @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App";
+            List<string> order = new List<string> {
+                @"C:\Apps\old-a.exe", store.ToUpperInvariant(), @"C:\Apps\old-b.exe", store
+            };
+
+            PanelWindow.UpdateCommonOrder(order, store, true);
+            Check(order.Count == 3, "★重复固定记录被去重", "实际 " + order.Count);
+            Check(string.Equals(order[0], store, StringComparison.Ordinal),
+                "★新固定的商店应用排到常用首位", order[0]);
+
+            PanelWindow.UpdateCommonOrder(order, store, true);
+            Check(order.Count == 3 && order[0] == store,
+                "★重复执行固定仍只有一条且保持首位");
+
+            bool removed = PanelWindow.UpdateCommonOrder(order, store, false);
+            Check(removed, "★取消固定会报告排序记录已移除");
+            Check(!order.Exists(delegate(string p)
+                { return string.Equals(p, store, StringComparison.OrdinalIgnoreCase); }),
+                "★取消固定会清除常用人工排序项");
+            Console.WriteLine();
         }
 
         // ---------- 6. ★生产行为：右键菜单项选择 ----------
@@ -177,12 +277,15 @@ namespace Clover
             Settings s = Settings.Load(root);
             s.PinnedCommon.Add(@"C:\Apps\wechat.exe");
             s.PinnedCommon.Add(@"C:\Apps\code.exe");
+            string store = @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App";
+            s.PinnedCommon.Add(store);
             s.Save();
 
             Settings back = Settings.Load(root);
-            Check(back.PinnedCommon.Count == 2, "★重新加载后仍是 2 条", "实际 " + back.PinnedCommon.Count);
+            Check(back.PinnedCommon.Count == 3, "★重新加载后仍是 3 条", "实际 " + back.PinnedCommon.Count);
             Check(back.PinnedCommon.Contains(@"C:\Apps\wechat.exe"), "★内容保持（wechat）");
             Check(back.PinnedCommon.Contains(@"C:\Apps\code.exe"), "★内容保持（code）");
+            Check(back.PinnedCommon.Contains(store), "★商店应用 shell:AppsFolder 路径可往返");
 
             // 清空后也要能保存成空列表（不是"读不到键就用默认"）
             back.PinnedCommon.Clear();

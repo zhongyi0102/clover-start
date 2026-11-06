@@ -45,6 +45,16 @@ namespace Clover
         /// 用户不知道是"没点中"还是"正在启动"。
         /// </summary>
         public static readonly SolidColorBrush Pressed = new SolidColorBrush();
+        /// <summary>
+        /// 应用磁贴专用悬停色。
+        ///
+        /// 磁贴直接铺在壁纸/玻璃背景上，不能复用普通控件的实色 Hover：
+        /// 浅色主题下 96x90 的不透明色块会像贴了一张白纸。这里始终使用
+        /// 半透明叠色，让交互态可见但仍保留底图纹理。
+        /// </summary>
+        public static readonly SolidColorBrush TileHover = new SolidColorBrush();
+        /// <summary>应用磁贴专用按下色（比 TileHover 对比更强，仍保持半透明）。</summary>
+        public static readonly SolidColorBrush TilePressed = new SolidColorBrush();
         public static readonly SolidColorBrush SearchBg = new SolidColorBrush();
         public static readonly SolidColorBrush Accent = new SolidColorBrush();
         public static readonly SolidColorBrush AccentSoft = new SolidColorBrush();
@@ -83,7 +93,8 @@ namespace Clover
         /// </summary>
         class Palette
         {
-            public uint Bg, Line, Fg, Sub, Hover, Pressed, SearchBg, Accent, AccentSoft, AccentText;
+            public uint Bg, Line, Fg, Sub, Hover, Pressed, TileHover, TilePressed,
+                SearchBg, Accent, AccentSoft, AccentText;
             /// <summary>面板外框（比内部分隔线更淡，只用来勾出边界）。</summary>
             public uint Edge;
         }
@@ -105,6 +116,9 @@ namespace Clover
             Sub = 0xFF787672,
             Hover = 0xFFF3F1ED,
             Pressed = 0xFFE8E5DF,
+            // 磁贴浮在壁纸上：浅色用低透明度黑色叠层，既有反馈又不遮底图。
+            TileHover = 0x14000000,    // 黑 8%
+            TilePressed = 0x24000000,  // 黑 14%
             SearchBg = 0xFFF2F0EC,
             Accent = 0xFF388C48,
             AccentSoft = 0xFFE8F3E9,
@@ -138,6 +152,9 @@ namespace Clover
                                       //   仍明显弱于 Fg #F0F4F5，视觉层级不变）
             Hover = 0x38FFFFFF,     // 白 22%（玻璃上的悬停是高光，不是加深）
             Pressed = 0x50FFFFFF,   // 白 31%
+            // 深色壁纸上改用冷白高光；强度低于普通按钮，避免形成发亮的大方块。
+            TileHover = 0x24FFFFFF,    // 白 14%
+            TilePressed = 0x38FFFFFF,  // 白 22%
             SearchBg = 0x2EFFFFFF,  // 白 18%（搜索框比周围略亮）
             Accent = 0xFF4FC3D9,      // 青蓝强调色（与主色调同族，比绿更协调）
             AccentSoft = 0x332E8FA3,
@@ -171,6 +188,8 @@ namespace Clover
             Sub.Color = FromArgb32(p.Sub);
             Hover.Color = FromArgb32(p.Hover);
             Pressed.Color = FromArgb32(p.Pressed);
+            TileHover.Color = FromArgb32(p.TileHover);
+            TilePressed.Color = FromArgb32(p.TilePressed);
             SearchBg.Color = FromArgb32(p.SearchBg);
             Accent.Color = FromArgb32(p.Accent);
             AccentSoft.Color = FromArgb32(p.AccentSoft);

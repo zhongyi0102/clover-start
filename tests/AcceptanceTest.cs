@@ -130,6 +130,7 @@ namespace Clover
             string exeA = Path.Combine(root, "alpha.exe");
             string exeB = Path.Combine(root, "beta.exe");
             string exeC = Path.Combine(root, "gamma.exe");
+            string storePath = @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App";
             File.WriteAllText(exeA, "x", new UTF8Encoding(false));
             File.WriteAllText(exeB, "x", new UTF8Encoding(false));
             File.WriteAllText(exeC, "x", new UTF8Encoding(false));
@@ -140,6 +141,7 @@ namespace Clover
                 new string[] { "AlphaApp", exeA, "办公" },
                 new string[] { "BetaApp",  exeB, "开发" },
                 new string[] { "GammaApp", exeC, "其他" },
+                new string[] { "StorePinnedApp", storePath, "其他" },
             });
 
             // 再造一批填充应用，让磁贴区**真的能滚动**。
@@ -903,6 +905,42 @@ namespace Clover
                 tileCount = CountTiles(panel);
                 if (tileCount < 3) return "磁贴数少于预期: " + tileCount;
                 return "ok（" + tileCount + " 个磁贴）";
+            });
+
+            // ---------- 5b. 商店应用固定后必须真实显示在「常用」首位 ----------
+            // 这里走 PanelWindow 的生产方法与真实渲染列表，不复制合并/排序逻辑。
+            // 夹具路径就是用户截图中的 shell:AppsFolder 形态，专门覆盖 AUMID 场景。
+            Verify("★商店应用添加到常用后立即显示在首位", delegate
+            {
+                bool actionOk = false;
+                bool saved = false;
+                string first = null;
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    actionOk = panel.TestSetPinnedCommon(storePath, true);
+                    panel.TestSwitchCategory("常用");
+                    WaitForDispatcher(200);
+
+                    first = panel.TestFirstRenderedPath();
+                    Settings reloaded = Settings.Load(root);
+                    saved = reloaded.PinnedCommon.Exists(delegate(string p)
+                    {
+                        return string.Equals(p, storePath, StringComparison.OrdinalIgnoreCase);
+                    });
+                }
+                finally
+                {
+                    // 临时夹具清干净，避免影响后面的「常用为空」验收。
+                    panel.TestSetPinnedCommon(storePath, false);
+                    panel.TestSwitchCategory("");
+                }
+
+                if (!actionOk) return "生产固定方法没有成功";
+                if (!saved) return "settings.json 没有保存商店应用路径";
+                if (!string.Equals(first, storePath, StringComparison.OrdinalIgnoreCase))
+                    return "常用首项不是新固定应用，实际: " + (first ?? "<null>");
+                return "ok（已保存并渲染在第 1 位）";
             });
 
             // ---------- 6. 搜索框存在且可输入 ----------

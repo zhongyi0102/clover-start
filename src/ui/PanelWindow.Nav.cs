@@ -1173,20 +1173,31 @@ namespace Clover
             }
         }
 
-        /// <summary>当前界面内容的签名（分类 + 搜索词 + 应用数 + 自定义排序长度）。</summary>
+        /// <summary>
+        /// 路径列表签名。数量相同但内容/顺序变化时也必须不同，
+        /// 否则「换了一个固定应用」会被按需渲染误判成没有变化。
+        /// </summary>
+        internal static string PathListSignature(List<string> paths)
+        {
+            if (paths == null) return "0";
+            return paths.Count + "\u0002" + string.Join("\u0003", paths.ToArray());
+        }
+
+        /// <summary>当前界面内容的签名（分类、搜索、应用、排序、隐藏项与固定名单）。</summary>
         string CurrentContentSig()
         {
             try
             {
                 string q = searchBox == null ? "" : searchBox.Text.Trim();
-                int orderCount = 0;
                 List<string> order;
-                if (customOrders.TryGetValue(current, out order) && order != null) orderCount = order.Count;
+                if (!customOrders.TryGetValue(current, out order)) order = null;
+                string orderSig = PathListSignature(order);
+                string pinnedSig = PathListSignature(settings == null ? null : settings.PinnedCommon);
                 // 隐藏数进签名：隐藏/取消隐藏会改变内容，但 Apps.Count 不变，
                 // 不带上它的话「按需渲染」会误判成"没变化"而跳过重建。
                 int hiddenCount = catalog == null ? 0 : catalog.HiddenItems().Count;
                 return current + "\u0001" + q + "\u0001" + catalog.Apps.Count +
-                       "\u0001" + orderCount + "\u0001" + hiddenCount;
+                       "\u0001" + orderSig + "\u0001" + hiddenCount + "\u0001" + pinnedSig;
             }
             catch
             {
@@ -2164,6 +2175,34 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "测试：切换分类"); }
         }
 
+        /// <summary>测试用：按路径走生产固定逻辑；找不到应用返回 false。</summary>
+        internal bool TestSetPinnedCommon(string path, bool pinned)
+        {
+            try
+            {
+                AppItem a = FindAppByPath(path);
+                if (a == null) return false;
+                SetPinnedCommon(a, pinned);
+                return IsPinnedCommon(a) == pinned;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "测试：设置常用固定");
+                return false;
+            }
+        }
+
+        /// <summary>测试用：取当前真实渲染列表第一项的路径。</summary>
+        internal string TestFirstRenderedPath()
+        {
+            try
+            {
+                return renderedApps != null && renderedApps.Count > 0
+                    ? renderedApps[0].Path : null;
+            }
+            catch { return null; }
+        }
+
         /// <summary>测试用：写入 last-category.json 并重读。</summary>
         internal void TestSetLastCategory(string cat)
         {
@@ -2677,7 +2716,7 @@ namespace Clover
             bool tileDrag = false;
             b.MouseEnter += delegate
             {
-                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
+                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.TileHover;
                 // 悬停：放大 + 上浮（参考 GlassBoard 的 Dock 悬停）。
                 // 只动 RenderTransform，不触发布局重排。
                 if (!Ui.ReducedMotion)
@@ -2704,7 +2743,7 @@ namespace Clover
                 // 按下态：补全"静止/悬停/按下"三态。
                 // 点一个启动稍慢的应用时，用户能看到"按下去了"，
                 // 不会怀疑是没点中。
-                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Pressed;
+                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.TilePressed;
 
                 // 高频操作只给短促按压反馈，不用弹跳拖慢体感。
                 if (!Ui.ReducedMotion)
@@ -2755,7 +2794,7 @@ namespace Clover
                 b.Cursor = Cursors.Hand;
                 // 松开：回到悬停态（鼠标还在磁贴上），而不是透明 ——
                 // 否则刚点完会闪一下，像"点完就灭了"
-                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.Hover;
+                if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.TileHover;
                 if (tileDrag)
                 {
                     tileDrag = false;
@@ -2778,7 +2817,7 @@ namespace Clover
                     Launch(a);
                 }
             };
-            b.MouseRightButtonUp += delegate { ShowTileMenu(a); };
+            b.MouseRightButtonUp += delegate { ShowTileMenu(a, b); };
             return b;
         }
 
@@ -3681,6 +3720,44 @@ namespace Clover
         }
 
         /// <summary>
+        /// 同步「常用」页的人工排序。
+        ///
+        /// 新固定项放到第一个：此前固定名单虽然保存成功，但旧 order.json
+        /// 会把所有老条目排在前面，新条目只能落到末尾，看起来就像没有添加。
+        /// 取消固定时移除排序记录；若它仍有使用记录，CommonApps() 仍会让它
+        /// 留在常用页，只是不再享受人工置顶。
+        /// </summary>
+        internal static bool UpdateCommonOrder(List<string> order, string path, bool pinned)
+        {
+            if (order == null || string.IsNullOrEmpty(path)) return false;
+
+            int removed = order.RemoveAll(delegate(string p)
+            { return string.Equals(p, path, StringComparison.OrdinalIgnoreCase); });
+
+            if (pinned)
+            {
+                order.Insert(0, path);
+                return true;
+            }
+
+            return removed > 0;
+        }
+
+        /// <summary>把固定状态同步到「常用」人工排序并按需存盘。</summary>
+        void SyncCommonOrder(string path, bool pinned)
+        {
+            List<string> order;
+            if (!customOrders.TryGetValue("常用", out order) || order == null)
+            {
+                if (!pinned) return;
+                order = new List<string>();
+                customOrders["常用"] = order;
+            }
+
+            if (UpdateCommonOrder(order, path, pinned)) SaveCustomOrders();
+        }
+
+        /// <summary>
         /// 固定 / 取消固定到「常用」（右键「添加到常用」/「取消固定到常用」）。
         /// 写入 `settings.json` 的 `pinnedCommon`，然后立即重渲染。
         /// </summary>
@@ -3697,11 +3774,15 @@ namespace Clover
 
                 if (pinned) settings.PinnedCommon.Add(a.Path);
                 settings.Save();
+                SyncCommonOrder(a.Path, pinned);
 
                 Ui.Log((pinned ? "添加到常用: " : "取消固定到常用: ") + a.Name);
 
                 RebuildNav();
                 RenderApps();
+                ShowToast(pinned
+                    ? ("已添加到常用并排在最前：" + a.Name)
+                    : ("已取消固定到常用：" + a.Name));
             }
             catch (Exception ex) { Ui.LogError(ex, "设置常用固定"); }
         }
@@ -3728,13 +3809,15 @@ namespace Clover
                 if (usage != null) usage.Remove(a.Path);
                 a.Usage = 0;
                 a.LastUsed = 0;
+                SyncCommonOrder(a.Path, false);
 
                 RebuildNav();
                 RenderApps();
+                ShowToast("已从常用移除：" + a.Name);
             }
             catch (Exception ex) { Ui.LogError(ex, "从常用移除"); }
         }
-        void ShowTileMenu(AppItem a)
+        void ShowTileMenu(AppItem a, Border sourceTile)
         {
             if (a == null || string.IsNullOrEmpty(a.Path)) return;
             ContextMenu cm = new ContextMenu();
@@ -3933,7 +4016,24 @@ namespace Clover
             }
 
             taskMenuOpen = true;
-            cm.Closed += delegate { taskMenuOpen = false; };
+            cm.Closed += delegate
+            {
+                taskMenuOpen = false;
+
+                // ContextMenu 在独立窗口中显示，打开/关闭会打断原磁贴的鼠标状态序列。
+                // 显式按当前状态复原，避免菜单关掉后残留按下/悬停色块；键盘选中态
+                // 优先，不能被鼠标状态抹掉。
+                try
+                {
+                    if (sourceTile == null) return;
+                    if (ReferenceEquals(sourceTile, selectedTile))
+                        sourceTile.Background = Ui.AccentSoft;
+                    else
+                        sourceTile.Background = sourceTile.IsMouseOver
+                            ? Ui.TileHover : Brushes.Transparent;
+                }
+                catch { }
+            };
             cm.Placement = PlacementMode.MousePoint;
             cm.IsOpen = true;
         }

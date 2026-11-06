@@ -97,7 +97,7 @@ namespace Clover
             g.Children.Add(message);
 
             undoBtn = new Border();
-            undoBtn.CornerRadius = new CornerRadius(10);
+            undoBtn.CornerRadius = new CornerRadius(Ui.R.Sm);
             undoBtn.Padding = new Thickness(10, 2, 10, 2);
             undoBtn.Cursor = System.Windows.Input.Cursors.Hand;
             undoBtn.Background = Brushes.Transparent;
@@ -125,7 +125,7 @@ namespace Clover
 
             // ---- 「保留」按钮（仅桌面移除场景显示）----
             keepBtn = new Border();
-            keepBtn.CornerRadius = new CornerRadius(10);
+            keepBtn.CornerRadius = new CornerRadius(Ui.R.Sm);
             keepBtn.Padding = new Thickness(10, 2, 10, 2);
             keepBtn.Cursor = System.Windows.Input.Cursors.Hand;
             keepBtn.Background = Ui.Accent;
