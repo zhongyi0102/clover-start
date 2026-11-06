@@ -39,6 +39,8 @@ namespace Clover
             TestNotMisidentified();
             TestCaseInsensitive();
             TestExeNameOf();
+            TestCollapseSetting();
+            TestReasonCarriedThrough();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -231,6 +233,80 @@ namespace Clover
         static bool IsLow(string name, string target)
         {
             return LowValueRules.IsLowValue(name, target, LowValueRules.ExeNameOf(target));
+        }
+
+        // ---------- 10. 折叠设置（collapseLowValue）----------
+        static void TestCollapseSetting()
+        {
+            Console.WriteLine("--- 10. collapseLowValue 设置 ---");
+
+            string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "lvc-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                System.IO.Directory.CreateDirectory(tmp);
+
+                // 默认值必须是 false（展开）—— 等于改动前的行为，
+                // 否则老用户升级后会以为"我的应用少了一批"
+                Settings s = Settings.Load(tmp);
+                Check(!s.CollapseLowValue, "★缺键时默认 false（展开，与改动前一致）");
+
+                s.CollapseLowValue = true;
+                s.Save();
+
+                Settings back = Settings.Load(tmp);
+                Check(back.CollapseLowValue, "★true 能往返保存/读取");
+
+                back.CollapseLowValue = false;
+                back.Save();
+                Check(!Settings.Load(tmp).CollapseLowValue, "★false 能往返保存/读取");
+
+                // 键名拼写固定为 collapseLowValue（手改配置的人靠它）
+                string json = JsonIO.Read(System.IO.Path.Combine(tmp, "config", "settings.json"));
+                Check(json != null && json.IndexOf("collapseLowValue", StringComparison.Ordinal) >= 0,
+                    "★settings.json 里的键名是 collapseLowValue", json == null ? "(读不到)" : "");
+            }
+            finally
+            {
+                try { if (System.IO.Directory.Exists(tmp)) System.IO.Directory.Delete(tmp, true); } catch { }
+            }
+
+            Console.WriteLine();
+        }
+
+        // ---------- 11. 原因字段不污染 apps.json ----------
+        static void TestReasonCarriedThrough()
+        {
+            Console.WriteLine("--- 11. 原因字段（AppItem）序列化行为 ---");
+
+            // 两个新字段必须与既有 LowValue 一样标 [ScriptIgnore]，
+            // 否则每次保存 apps.json 都会多出 lowValueReason / lowValueDetail ——
+            // 那是运行时算出来的，写进文件既没用又会让 diff 很吵。
+            AppItem a = new AppItem();
+            a.Name = "卸载 微信";
+            a.Path = @"C:\x\卸载 微信.lnk";
+            a.LowValue = true;
+            a.LowValueReason = LowValueReason.NameKeyword;
+            a.LowValueDetail = "名称含「卸载」";
+
+            System.Web.Script.Serialization.JavaScriptSerializer ser =
+                new System.Web.Script.Serialization.JavaScriptSerializer();
+            string json = ser.Serialize(a);
+
+            Check(json.IndexOf("lowValueReason", StringComparison.OrdinalIgnoreCase) < 0,
+                "★lowValueReason 不写进 json", json);
+            Check(json.IndexOf("lowValueDetail", StringComparison.OrdinalIgnoreCase) < 0,
+                "★lowValueDetail 不写进 json", json);
+            Check(json.IndexOf("lowValue", StringComparison.OrdinalIgnoreCase) < 0,
+                "★lowValue 也不写进 json（既有行为未破坏）", json);
+            Check(json.IndexOf("卸载 微信", StringComparison.Ordinal) >= 0,
+                "name 仍正常序列化");
+
+            // 字段本身可读写（ToolTip / 清单窗口依赖它）
+            Check(a.LowValueReason == LowValueReason.NameKeyword, "原因字段可读回");
+            Check(a.LowValueDetail == "名称含「卸载」", "说明字段可读回");
+
+            Console.WriteLine();
         }
     }
 }

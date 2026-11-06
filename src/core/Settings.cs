@@ -211,6 +211,17 @@ namespace Clover
         public List<string> LowValueUnmarked = new List<string>();
 
         /// <summary>
+        /// 「全部」页的低价值段是否**默认收起**。默认 false（展开，与改动前一致）。
+        ///
+        /// 收起后低价值磁贴不渲染，只留一行「低价值 N 项（点击展开）」——
+        /// 113 个磁贴里那 9 个"卸载/帮助/许可"不再占版面。
+        ///
+        /// 默认展开而不是收起：这是纯观感开关，默认值必须等于改动前的行为，
+        /// 否则老用户升级后会发现"我的应用少了一批"。
+        /// </summary>
+        public bool CollapseLowValue = false;
+
+        /// <summary>
         /// **手动固定到「常用」**的应用路径（右键「添加到常用」写入）。
         ///
         /// 为什么不直接给 usage.json 加计数：
@@ -392,6 +403,8 @@ namespace Clover
                 }
                 s.LowValueMarked = ReadStringList(d, "lowValueMarked");
                 s.LowValueUnmarked = ReadStringList(d, "lowValueUnmarked");
+                // 低价值段折叠：缺键 → false（展开，等于改动前的行为）
+                s.CollapseLowValue = ReadBool(d, "collapseLowValue", false);
                 s.PinnedCommon = ReadStringList(d, "pinnedCommon");
 
                 // ---- 桌面保持无快捷方式 ----
@@ -464,6 +477,7 @@ namespace Clover
                 d["filesSort"] = FilesSort;
                 d["lowValueMarked"] = LowValueMarked;
                 d["lowValueUnmarked"] = LowValueUnmarked;
+                d["collapseLowValue"] = CollapseLowValue;
                 d["pinnedCommon"] = PinnedCommon;
                 d["desktopCleanEnabled"] = DesktopCleanEnabled;
                 d["desktopCleanExisting"] = DesktopCleanExisting;

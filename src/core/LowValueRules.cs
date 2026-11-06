@@ -5,6 +5,39 @@ using System.IO;
 namespace Clover
 {
     /// <summary>
+    /// 一次低价值判定的完整结果：是否低价值 + 原因 + 可直接显示给用户的说明。
+    ///
+    /// Detail 是**给人看的中文短语**（如「名称含"卸载"」），
+    /// 界面直接拼进 ToolTip / 清单窗口，不要在里面写英文枚举名。
+    /// </summary>
+    public class LowValueVerdict
+    {
+        /// <summary>是否判为低价值。</summary>
+        public bool IsLowValue;
+
+        /// <summary>原因分类（日志 / 后续筛选用；界面显示用 Detail）。</summary>
+        public LowValueReason Reason = LowValueReason.None;
+
+        /// <summary>人话说明，如「名称含"卸载"」/「目标不存在」/「指向 .pdf 手册」。</summary>
+        public string Detail = "";
+
+        public LowValueVerdict() { }
+
+        public LowValueVerdict(bool isLowValue, LowValueReason reason, string detail)
+        {
+            IsLowValue = isLowValue;
+            Reason = reason;
+            Detail = detail ?? "";
+        }
+
+        /// <summary>「不是低价值」的单例结果（只读用法，不要改它）。</summary>
+        public static LowValueVerdict NotLow
+        {
+            get { return new LowValueVerdict(false, LowValueReason.None, ""); }
+        }
+    }
+
+    /// <summary>
     /// 「低价值条目」识别规则。
     ///
     /// ── 什么是低价值 ──
@@ -22,6 +55,11 @@ namespace Clover
     /// 关键约束：**只匹配快捷方式名称，并排除「可执行文件名 == 应用名」的主程序**。
     /// 否则 `Geek Uninstaller`（本身就是个卸载工具，名字含 Uninstall）
     /// 会被误判为低价值。
+    ///
+    /// ── 判定结果带原因 ──
+    ///
+    /// `Explain` 返回 LowValueVerdict（是否低价值 + 原因 + 人话说明），
+    /// `IsLowValue` 只是它的薄包装，行为与以前完全一致。
     /// </summary>
     public static class LowValueRules
     {
@@ -78,6 +116,23 @@ namespace Clover
         /// <param name="exeFileName">目标可执行文件名（不含路径，可为 null）</param>
         public static bool IsLowValue(string name, string targetPath, string exeFileName)
         {
+            // 薄包装：判定逻辑全部在 Explain 里，这里只取布尔。
+            // 保留它是为了现有调用点与测试不用改（行为完全一致）。
+            return Explain(name, targetPath, exeFileName).IsLowValue;
+        }
+
+        /// <summary>
+        /// 判定一条应用是否低价值，**并给出原因**。
+        ///
+        /// 判定顺序、`IsMainExecutable` 保护、异常兜底都与以前的 IsLowValue 完全一致，
+        /// 只是把 `return true` 换成带原因的返回 —— 顺序不能变，
+        /// 否则「失效快捷方式」会先被关键词分支吃掉，原因就报错了。
+        /// </summary>
+        /// <param name="name">应用显示名</param>
+        /// <param name="targetPath">快捷方式目标路径（可为 null）</param>
+        /// <param name="exeFileName">目标可执行文件名（不含路径，可为 null）</param>
+        public static LowValueVerdict Explain(string name, string targetPath, string exeFileName)
+        {
             try
             {
                 // ---- 1. 失效快捷方式：目标不存在 ----
@@ -90,7 +145,11 @@ namespace Clover
                     try { exists = File.Exists(targetPath) || Directory.Exists(targetPath); }
                     catch { exists = false; }
 
-                    if (!exists) return true;   // 目标不存在的失效快捷方式
+                    if (!exists)
+                    {
+                        return new LowValueVerdict(true, LowValueReason.MissingTarget,
+                            "目标不存在（失效快捷方式）");
+                    }
                 }
 
                 // ---- 2. 目标是 .url / .txt / .pdf / .chm / .html ----
@@ -102,30 +161,38 @@ namespace Clover
 
                     foreach (string e in TargetExtensions)
                     {
-                        if (ext == e) return true;
+                        if (ext == e)
+                        {
+                            return new LowValueVerdict(true, LowValueReason.NonExecutableTarget,
+                                "指向 " + e + (e == ".url" ? " 网址链接" : " 说明文件"));
+                        }
                     }
                 }
 
                 // ---- 3. 名称关键词 ----
-                if (string.IsNullOrWhiteSpace(name)) return false;
+                if (string.IsNullOrWhiteSpace(name)) return LowValueVerdict.NotLow;
 
                 // ★ 不误伤：如果「可执行文件名（去扩展名）== 应用名」，
                 //   说明这是个主程序本身（如 Geek Uninstaller 的 geek.exe），
                 //   名称里的 Uninstall 只是产品名的一部分，不是"卸载入口"。
-                if (IsMainExecutable(name, exeFileName)) return false;
+                if (IsMainExecutable(name, exeFileName)) return LowValueVerdict.NotLow;
 
                 foreach (string k in NameKeywords)
                 {
                     if (string.IsNullOrEmpty(k)) continue;
                     if (name.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
-                        return true;
+                    {
+                        return new LowValueVerdict(true, LowValueReason.NameKeyword,
+                            "名称含「" + k + "」");
+                    }
                 }
 
-                return false;
+                return LowValueVerdict.NotLow;
             }
             catch
             {
-                return false;   // 判定失败一律当作正常应用（宁可漏判，不可误伤）
+                // 判定失败一律当作正常应用（宁可漏判，不可误伤）
+                return LowValueVerdict.NotLow;
             }
         }
 

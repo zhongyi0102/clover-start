@@ -907,6 +907,69 @@ namespace Clover
                 return "ok（" + tileCount + " 个磁贴）";
             });
 
+            // ---------- 5a. 磁贴 ↔ 应用下标映射不变式 ----------
+            // 这是「Children 索引映射陷阱」的回归保护：
+            //   · renderedTiles.Count 必须等于 renderedApps.Count
+            //   · 每个 tile 的 appIndex 必须是它自己的下标
+            //   · 每个 tile 必须真的是 tilePanel 的子元素
+            // 将来谁往 Children 里插非磁贴元素（节标题等）却没维护映射，这里立刻红。
+            Verify("★磁贴映射与应用列表一一对应", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    WaitForDispatcher(400);
+
+                    int tiles = panel.TestTileCount();
+                    if (tiles < 3) return "映射表为空或过少: " + tiles;
+                    if (!panel.TestTileMapConsistent())
+                        return "映射不一致（tiles=" + tiles + "）";
+                    return "ok（" + tiles + " 块磁贴映射一致）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 5b. 低价值段折叠：展开/收起都不破坏映射 ----------
+            // 第 3 条验收要点：展开/收起低价值段后拖动落点仍准确 ——
+            // 落点准确的前提正是映射正确，所以这里在两种状态下都断言映射不变式。
+            Verify("★低价值段展开/收起后映射仍一致", delegate
+            {
+                bool original = false;
+                try
+                {
+                    Settings before = Settings.Load(root);
+                    original = before.CollapseLowValue;
+
+                    panel.TestSwitchCategory("");
+                    panel.TestSetCollapseLowValue(true);
+                    WaitForDispatcher(300);
+                    bool collapsedOk = panel.TestTileMapConsistent();
+                    int collapsedTiles = panel.TestTileCount();
+
+                    panel.TestSetCollapseLowValue(false);
+                    WaitForDispatcher(300);
+                    bool expandedOk = panel.TestTileMapConsistent();
+                    int expandedTiles = panel.TestTileCount();
+
+                    if (!collapsedOk) return "收起态映射不一致";
+                    if (!expandedOk) return "展开态映射不一致";
+                    if (collapsedTiles > expandedTiles)
+                        return "收起态磁贴反而更多（收起=" + collapsedTiles + " 展开=" + expandedTiles + "）";
+
+                    return "ok（收起 " + collapsedTiles + " 块 / 展开 " + expandedTiles + " 块，映射均一致）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+                finally
+                {
+                    try
+                    {
+                        panel.TestSetCollapseLowValue(original);
+                        panel.TestSwitchCategory("");
+                    }
+                    catch { }
+                }
+            });
+
             // ---------- 5b. 商店应用固定后必须真实显示在「常用」首位 ----------
             // 这里走 PanelWindow 的生产方法与真实渲染列表，不复制合并/排序逻辑。
             // 夹具路径就是用户截图中的 shell:AppsFolder 形态，专门覆盖 AUMID 场景。

@@ -24,6 +24,35 @@ namespace Clover
         /// <summary>键盘选中项在 renderedApps 中的下标，-1 表示没有选中。</summary>
         int selectedIndex = -1;
 
+        // ---- 磁贴 ↔ 应用下标的显式映射 ----
+        //
+        // ── 为什么需要它（这是一次真实修复，不是重构洁癖）──
+        //
+        // 以前 `tilePanel.Children[i]` 被当成 `renderedApps[i]` 的磁贴，这个约定
+        // 没有写在任何类型里，只存在于三处代码的假设中：
+        //   · SelectTile            用 Children[index] 取磁贴
+        //   · DropTile              用 Children[i] 的几何求落点，再把 i 当应用下标
+        //   · AnimateTilesForInsert 用 Children[i] 做让位动画
+        // 另外 ResetTileShifts 遍历 Children 靠 `as Border` 过滤，空状态时
+        // Children[0] 是 StackPanel 而不是磁贴（注释里已记过这个坑）。
+        //
+        // 一旦往 Children 里插入任何**非磁贴元素**（低价值段的节标题、
+        // 展开/收起行），三处会同时错位：选中高亮到错误磁贴、拖拽落点整体偏移、
+        // 让位动画乱跳。所以折叠功能的前置条件就是先把映射显式化。
+        //
+        // 修法：Children 退回**纯渲染容器**的角色，谁想往里塞什么都行；
+        // 所有索引依赖改走下面两个字段。
+        //
+        // **不变式（必须始终成立）**：
+        //   renderedTiles.Count == renderedApps.Count
+        //   且 renderedTiles[i] 就是 renderedApps[i] 的磁贴。
+
+        /// <summary>与 renderedApps 一一对应的磁贴。索引即应用索引，与 Children 无关。</summary>
+        readonly List<Border> renderedTiles = new List<Border>();
+
+        /// <summary>磁贴 → 应用下标。拖动/选中用它反查，不再用 Children.IndexOf。</summary>
+        readonly Dictionary<Border, int> tileAppIndex = new Dictionary<Border, int>();
+
         /// <summary>
         /// 悬停时图标放大的比例（纯视觉，不改布局）。
         ///
@@ -159,9 +188,12 @@ namespace Clover
                 selectedTile = null;
                 selectedIndex = -1;
 
-                if (index < 0 || index >= renderedApps.Count) return;
-                if (index >= tilePanel.Children.Count) return;
-                Border tile = tilePanel.Children[index] as Border;
+                // 下标语义是**应用下标**（renderedApps 的下标），不是 Children 的下标。
+                // 空状态时 renderedTiles 为空，越界检查在这里自然返回 —— 不会像以前
+                // 那样把 Children[0] 的 StackPanel 当磁贴。
+                if (index < 0 || index >= renderedTiles.Count) return;
+                if (renderedApps == null || index >= renderedApps.Count) return;
+                Border tile = renderedTiles[index];
                 if (tile == null) return;
 
                 selectedTile = tile;
@@ -1196,8 +1228,12 @@ namespace Clover
                 // 隐藏数进签名：隐藏/取消隐藏会改变内容，但 Apps.Count 不变，
                 // 不带上它的话「按需渲染」会误判成"没变化"而跳过重建。
                 int hiddenCount = catalog == null ? 0 : catalog.HiddenItems().Count;
+                // 折叠状态进签名：它是纯 UI 状态，不改 Apps/顺序，
+                // 不带上的话「展开→切走→切回」会因签名相同而跳过重建，状态看起来丢了
+                string collapseSig = (settings != null && settings.CollapseLowValue) ? "1" : "0";
                 return current + "\u0001" + q + "\u0001" + catalog.Apps.Count +
-                       "\u0001" + orderSig + "\u0001" + hiddenCount + "\u0001" + pinnedSig;
+                       "\u0001" + orderSig + "\u0001" + hiddenCount + "\u0001" + pinnedSig +
+                       "\u0001" + collapseSig;
             }
             catch
             {
@@ -1790,6 +1826,9 @@ namespace Clover
             // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
             // 否则 RefreshRunningDots 会去改已经不存在的控件
             tileIconBoxes.Clear();
+            // 映射表与 Children 同步清空：Children 是渲染容器，映射表才是索引真相
+            renderedTiles.Clear();
+            tileAppIndex.Clear();
 
             string q = searchBox == null ? "" : searchBox.Text.Trim();
             showingCommon = (q.Length == 0 && current == "常用");
@@ -1868,7 +1907,21 @@ namespace Clover
             }
 
             ApplyCustomOrder(list);
-            renderedApps = new List<AppItem>(list);
+
+            // ---- 低价值段：在 ApplyCustomOrder **之后**切分 ----
+            //
+            // 顺序很重要：ApplyCustomOrder 会把拖动过的顺序整体覆盖，
+            // 包括把低价值项拖回中间（当前既有行为，本次**不改变**）。
+            // 所以分段必须在它之后算 —— 否则节标题会出现在一个
+            // 与实际排列不一致的位置上（例如标题说"以下 N 项是低价值"，
+            // 而中间还夹着正常应用）。
+            bool collapseLow = (current == "" && settings != null && settings.CollapseLowValue);
+            List<AppItem> normalPart;
+            List<AppItem> lowPart;
+            SplitLowValueSegment(list, collapseLow, out normalPart, out lowPart);
+
+            renderedApps = new List<AppItem>(normalPart);
+            renderedApps.AddRange(lowPart);
 
             // 刷新"哪些应用在运行"，供磁贴右上角的小圆点用。
             //
@@ -1880,8 +1933,24 @@ namespace Clover
             // 重渲染会丢弃旧的 Border 对象，选中状态必须一起清掉（否则 selectedTile 指向已移除的控件）
             selectedTile = null;
             selectedIndex = -1;
-            foreach (AppItem a in list)
-                tilePanel.Children.Add(MakeTile(a));
+
+            // 展开态才有节标题。收起态只在末尾放一行「低价值 N 项（点击展开）」。
+            //
+            // ★ 节标题与展开行只 `Children.Add`，**绝不进 renderedTiles** ——
+            //   这正是第一章修复索引映射的用途：Children 是纯渲染容器，
+            //   索引真相在 renderedTiles / tileAppIndex 里。
+            if (lowPart.Count > 0 && !collapseLow)
+                tilePanel.Children.Add(MakeLowValueSectionHeader(lowPart.Count));
+
+            int normalCount = normalPart.Count;
+            for (int i = 0; i < normalCount; i++)
+                AddTileAt(normalPart[i]);
+
+            for (int i = 0; i < lowPart.Count; i++)
+                AddTileAt(lowPart[i]);
+
+            if (lowPart.Count > 0 && collapseLow)
+                tilePanel.Children.Add(MakeLowValueCollapsedRow(lowPart.Count));
 
             // 空状态：只在**没有系统搜索结果**时才显示。
             //
@@ -1963,15 +2032,24 @@ namespace Clover
                 }
                 else
                 {
-                    // ★ 「已隐藏 M 个」是可点的：点它打开「整理与隐藏」窗口并定位到标签二
+                    // ★ 两个可点入口共用一行：
+                    //   · 「已隐藏 M 个」 → 打开「整理与隐藏」窗口并定位到标签二
+                    //   · 「K 个低价值」 → 打开低价值清单窗口，可批量取消标记
                     int hiddenCount = catalog.HiddenItems().Count;
+                    // 低价值只在「全部」页显示：「常用」页不受沉底影响，提它只会让人困惑
+                    int lowCount = (current == "") ? CountLowValueVisible() : 0;
+
+                    footerCount.Inlines.Clear();
+
+                    Run head = new Run("共 " + visible + " 个应用");
+                    head.Foreground = Ui.Sub;
+                    footerCount.Inlines.Add(head);
+
                     if (hiddenCount > 0)
                     {
-                        footerCount.Inlines.Clear();
-
-                        Run head = new Run("共 " + visible + " 个应用，");
-                        head.Foreground = Ui.Sub;
-                        footerCount.Inlines.Add(head);
+                        Run sep = new Run("，");
+                        sep.Foreground = Ui.Sub;
+                        footerCount.Inlines.Add(sep);
 
                         Hyperlink link = new Hyperlink();
                         link.Inlines.Add(new Run("已隐藏 " + hiddenCount + " 个"));
@@ -1986,19 +2064,217 @@ namespace Clover
                         };
                         footerCount.Inlines.Add(link);
                     }
-                    else
+
+                    if (lowCount > 0)
                     {
-                        footerCount.Inlines.Clear();
-                        footerCount.Text = "共 " + visible + " 个应用";
+                        Run sep2 = new Run(hiddenCount > 0 ? "，" : "，其中 ");
+                        sep2.Foreground = Ui.Sub;
+                        footerCount.Inlines.Add(sep2);
+
+                        Hyperlink lowLink = new Hyperlink();
+                        lowLink.Inlines.Add(new Run(lowCount + " 个低价值"));
+                        lowLink.Foreground = Ui.Accent;
+                        lowLink.TextDecorations = null;
+                        lowLink.Cursor = System.Windows.Input.Cursors.Hand;
+                        lowLink.ToolTip = "点击查看低价值清单，可批量取消标记";
+                        lowLink.Click += delegate
+                        {
+                            try { ShowLowValueList(); }
+                            catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
+                        };
+                        footerCount.Inlines.Add(lowLink);
                     }
                 }
             }
+
+            // 守卫：映射表必须与 renderedApps 等长。失败只记日志、不抛 ——
+            // 渲染出问题不该让面板崩掉，但要让日志里能查到。
+            if (renderedTiles.Count != renderedApps.Count)
+                Ui.Log("磁贴映射不一致: tiles=" + renderedTiles.Count + " apps=" + renderedApps.Count);
 
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
             RestoreScrollOffset();
 
         }
 
+
+        /// <summary>
+        /// 建一块磁贴、放进 Children、并登记到映射表。
+        ///
+        /// **所有磁贴都必须走这里** —— 手动 Children.Add + renderedTiles.Add
+        /// 两处一旦漏一处，索引映射就会错位（这正是要消灭的那类 bug）。
+        /// </summary>
+        void AddTileAt(AppItem a)
+        {
+            Border tile = MakeTile(a);
+            tilePanel.Children.Add(tile);
+            // ★ 登记映射：tile 的下标 = 应用下标（与 Children 的位置无关）
+            tileAppIndex[tile] = renderedTiles.Count;
+            renderedTiles.Add(tile);
+        }
+
+        /// <summary>
+        /// 把已排序好的列表切成「正常段 + 低价值段」。
+        ///
+        /// 切分点取**第一个低价值项**：AllAppsSorted 已保证低价值整体沉底，
+        /// 但如果用户拖动过（ApplyCustomOrder 覆盖顺序），低价值项可能回到中间 ——
+        /// 此时仍然以第一个低价值项为界，标题写"以下 N 项"，语义不会说谎。
+        ///
+        /// collapseLow = true 时低价值段**不渲染磁贴**（lowPart 留空、计数另算），
+        /// 只保留一行可点击的展开行。
+        /// </summary>
+        static void SplitLowValueSegment(List<AppItem> list, bool collapseLow,
+            out List<AppItem> normalPart, out List<AppItem> lowPart)
+        {
+            normalPart = new List<AppItem>();
+            lowPart = new List<AppItem>();
+            if (list == null) return;
+
+            int cut = list.Count;
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (list[i] != null && list[i].LowValue) { cut = i; break; }
+            }
+
+            for (int i = 0; i < cut; i++) normalPart.Add(list[i]);
+            for (int i = cut; i < list.Count; i++)
+            {
+                // 收起时低价值磁贴不渲染（不建 Border，省掉图标解析的代价）
+                if (!collapseLow) lowPart.Add(list[i]);
+            }
+        }
+
+        /// <summary>
+        /// 低价值段的节标题：「低价值 N 项」+ 说明。
+        ///
+        /// 这是**普通 Border**，只 Children.Add、不进 renderedTiles ——
+        /// 所以它既不可拖拽、也不是落点（DropTile 只遍历 renderedTiles），
+        /// 键盘导航也跳过它（MoveSelection 只认 renderedApps.Count）。
+        ///
+        /// 占满一整行（Width 绑定到 WrapPanel 宽度）：
+        /// 半行宽的话，WrapPanel 会把后面的磁贴挤到同一行的右侧，看起来像"标题旁边挂了个应用"。
+        /// </summary>
+        Border MakeLowValueSectionHeader(int lowCount)
+        {
+            Border b = new Border();
+            b.Margin = new Thickness(2, Ui.S.Md, 2, Ui.S.Xs);
+            b.Padding = new Thickness(0, 0, 0, Ui.S.Xs);
+            b.BorderBrush = Ui.Line;
+            b.BorderThickness = new Thickness(0, 0, 0, 1);   // 下边一条细线，像分组分隔
+            b.Background = Brushes.Transparent;
+            b.HorizontalAlignment = HorizontalAlignment.Stretch;
+            try
+            {
+                // 宽度跟着 tilePanel 走：WrapPanel 里 HorizontalAlignment.Stretch 不会自动撑满
+                b.SetBinding(FrameworkElement.WidthProperty,
+                    new System.Windows.Data.Binding("ActualWidth")
+                    {
+                        Source = tilePanel,
+                        Mode = System.Windows.Data.BindingMode.OneWay
+                    });
+            }
+            catch { }
+
+            Grid g = new Grid();
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions.Add(new ColumnDefinition());
+            g.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
+            g.ColumnDefinitions[1].Width = GridLength.Auto;
+
+            TextBlock title = Ui.T("低价值 " + lowCount + " 项", 11, Ui.Sub, FontWeights.SemiBold);
+            title.VerticalAlignment = VerticalAlignment.Center;
+            g.Children.Add(title);
+
+            // 右侧的「收起」入口：与底部统计的低价值链接打开同一个清单窗口之外，
+            // 这里只做收起动作（列表里能批量取消标记，语义不同，不混在一起）
+            TextBlock toggle = Ui.T("收起", 10.5, Ui.Accent);
+            toggle.VerticalAlignment = VerticalAlignment.Center;
+            toggle.Cursor = System.Windows.Input.Cursors.Hand;
+            toggle.ToolTip = "收起低价值段，只留一行入口";
+            toggle.MouseLeftButtonUp += delegate
+            {
+                try { SetCollapseLowValue(true); }
+                catch (Exception ex) { Ui.LogError(ex, "收起低价值段"); }
+            };
+            Grid.SetColumn(toggle, 1);
+            g.Children.Add(toggle);
+
+            b.Child = g;
+            return b;
+        }
+
+        /// <summary>
+        /// 收起态的单行入口：「低价值 N 项（点击展开）」。
+        ///
+        /// 同样只 Children.Add、不进 renderedTiles —— 它不是磁贴，不参与拖拽与键盘导航。
+        /// 键盘导航跳过它是合理的：收起时那些项本来就不在 renderedApps 里。
+        /// </summary>
+        Border MakeLowValueCollapsedRow(int lowCount)
+        {
+            Border b = new Border();
+            b.Margin = new Thickness(2, Ui.S.Md, 2, Ui.S.Xs);
+            b.Padding = new Thickness(Ui.S.Sm, Ui.S.Sm, Ui.S.Sm, Ui.S.Sm);
+            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Background = Ui.SearchBg;
+            b.Cursor = System.Windows.Input.Cursors.Hand;
+            b.HorizontalAlignment = HorizontalAlignment.Stretch;
+            try
+            {
+                b.SetBinding(FrameworkElement.WidthProperty,
+                    new System.Windows.Data.Binding("ActualWidth")
+                    {
+                        Source = tilePanel,
+                        Mode = System.Windows.Data.BindingMode.OneWay
+                    });
+            }
+            catch { }
+
+            StackPanel sp = new StackPanel();
+            sp.Orientation = Orientation.Horizontal;
+
+            TextBlock glyph = Ui.T("\uE70D", 10.5, Ui.Accent);   // 向下箭头
+            glyph.FontFamily = Ui.Mdl;
+            glyph.VerticalAlignment = VerticalAlignment.Center;
+            glyph.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+            sp.Children.Add(glyph);
+
+            TextBlock label = Ui.T("低价值 " + lowCount + " 项（点击展开）", 11, Ui.Accent);
+            label.VerticalAlignment = VerticalAlignment.Center;
+            sp.Children.Add(label);
+
+            b.Child = sp;
+            b.ToolTip = "展开低价值段（卸载器、帮助文档、许可协议等）";
+            b.MouseLeftButtonUp += delegate
+            {
+                try { SetCollapseLowValue(false); }
+                catch (Exception ex) { Ui.LogError(ex, "展开低价值段"); }
+            };
+            return b;
+        }
+
+        /// <summary>
+        /// 设置低价值段折叠状态并写回 settings。
+        ///
+        /// 展开/收起是纯 UI 状态，但要**持久化** —— 否则切到「常用」再切回来
+        /// （每次切换都会全量重建）折叠状态就丢了。
+        /// </summary>
+        void SetCollapseLowValue(bool collapsed)
+        {
+            try
+            {
+                if (settings == null) return;
+                if (settings.CollapseLowValue == collapsed) return;
+
+                settings.CollapseLowValue = collapsed;
+                settings.Save();
+
+                // 折叠状态影响渲染内容，签名必须跟着变，
+                // 否则 RenderAppsIfNeeded 会认为"没变化"而跳过重建
+                renderedSig = CurrentContentSig();
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "切换低价值段折叠"); }
+        }
 
         /// <summary>
         /// 「全部」的列表：所有可见应用，按名称排序。
@@ -2022,19 +2298,41 @@ namespace Clover
         {
             try
             {
-                int total = 0, low = 0;
+                int total = 0;
                 foreach (AppItem a in catalog.Apps)
                 {
                     if (a == null || a.Hidden) continue;
                     total++;
-                    if (a.LowValue) low++;
                 }
+                int low = CountLowValueVisible();
 
                 if (low > 0)
                     return "共 " + total + " 个应用，其中 " + low + " 个低价值";
                 return "共 " + total + " 个应用";
             }
             catch { return ""; }
+        }
+
+        /// <summary>
+        /// 可见（未隐藏）的低价值应用数。
+        ///
+        /// 底部统计和低价值清单窗口共用这一个计数 —— 否则「其中 9 个低价值」
+        /// 点开却是 8 个，数字对不上会直接让人不信这个功能。
+        /// </summary>
+        int CountLowValueVisible()
+        {
+            try
+            {
+                int low = 0;
+                if (catalog == null) return 0;
+                foreach (AppItem a in catalog.Apps)
+                {
+                    if (a == null || a.Hidden) continue;   // 隐藏项不计
+                    if (a.LowValue) low++;
+                }
+                return low;
+            }
+            catch { return 0; }
         }
         List<AppItem> AllAppsSorted()
         {
@@ -2057,9 +2355,14 @@ namespace Clover
                     list.Add(a);
                 }
 
-                // ---- 2. 标记低价值 ----
+                // ---- 2. 标记低价值（连原因一起写进 AppItem，供 ToolTip / 清单窗口用）----
                 foreach (AppItem a in list)
-                    a.LowValue = IsLowValueApp(a);
+                {
+                    LowValueVerdict v = ExplainLowValue(a);
+                    a.LowValue = v.IsLowValue;
+                    a.LowValueReason = v.Reason;
+                    a.LowValueDetail = v.Detail ?? "";
+                }
 
                 // ---- 3. 排序：低价值整体沉底，各自内部保持字典序 ----
                 list.Sort(delegate(AppItem x, AppItem y)
@@ -2085,26 +2388,30 @@ namespace Clover
         /// 判定一个应用是否低价值。**手动标记优先于自动规则**：
         ///   · 在 LowValueUnmarked 里 → 一律不低价值（最高优先）
         ///   · 在 LowValueMarked 里   → 一律低价值
-        ///   · 否则走 LowValueRules.IsLowValue 自动判定
+        ///   · 否则走 LowValueRules.Explain 自动判定
+        ///
+        /// 返回带原因的结构，供 ToolTip / 低价值清单窗口显示"为什么"。
         /// </summary>
-        bool IsLowValueApp(AppItem a)
+        LowValueVerdict ExplainLowValue(AppItem a)
         {
             try
             {
-                if (a == null || string.IsNullOrEmpty(a.Path)) return false;
+                if (a == null || string.IsNullOrEmpty(a.Path)) return LowValueVerdict.NotLow;
 
                 if (settings != null)
                 {
                     if (settings.LowValueUnmarked != null)
                     {
                         foreach (string p in settings.LowValueUnmarked)
-                            if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return false;
+                            if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase))
+                                return LowValueVerdict.NotLow;
                     }
 
                     if (settings.LowValueMarked != null)
                     {
                         foreach (string p in settings.LowValueMarked)
-                            if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return true;
+                            if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase))
+                                return new LowValueVerdict(true, LowValueReason.ManualMarked, "已手动标记");
                     }
                 }
 
@@ -2112,9 +2419,15 @@ namespace Clover
                 string target = a.Path;
                 if (!string.IsNullOrEmpty(a.Aumid)) target = null;
 
-                return LowValueRules.IsLowValue(a.Name, target, LowValueRules.ExeNameOf(target));
+                return LowValueRules.Explain(a.Name, target, LowValueRules.ExeNameOf(target));
             }
-            catch { return false; }
+            catch { return LowValueVerdict.NotLow; }
+        }
+
+        /// <summary>只要布尔结论时的薄包装（保持既有调用点不变）。</summary>
+        bool IsLowValueApp(AppItem a)
+        {
+            return ExplainLowValue(a).IsLowValue;
         }
 
         /// <summary>
@@ -2307,6 +2620,56 @@ namespace Clover
         {
             try { return BuildAllStats(); }
             catch { return ""; }
+        }
+
+        /// <summary>测试用：当前磁贴映射表的长度（应恒等于 renderedApps.Count）。</summary>
+        internal int TestTileCount()
+        {
+            try { return renderedTiles.Count; }
+            catch { return -1; }
+        }
+
+        /// <summary>测试用：设置低价值段折叠状态并重渲染（走生产路径 SetCollapseLowValue）。</summary>
+        internal void TestSetCollapseLowValue(bool collapsed)
+        {
+            try { SetCollapseLowValue(collapsed); }
+            catch (Exception ex) { Ui.LogError(ex, "测试：切换低价值段折叠"); }
+        }
+
+        /// <summary>测试用：当前低价值段是否收起。</summary>
+        internal bool TestCollapseLowValue()
+        {
+            try { return settings != null && settings.CollapseLowValue; }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// 测试用：磁贴映射是否一致 —— tiles == apps，且每个 tile 的 appIndex 正确、
+        /// 且每个 tile 确实是 tilePanel 的子元素。
+        ///
+        /// 这条断言就是「Children 索引映射陷阱」的回归保护：将来谁往 Children 里
+        /// 插非磁贴元素（节标题之类），只要映射表没跟着维护，这里立刻报错。
+        /// </summary>
+        internal bool TestTileMapConsistent()
+        {
+            try
+            {
+                if (renderedApps == null) return false;
+                if (renderedTiles.Count != renderedApps.Count) return false;
+                if (tileAppIndex.Count != renderedTiles.Count) return false;
+
+                for (int i = 0; i < renderedTiles.Count; i++)
+                {
+                    Border t = renderedTiles[i];
+                    if (t == null) return false;
+                    int mapped;
+                    if (!tileAppIndex.TryGetValue(t, out mapped)) return false;
+                    if (mapped != i) return false;
+                    if (tilePanel == null || !tilePanel.Children.Contains(t)) return false;
+                }
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>测试用：设置/取消低价值标记。</summary>
@@ -2607,6 +2970,33 @@ namespace Clover
             catch { return a == null ? "" : (a.Name ?? ""); }
         }
 
+        /// <summary>
+        /// 磁贴 ToolTip：正常应用就是显示名；低价值应用再补一行「低价值：原因」。
+        ///
+        /// 为什么要这一行：磁贴只是变淡（Opacity 0.45），用户看不出**为什么**，
+        /// 唯一的线索是右键菜单。把原因写在悬停提示里，不用点开任何东西就能知道
+        /// 是"名称命中关键词"还是"这个快捷方式已经失效了"——后者用户可能需要处理。
+        /// </summary>
+        static string TileToolTipOf(AppItem a)
+        {
+            try
+            {
+                string name = DisplayNameOf(a);
+                if (a == null || !a.LowValue) return name;
+
+                string detail = a.LowValueDetail;
+                if (string.IsNullOrWhiteSpace(detail))
+                {
+                    // 兜底：老数据/手动标记没写 Detail 时给一句能看的说明
+                    detail = a.LowValueReason == LowValueReason.ManualMarked
+                        ? "已手动标记"
+                        : "被规则判为低价值";
+                }
+                return name + "\n低价值：" + detail;
+            }
+            catch { return DisplayNameOf(a); }
+        }
+
         Border MakeTile(AppItem a)
         {
             Border b = new Border();
@@ -2616,7 +3006,7 @@ namespace Clover
             b.Margin = new Thickness(2);
             b.Background = Brushes.Transparent;
             b.Cursor = Cursors.Hand;
-            b.ToolTip = DisplayNameOf(a);
+            b.ToolTip = TileToolTipOf(a);
 
             // ★ 低价值条目变淡（沉底排序在 AllAppsSorted 里做）
             // 0.45 足够看出"这个不太重要"，又不至于看不清名字
@@ -3070,9 +3460,11 @@ namespace Clover
                 int from = renderedApps.IndexOf(draggedApp);
                 double shift = TileWidthPx + 4;   // 一格的宽度
 
-                for (int i = 0; i < renderedApps.Count && i < tilePanel.Children.Count; i++)
+                // 遍历 renderedTiles 而不是 Children：下标语义与应用索引一致，
+                // 节标题等非磁贴元素不会混进来占掉一格。
+                for (int i = 0; i < renderedTiles.Count && i < renderedApps.Count; i++)
                 {
-                    Border b = tilePanel.Children[i] as Border;
+                    Border b = renderedTiles[i];
                     if (b == null) continue;
 
                     // 拖动项自己不动（它跟着鼠标，由 Opacity 表示）
@@ -3163,9 +3555,10 @@ namespace Clover
             try
             {
                 if (tilePanel == null) return;
-                foreach (UIElement u in tilePanel.Children)
+                // 遍历 renderedTiles：不再依赖 `Children 里只有 Border` 这个假设，
+                // 节标题/空状态提示即使混在 Children 里也不会被误处理。
+                foreach (Border b in renderedTiles)
                 {
-                    Border b = u as Border;
                     if (b == null) continue;
                     FrameworkElement content = b.Child as FrameworkElement;
                     if (content == null) continue;
@@ -3343,10 +3736,12 @@ namespace Clover
                 if (tilePanel == null || renderedApps == null || renderedApps.Count == 0) return;
                 Point p = Mouse.GetPosition(tilePanel);
                 int target = -1;
-                int n = Math.Min(renderedApps.Count, tilePanel.Children.Count);
+                // 只遍历 renderedTiles：命中下标**就是应用下标**，
+                // 节标题/空状态提示不参与命中（它们不在这个列表里）。
+                int n = Math.Min(renderedApps.Count, renderedTiles.Count);
                 for (int i = 0; i < n; i++)
                 {
-                    FrameworkElement fe = tilePanel.Children[i] as FrameworkElement;
+                    FrameworkElement fe = renderedTiles[i];
                     if (fe == null) continue;
                     Point tl = fe.TranslatePoint(new Point(0, 0), tilePanel);
                     if (p.X >= tl.X && p.X <= tl.X + fe.ActualWidth && p.Y >= tl.Y && p.Y <= tl.Y + fe.ActualHeight)
@@ -3678,6 +4073,75 @@ namespace Clover
                 RenderApps();
             }
             catch (Exception ex) { Ui.LogError(ex, "设置低价值标记"); }
+        }
+
+        /// <summary>
+        /// 收集「全部」页里被判为低价值的应用（带原因），供清单窗口显示。
+        ///
+        /// 与底部统计用同一份数据（catalog.Apps 过滤 Hidden），
+        /// 这样「其中 9 个低价值」点开就是那 9 个，数字不会对不上。
+        /// </summary>
+        List<AppItem> LowValueApps()
+        {
+            List<AppItem> list = new List<AppItem>();
+            try
+            {
+                if (catalog == null) return list;
+                foreach (AppItem a in catalog.Apps)
+                {
+                    if (a == null || a.Hidden) continue;   // 隐藏语义：不在任何列表里显示
+                    if (a.LowValue) list.Add(a);
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "收集低价值应用"); }
+            return list;
+        }
+        /// <summary>
+        /// 打开「低价值清单」窗口；用户勾选并确认后，批量写入 LowValueUnmarked。
+        ///
+        /// 为什么批量写一次 Save 而不是逐个调 SetLowValue：
+        /// SetLowValue 每次都 Save + RenderApps，勾 9 项就是 9 次磁盘写 + 9 次
+        /// 全量重建（每次约 100+ 个磁贴）。这里攒完一次写、一次渲染。
+        /// </summary>
+        void ShowLowValueList()
+        {
+            try
+            {
+                if (settings == null) return;
+
+                List<AppItem> low = LowValueApps();
+                LowValueListDialog dlg = new LowValueListDialog(this, low);
+                bool confirmed = dlg.ShowDialog();
+                if (!confirmed) return;
+
+                List<AppItem> chosen = dlg.SelectedItems;
+                if (chosen == null || chosen.Count == 0) return;
+
+                if (settings.LowValueMarked == null) settings.LowValueMarked = new List<string>();
+                if (settings.LowValueUnmarked == null) settings.LowValueUnmarked = new List<string>();
+
+                foreach (AppItem a in chosen)
+                {
+                    if (a == null || string.IsNullOrEmpty(a.Path)) continue;
+
+                    // 互斥：取消标记时从 Marked 里移除、加入 Unmarked
+                    settings.LowValueMarked.RemoveAll(delegate(string p)
+                    { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+
+                    bool already = settings.LowValueUnmarked.Exists(delegate(string p)
+                    { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
+                    if (!already) settings.LowValueUnmarked.Add(a.Path);
+
+                    a.LowValue = false;
+                    a.LowValueReason = LowValueReason.None;
+                    a.LowValueDetail = "";
+                }
+
+                settings.Save();
+                Ui.Log("批量取消低价值标记: " + chosen.Count + " 项");
+                RenderApps();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
         }
 
         /// <summary>磁贴右键菜单里「常用」相关的动作。</summary>

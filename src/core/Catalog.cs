@@ -7,6 +7,36 @@ using System.Web.Script.Serialization;
 
 namespace Clover
 {
+    /// <summary>
+    /// 判为低价值的**原因**。
+    ///
+    /// 放在 Catalog.cs 而不是 LowValueRules.cs：`AppItem` 要带这个字段，
+    /// 而 Catalog 是 core 的基础数据层，不能反过来依赖规则文件
+    /// （否则每个引用 Catalog 的测试套件都得连带链接 LowValueRules）。
+    /// 判定逻辑仍然集中在 LowValueRules，这里只是共享的类型。
+    ///
+    /// 为什么要这个枚举：以前只返回 bool，界面只能把磁贴变淡，
+    /// 用户看到"这个为什么这么淡"却无从得知，只能靠右键菜单猜。
+    /// 带上原因后，磁贴 ToolTip 能直接写「低价值：名称含"卸载"」。
+    /// </summary>
+    public enum LowValueReason
+    {
+        /// <summary>不是低价值（无原因）。</summary>
+        None = 0,
+
+        /// <summary>目标不存在（失效快捷方式）。</summary>
+        MissingTarget,
+
+        /// <summary>目标是 .url / .txt / .pdf / .chm / .html —— 链接或说明书，不是程序。</summary>
+        NonExecutableTarget,
+
+        /// <summary>名称命中关键词（卸载 / 帮助 / 许可 / 语言 / 修复 ……）。</summary>
+        NameKeyword,
+
+        /// <summary>用户在右键菜单里手动标记的（不由 LowValueRules 判定，由 IsLowValueApp 写入）。</summary>
+        ManualMarked,
+    }
+
     class AppItem
     {
         public string Name;
@@ -66,6 +96,23 @@ namespace Clover
         /// </summary>
         [System.Web.Script.Serialization.ScriptIgnore]
         public bool LowValue;
+
+        /// <summary>
+        /// 判为低价值的**原因分类**（运行时计算，不写进 json）。
+        ///
+        /// 与 LowValue 完全同样处理：`[ScriptIgnore]` 保证它不会污染 apps.json。
+        /// 判定来源见 PanelWindow.IsLowValueApp（手动标记 &gt; 自动规则）。
+        /// </summary>
+        [System.Web.Script.Serialization.ScriptIgnore]
+        public LowValueReason LowValueReason;
+
+        /// <summary>
+        /// 判为低价值的原因**说明**（人话，如「名称含"卸载"」/「目标不存在」）。
+        ///
+        /// 运行时计算，不写进 json —— 磁贴 ToolTip 和低价值清单窗口直接显示它。
+        /// </summary>
+        [System.Web.Script.Serialization.ScriptIgnore]
+        public string LowValueDetail;
     }
 
     class Catalog

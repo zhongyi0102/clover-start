@@ -269,9 +269,15 @@ Invoke-Suite 'DropTargetTest' $baseRefs `
 Invoke-Suite 'DesktopDragGestureTest' $baseRefs `
     (@((Join-Path $coreDir 'DesktopDragGesture.cs'), (Join-Path $testDir 'DesktopDragGestureTest.cs')))
 
-# 「全部」页：低价值条目识别规则
-Invoke-Suite 'LowValueTest' $baseRefs `
-    (@((Join-Path $coreDir 'LowValueRules.cs'), (Join-Path $testDir 'LowValueTest.cs')))
+# 「全部」页：低价值条目识别规则（含 collapseLowValue 设置往返、AppItem 原因字段不写 json）
+# 需要 catalogDeps：测试要直接构造 AppItem 并读写 Settings
+Invoke-Suite 'LowValueTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $coreDir 'LowValueRules.cs'), (Join-Path $testDir 'LowValueTest.cs')))
+
+# 「全部」页：低价值判定的**原因**（Explain 各分支 / 原因优先级 / 不误伤主程序 / 异常兜底）
+# 需要 catalogDeps：LowValueReason 枚举定义在 Catalog.cs（AppItem 的字段类型）
+Invoke-Suite 'LowValueReasonTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $coreDir 'LowValueRules.cs'), (Join-Path $testDir 'LowValueReasonTest.cs')))
 
 
 # 桌面保持无快捷方式：保留名单 / 规范化 / 自动失效
