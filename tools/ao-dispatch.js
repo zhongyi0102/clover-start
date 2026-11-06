@@ -135,16 +135,102 @@ function matchByKeyword(prompt) {
 }
 
 // ── D 层：语义兜底 ──────────────────────────────────────────
+// ── D 层：语义兜底（支持按需自启）───────────────────────────
+
+/**
+ * 检查语义服务是否在线。
+ * @returns {Promise<boolean>}
+ */
+async function isSemanticAlive(endpoint, timeoutMs = 800) {
+  // endpoint 形如 http://127.0.0.1:8765/route → 探 /health
+  const healthUrl = endpoint.replace(/\/route\s*$/, '/health');
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const resp = await fetch(healthUrl, { signal: controller.signal });
+    clearTimeout(timer);
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 按需启动语义服务（后台，不阻塞）。
+ * 用 uv run 启动，日志落到 %TEMP%。
+ * @returns {boolean} 是否成功拉起进程
+ */
+function spawnSemanticServer() {
+  const { spawn } = require('child_process');
+  const serverDir = path.join(__dirname, 'semantic-router');
+  const serverPy = path.join(serverDir, 'server.py');
+
+  if (!fs.existsSync(serverPy)) {
+    return { ok: false, reason: `找不到 ${serverPy}` };
+  }
+
+  const logPath = path.join(os.tmpdir(), 'ao-semantic-router.log');
+  const logFd = (() => {
+    try { return fs.openSync(logPath, 'a'); } catch { return 'ignore'; }
+  })();
+
+  try {
+    const child = spawn('uv', ['run', 'server.py'], {
+      cwd: serverDir,
+      detached: true,
+      stdio: ['ignore', logFd, logFd],
+      shell: true,          // Windows 下 uv 是 .cmd，需要 shell
+      windowsHide: true,
+    });
+    child.unref();
+    return { ok: true, pid: child.pid, log: logPath };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
+/**
+ * 等语义服务就绪（轮询 /health）。
+ * @returns {Promise<boolean>}
+ */
+async function waitSemanticReady(endpoint, maxWaitMs = 60000) {
+  const deadline = Date.now() + maxWaitMs;
+  let delay = 500;
+  while (Date.now() < deadline) {
+    if (await isSemanticAlive(endpoint, 800)) return true;
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(delay * 1.5, 3000);
+  }
+  return false;
+}
+
 async function matchBySemantic(prompt) {
   const R = loadRules();
   const sem = R.semantic || {};
   if (!sem.enabled) return { skipped: '未启用' };
 
+  const endpoint = sem.endpoint;
+
+  // ── 按需自启 ──
+  let autostartNote = '';
+  if (!(await isSemanticAlive(endpoint))) {
+    const started = spawnSemanticServer();
+    if (!started.ok) {
+      return { error: `服务未运行且启动失败：${started.reason}` };
+    }
+    autostartNote = `已拉起服务(PID ${started.pid})，等待就绪…`;
+    const ready = await waitSemanticReady(endpoint, sem.autostartTimeoutMs || 60000);
+    if (!ready) {
+      return { error: `服务启动超时（日志：${started.log}）`, autostartNote };
+    }
+    autostartNote += ' 就绪';
+  }
+
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), sem.timeoutMs || 2000);
 
-    const resp = await fetch(sem.endpoint, {
+    const resp = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: prompt, routes: R.rules.map(r => r.id) }),
@@ -152,23 +238,28 @@ async function matchBySemantic(prompt) {
     });
     clearTimeout(timer);
 
-    if (!resp.ok) return { error: `HTTP ${resp.status}` };
+    if (!resp.ok) return { error: `HTTP ${resp.status}`, autostartNote };
     const data = await resp.json();
 
-    // 期望 { route: "hard", confidence: 0.82 }
     if (!data.route || typeof data.confidence !== 'number') {
-      return { error: '响应格式不对（需要 {route, confidence}）' };
+      return { error: '响应格式不对（需要 {route, confidence}）', autostartNote };
     }
     if (data.confidence < (sem.threshold || 0.6)) {
-      return { lowConfidence: true, route: data.route, confidence: data.confidence };
+      return { lowConfidence: true, route: data.route, confidence: data.confidence, autostartNote };
     }
 
     const rule = R.rules.find(r => r.id === data.route);
-    if (!rule) return { error: `未知 route: ${data.route}` };
+    if (!rule) return { error: `未知 route: ${data.route}`, autostartNote };
 
-    return { rule, matchedBy: `语义「${data.route}」conf=${data.confidence.toFixed(2)}`, layer: 'D-semantic', confidence: data.confidence };
+    return {
+      rule,
+      matchedBy: `语义「${data.route}」conf=${data.confidence.toFixed(2)}`,
+      layer: 'D-semantic',
+      confidence: data.confidence,
+      autostartNote,
+    };
   } catch (e) {
-    return { error: e.name === 'AbortError' ? '超时' : e.message };
+    return { error: e.name === 'AbortError' ? '超时' : e.message, autostartNote };
   }
 }
 
@@ -201,6 +292,10 @@ async function decide(prompt) {
     trace.push('');
     trace.push('【D 层 · 语义兜底】');
     const sem = await matchBySemantic(prompt);
+
+    if (sem.autostartNote) {
+      trace.push(`  ⚙️  ${sem.autostartNote}`);
+    }
 
     if (sem.rule) {
       rule = sem.rule;
