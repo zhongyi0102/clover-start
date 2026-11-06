@@ -1,0 +1,14 @@
+[project]
+name = "ao-semantic-router"
+version = "0.1.0"
+description = "D 层语义兜底：AO 任务分配的路由服务"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sentence-transformers>=3.3.0",
+    "numpy>=2.0.0",
+]
+
+[tool.uv]
+# 首次运行会自动装依赖并下载模型（~95MB）

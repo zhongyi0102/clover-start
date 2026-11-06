@@ -40,3 +40,25 @@ Thumbs.db
 
 # 工具临时锁文件
 .dsh-ops-update-*.lock
+
+# ── AO（agent-orchestrator）相关 ────────────────────────────
+# AO 的临时备份（编排器改动快照）
+.ao-backup-*/
+
+# AO 共享上下文的运行时状态（task/worker 状态每次派活都变，
+# decisions.md / findings.md 里的内容才是值得留的，但它们也是 agent
+# 自动追加的，进版本库会制造大量噪音）
+.ao-context/state.json
+
+# PowerShell 缓存（AO worker 在 worktree 里跑命令时生成）
+Microsoft/
+**/ModuleAnalysisCache
+
+# D 层语义路由的 Python 虚拟环境与缓存
+tools/semantic-router/.venv/
+tools/semantic-router/__pycache__/
+tools/semantic-router/*.pyc
+
+# MCP server 的 node_modules（依赖由 package.json 声明）
+tools/context-mcp/node_modules/
+

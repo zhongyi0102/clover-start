@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "ao-context": {
+      "command": "node",
+      "args": [
+        "E:\\CloverStart\\tools\\context-mcp\\server.js"
+      ],
+      "env": {
+        "AO_CONTEXT_DIR": "E:\\CloverStart\\.ao-context"
+      }
+    }
+  }
+}
