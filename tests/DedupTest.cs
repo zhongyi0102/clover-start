@@ -48,6 +48,8 @@ namespace Clover
             TestUninstallEntry();
             TestInstallerPath();
             TestSameSourceNotMerged();
+            TestSameTargetDuplicateShortcuts();
+            TestMultiEntryNoPrimaryKept();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
@@ -560,6 +562,85 @@ namespace Clover
             Check(result.Count == 3, "★同来源 3 个入口指向同一 exe → 全部保留",
                 "实际 " + result.Count);
             Check(st.MergedByPath == 0, "统计: 同来源不按路径合并", "实际 " + st.MergedByPath);
+            Console.WriteLine();
+        }
+
+        // ---------- 13. 同目标重复快捷方式：有主快捷方式 → 收敛为 1 条 ----------
+        //
+        // 实测 bug（用户截图）：安装器在开始菜单建了两份快捷方式
+        // 「Agent Orchestrator」和「Orchestrator.inc」，指向同一个 exe，
+        // 界面上同一程序出现两条。
+        // 注意：这个测试用真实 lnk 解析（与第 12 条不同，第 12 条直接给 exe 路径，
+        // 不经过 ResolveDedupKey 的 lnk 分支 —— 所以两者测的是不同代码路径）。
+        static void TestSameTargetDuplicateShortcuts()
+        {
+            Console.WriteLine("--- 13. 同目标重复快捷方式收敛 ---");
+
+            string dir = NewTempDir("dedup-dup");
+            try
+            {
+                string exe = Path.Combine(dir, "agent-orchestrator.exe");
+                File.WriteAllText(exe, "x");   // 必须真实存在（ResolveDedupKey 会验证）
+
+                string lnk1 = Path.Combine(dir, "Agent Orchestrator.lnk");
+                string lnk2 = Path.Combine(dir, "Orchestrator.inc.lnk");
+                if (!TryCreateShortcut(lnk1, exe) || !TryCreateShortcut(lnk2, exe))
+                {
+                    Console.WriteLine("  跳过：无法创建 lnk 夹具");
+                    return;
+                }
+
+                List<AppItem> start = new List<AppItem>();
+                start.Add(Make("Agent Orchestrator", lnk1, AppPaths.SourceStartMenu));
+                start.Add(Make("Orchestrator.inc", lnk2, AppPaths.SourceStartMenu));
+
+                AppDedup.Stats st = new AppDedup.Stats();
+                List<AppItem> result = AppDedup.Merge(start, null, null, st);
+
+                Check(result.Count == 1, "★同目标两条快捷方式 → 收敛为 1 条", "实际 " + result.Count);
+                Check(result.Count > 0 && result[0].Name == "Agent Orchestrator",
+                    "★保留的是主快捷方式（名称=exe名）", result.Count > 0 ? result[0].Name : "(空)");
+                Check(st.SkippedSameSourceDuplicate == 1, "统计: 同源重复丢弃 1",
+                    "实际 " + st.SkippedSameSourceDuplicate);
+            }
+            finally { CleanDir(dir); }
+            Console.WriteLine();
+        }
+
+        // ---------- 14. 多入口但无主快捷方式 → 全部保留（不回归第 12 条）----------
+        //
+        // cmd.exe 场景的另一种形态：三个 lnk 指向同一个 exe，
+        // 且**没有任何一条**的名称与 exe 名一致 → 全部保留。
+        // （第 12 条直接用 exe 路径、不经 lnk 解析；这里走真实 lnk 夹具，
+        // 验证过滤器的分组逻辑本身不会误伤多入口。）
+        static void TestMultiEntryNoPrimaryKept()
+        {
+            Console.WriteLine("--- 14. 无主快捷方式的多入口全保留 ---");
+
+            string dir = NewTempDir("dedup-multi");
+            try
+            {
+                string exe = Path.Combine(dir, "cmd.exe");
+                File.WriteAllText(exe, "x");
+
+                List<AppItem> start = new List<AppItem>();
+                string[] names = { "Anaconda Prompt", "Command Prompt", "Node.js command prompt" };
+                List<string> created = new List<string>();
+                foreach (string n in names)
+                {
+                    string lnk = Path.Combine(dir, n + ".lnk");
+                    if (!TryCreateShortcut(lnk, exe)) { Console.WriteLine("  跳过：无法创建 lnk 夹具"); return; }
+                    created.Add(lnk);
+                    start.Add(Make(n, lnk, AppPaths.SourceStartMenu));
+                }
+
+                AppDedup.Stats st = new AppDedup.Stats();
+                List<AppItem> result = AppDedup.Merge(start, null, null, st);
+
+                Check(result.Count == 3, "★3 个入口无主快捷方式 → 全部保留", "实际 " + result.Count);
+                Check(st.SkippedSameSourceDuplicate == 0, "统计: 不丢弃", "实际 " + st.SkippedSameSourceDuplicate);
+            }
+            finally { CleanDir(dir); }
             Console.WriteLine();
         }
 

@@ -50,6 +50,7 @@ namespace Clover
             public int MergedByNameOnly;      // 因名称相同被合并（双方无发布者）
             public int KeptStoreSeparate;     // 商店应用保持独立
             public int SkippedStoreDuplicate; // 非真商店 AppsFolder 条目，Catalog 已有对应条目
+            public int SkippedSameSourceDuplicate; // 开始菜单内同目标的非主快捷方式被丢弃
             public int DroppedNoName;         // 无名称被丢弃
             public int DroppedUnlaunchable;   // 不可启动被丢弃
 
@@ -72,6 +73,7 @@ namespace Clover
                      + " | 名称兜底合并 " + MergedByNameOnly
                      + " | 商店独立 " + KeptStoreSeparate
                      + " | 非商店AppsFolder重复 " + SkippedStoreDuplicate
+                     + " | 同源重复快捷方式 " + SkippedSameSourceDuplicate
                      + " | 丢弃无名称 " + DroppedNoName
                      + " | 丢弃不可启动 " + DroppedUnlaunchable
                      + "\n      lnk 解析: 实际 " + LnkResolved + " 次 / 缓存命中 " + LnkCacheHits
@@ -136,6 +138,38 @@ namespace Clover
             Dictionary<string, int> byNamePublisher = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
             // 名称索引：归一化名称 → 下标列表（一个名称可能对应多个不同程序）
             Dictionary<string, List<int>> byName = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+
+            // ---------- 0. 开始菜单内「同目标的重复快捷方式」预过滤 ----------
+            //
+            // ── 实测 bug（用户截图）──
+            //
+            // 某安装器在开始菜单建了两份快捷方式：
+            //   · Agent Orchestrator.lnk  → ...\agent-orchestrator.exe
+            //   · Orchestrator.inc.lnk    → 同一个 exe
+            // 名称不同、lnk 路径不同，但目标是**同一个 exe** —— 界面上
+            // 同一个程序出现两条（「全部」「常用」页都有）。
+            //
+            // ── 为什么不直接「同目标就合并」──
+            //
+            // DedupTest 第 12 条固化过既有结论：Anaconda Prompt /
+            // Command Prompt / Node.js command prompt 三个 lnk 都指向
+            // cmd.exe，但它们是**不同用途的入口**，必须全部保留。
+            // 无脑按目标合并会把它们吃掉两个。
+            //
+            // ── 「主快捷方式」规则（本修复的判定）──
+            //
+            //   · 主快捷方式：条目名与目标 exe 文件名**归一化后一致**
+            //     （Agent Orchestrator ↔ agent-orchestrator.exe → 一致）
+            //   · 同目标组里**存在主快捷方式**时，只保留主快捷方式，
+            //     其余视为安装器误建的重复入口，丢弃
+            //   · 同目标组里**没有任何**主快捷方式（cmd.exe 三入口：
+            //     名称都与 cmd 无关）→ 全部保留，行为与以前一致
+            //
+            // 这样 cmd.exe 场景不受影响，而 Orchestrator 场景正确收敛为 1 条。
+            if (startMenu != null && startMenu.Count > 1)
+            {
+                startMenu = FilterSameSourceDuplicates(startMenu, stats);
+            }
 
             // ---------- 1. 开始菜单（含便携）作为基底 ----------
             if (startMenu != null)
@@ -395,6 +429,139 @@ namespace Clover
 
             stats.FinalCount = result.Count;
             return result;
+        }
+
+        /// <summary>
+        /// 开始菜单内「同目标重复快捷方式」过滤。
+        ///
+        /// 分组键：解析出的目标 exe 归一化路径（解析失败 / shell 路径不参与，
+        /// 保持原样）。同组内：
+        ///   · 找「主快捷方式」（名称与 exe 名归一化后一致）；
+        ///   · 恰好有主快捷方式 → 保留它、丢弃其余；
+        ///   · 有多个主快捷方式 → 保留第一个（稳定：按列表原顺序），
+        ///     丢弃其余（此时其余的名称也都与 exe 一致，属于纯重名重复）；
+        ///   · 没有主快捷方式 → 全部保留（cmd.exe 多入口场景）。
+        /// </summary>
+        static List<AppItem> FilterSameSourceDuplicates(List<AppItem> startMenu, Stats stats)
+        {
+            List<AppItem> kept = new List<AppItem>(startMenu.Count);
+            try
+            {
+                // 组键 → 该组全部条目的下标（按原顺序）
+                Dictionary<string, List<int>> groups = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < startMenu.Count; i++)
+                {
+                    AppItem a = startMenu[i];
+                    if (a == null) continue;
+                    // 商店/shell 条目不参与（它们的去重在后面的 AppsFolder 段做）
+                    if (a.Path != null && AppPaths.IsShellPath(a.Path)) continue;
+
+                    string key = ShortcutResolver.ResolveDedupKey(a.Path);
+                    if (string.IsNullOrEmpty(key)) continue;
+
+                    List<int> g;
+                    if (!groups.TryGetValue(key, out g))
+                    {
+                        g = new List<int>();
+                        groups[key] = g;
+                    }
+                    g.Add(i);
+                }
+
+                // 需要丢弃的下标集合
+                HashSet<int> drop = new HashSet<int>();
+
+                foreach (KeyValuePair<string, List<int>> kv in groups)
+                {
+                    List<int> g = kv.Value;
+                    if (g == null || g.Count < 2) continue;
+
+                    // 组内找主快捷方式：名称与 exe 名归一化后一致
+                    string exeNorm = ExeNormOfKey(kv.Key);
+                    int primary = -1;
+                    if (!string.IsNullOrEmpty(exeNorm))
+                    {
+                        foreach (int i in g)
+                        {
+                            AppItem a = startMenu[i];
+                            if (a == null || string.IsNullOrWhiteSpace(a.Name)) continue;
+                            if (NameMatch.Canonical(a.Name) == exeNorm) { primary = i; break; }
+                        }
+                    }
+
+                    if (primary < 0) continue;   // 没有主快捷方式 → 全部保留
+
+                    foreach (int i in g)
+                    {
+                        if (i != primary) drop.Add(i);
+                    }
+                }
+
+                if (drop.Count == 0) return startMenu;
+
+                for (int i = 0; i < startMenu.Count; i++)
+                {
+                    if (drop.Contains(i)) continue;
+                    AppItem a = startMenu[i];
+                    if (a == null) continue;
+                    kept.Add(a);
+                }
+
+                if (stats != null)
+                {
+                    stats.SkippedSameSourceDuplicate = drop.Count;
+                    foreach (int i in drop)
+                    {
+                        if (stats.MergeSamples.Count < 10)
+                        {
+                            AppItem a = startMenu[i];
+                            // 找它所在组的保留项，方便人工核对
+                            string key = (a != null && a.Path != null && !AppPaths.IsShellPath(a.Path))
+                                ? ShortcutResolver.ResolveDedupKey(a.Path) : null;
+                            int primary = -1;
+                            List<int> grp;
+                            if (!string.IsNullOrEmpty(key) && groups.TryGetValue(key, out grp))
+                            {
+                                foreach (int j in grp)
+                                {
+                                    if (!drop.Contains(j)) { primary = j; break; }
+                                }
+                            }
+                            stats.MergeSamples.Add(string.Format("[同源重复] 丢弃「{0}」  (保留「{1}」，同一目标)",
+                                Trim(a == null ? "" : a.Name, 28),
+                                primary >= 0 ? Trim(startMenu[primary].Name, 28) : "?"));
+                        }
+                    }
+                }
+
+                Log.Info("去重: 开始菜单内同目标重复快捷方式丢弃 " + drop.Count + " 条");
+                return kept;
+            }
+            catch (Exception ex)
+            {
+                // 过滤失败绝不能影响正常合并 —— 返回原列表
+                Log.Warn("去重: 同源重复过滤失败（已跳过）: " + ex.Message);
+                return startMenu;
+            }
+        }
+
+        /// <summary>
+        /// 从去重键（归一化目标路径）取 exe 文件名的归一化形式。
+        ///
+        /// 键是 AppPaths.Normalize 的产物（小写、展开路径），
+        /// 这里取文件名、去扩展名，再用 NameMatch.Canonical 归一化，
+        /// 与条目名比（Agent Orchestrator ↔ c:\...\agent-orchestrator.exe → agentorchestrator）。
+        /// </summary>
+        static string ExeNormOfKey(string dedupKey)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(dedupKey)) return null;
+                string fn = System.IO.Path.GetFileName(dedupKey);
+                if (string.IsNullOrEmpty(fn)) return null;
+                return NameMatch.Canonical(System.IO.Path.GetFileNameWithoutExtension(fn));
+            }
+            catch { return null; }
         }
 
             /// <summary>
