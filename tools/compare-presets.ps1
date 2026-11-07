@@ -1,8 +1,10 @@
-﻿# 逐个切换预设并采集主色（视觉验证用）
+# 逐个切换预设并采集主色（视觉验证用）
 # 只用于验收，不参与正式测试（需要真实桌面会话）
 
 $ErrorActionPreference = 'Stop'
-$root = 'E:\CloverStart'
+# 仓库根由脚本自身位置推出（tools\ 的上一级），不写死盘符。
+# 这样 clone 到任意路径、或在 worktree 里跑都能用。
+$root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root 'app\CloverStart.exe'
 $settingsPath = Join-Path $root 'config\settings.json'
 $tool = Join-Path $root 'tools\try-preset.ps1'
