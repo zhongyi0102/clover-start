@@ -2981,8 +2981,12 @@ namespace Clover
         {
             try
             {
+                // 磁贴改成双击启动后，单看界面看不出这个变化，
+                // 单击没反应会像坏了 —— 所以在提示里写明。
+                const string hint = "\n双击启动";
+
                 string name = DisplayNameOf(a);
-                if (a == null || !a.LowValue) return name;
+                if (a == null || !a.LowValue) return name + hint;
 
                 string detail = a.LowValueDetail;
                 if (string.IsNullOrWhiteSpace(detail))
@@ -2992,7 +2996,7 @@ namespace Clover
                         ? "已手动标记"
                         : "被规则判为低价值";
                 }
-                return name + "\n低价值：" + detail;
+                return name + "\n低价值：" + detail + hint;
             }
             catch { return DisplayNameOf(a); }
         }
@@ -3104,6 +3108,9 @@ namespace Clover
             b.Child = sp;
             Point downPt = new Point();
             bool tileDrag = false;
+            // 本次按下的连击数，供松手时判定「双击启动」。
+            // 在 Down 里取：Down 一定先于 Up 到达，用它更稳。
+            int downClickCount = 0;
             b.MouseEnter += delegate
             {
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.TileHover;
@@ -3130,6 +3137,7 @@ namespace Clover
             {
                 downPt = e.GetPosition(tilePanel);
                 tileDrag = false;
+                downClickCount = e.ClickCount;
                 // 按下态：补全"静止/悬停/按下"三态。
                 // 点一个启动稍慢的应用时，用户能看到"按下去了"，
                 // 不会怀疑是没点中。
@@ -3185,7 +3193,17 @@ namespace Clover
                 // 松开：回到悬停态（鼠标还在磁贴上），而不是透明 ——
                 // 否则刚点完会闪一下，像"点完就灭了"
                 if (!ReferenceEquals(b, selectedTile)) b.Background = Ui.TileHover;
-                if (tileDrag)
+
+                // 松手后的三条出口：拖完 → 提交排序；双击 → 启动；其余 → 只选中。
+                //
+                // ★ 这里从「无条件 Launch」改成了「双击才 Launch」：
+                //   磁贴原本一按一松就启动，用户想拖动排序时手指一按程序就开了，
+                //   排序根本做不成。现在与桌面图标、资源管理器一致 ——
+                //   单击只选中（键盘方向键从这里接着走），双击才启动。
+                //   判定逻辑在 core 的 TileClickAction 里，可单测穷举。
+                TileClickAction.Action act = TileClickAction.Resolve(tileDrag, downClickCount);
+
+                if (act == TileClickAction.Action.Drop)
                 {
                     tileDrag = false;
                     // 顺序很重要：先取 insertIndex（要用它算落点），
@@ -3202,10 +3220,13 @@ namespace Clover
                     // 浮层平滑飞到目标格 → 完成后提交并重建
                     DropDragGhost(a, target);
                 }
-                else
+                else if (act == TileClickAction.Action.Launch)
                 {
                     Launch(a);
                 }
+                // else：单击只保留选中态。按下时 SelectTile 已经做过了，
+                // 这里不需要再做任何事 —— 也**不要**去清 selectedTile，
+                // 否则单击完键盘方向键就没有起点了。
             };
             b.MouseRightButtonUp += delegate { ShowTileMenu(a, b); };
             return b;
