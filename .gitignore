@@ -41,14 +41,23 @@ Thumbs.db
 # 工具临时锁文件
 .dsh-ops-update-*.lock
 
-# ── AO（agent-orchestrator）相关 ────────────────────────────
+# ── AI 编码工具的本地产物（与 CloverStart 本身无关）─────────
+# 这些目录由 agent 运行时在本机生成，且含本机绝对路径（E:\CloverStart\...），
+# 对 clone 的人没有意义，公开仓库里也不该出现。
+
+# AO（agent-orchestrator）共享上下文：task/worker 状态每次派活都变，
+# decisions.md / findings.md 也是 agent 自动追加的。
+# MCP server（tools/context-mcp）直接读磁盘，忽略后照常工作。
+.ao-context/
+
 # AO 的临时备份（编排器改动快照）
 .ao-backup-*/
 
-# AO 共享上下文的运行时状态（task/worker 状态每次派活都变，
-# decisions.md / findings.md 里的内容才是值得留的，但它们也是 agent
-# 自动追加的，进版本库会制造大量噪音）
-.ao-context/state.json
+# AO 会话附件（截图等），由 AO 写入 worktree
+.ao/
+
+# Cursor 的 MCP 配置（写死了本机 tools/context-mcp 绝对路径）
+.cursor/
 
 # PowerShell 缓存（AO worker 在 worktree 里跑命令时生成）
 Microsoft/
