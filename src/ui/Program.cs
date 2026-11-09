@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -15,6 +16,7 @@ namespace Clover
         [STAThread]
         static void Main(string[] args)
         {
+            Stopwatch startupWatch = Stopwatch.StartNew();
             bool rescan = false;
             bool show = false;
             bool exitRequest = false;
@@ -150,6 +152,8 @@ namespace Clover
                 return;
             }
 
+            AppWatcher watcher = null;
+            MiniTaskbarWindow miniBar = null;
             try
             {
                 ErrorLog.Init(baseDir);
@@ -217,7 +221,7 @@ namespace Clover
                 ErrorLog.Bind(app);
 
                 // 所有退出路径统一走 RestoreSystemState + 清除运行标记
-                app.Exit += delegate { OnExit(baseDir); };
+                app.Exit += delegate { OnExit(baseDir, watcher, miniBar); };
                 app.SessionEnding += delegate
                 {
                     TaskbarVisibility.RestoreSystemState("会话结束");
@@ -228,17 +232,39 @@ namespace Clover
                 EventWaitHandle exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ExitEventName);
 
                 TriggerWindow trigger = new TriggerWindow(baseDir, settings);
-                PanelWindow panel = new PanelWindow(baseDir, trigger, settings);
-                trigger.AttachPanel(panel);
+                PanelWindow panel = null;
+                watcher = new AppWatcher(baseDir, null, settings);
 
-                AppWatcher watcher = new AppWatcher(baseDir, panel, settings);
-                panel.AttachWatcher(watcher);
-                MiniTaskbarWindow miniBar = new MiniTaskbarWindow();
-                miniBar.Enabled = settings.EffectiveMiniTaskbar;   // 安全模式下自动为 false
-                panel.AttachMiniBar(miniBar);
+                // 开机关键路径只创建四叶草按钮。完整主面板（目录合并、虚拟桌面、
+                // 背景与磁贴树）以及当前为空的迷你任务栏，都在第一次使用时再建。
+                Func<PanelWindow> ensurePanel = delegate
+                {
+                    if (panel != null) return panel;
+
+                    Stopwatch panelWatch = Stopwatch.StartNew();
+                    PanelWindow createdPanel = new PanelWindow(baseDir, trigger, settings);
+
+                    miniBar = new MiniTaskbarWindow();
+                    miniBar.Enabled = settings.EffectiveMiniTaskbar;   // 安全模式下自动为 false
+                    createdPanel.AttachMiniBar(miniBar);
+                    createdPanel.AttachWatcher(watcher);
+
+                    panel = createdPanel;
+                    watcher.AttachPanel(createdPanel);
+                    trigger.AttachPanel(createdPanel);
+
+                    OverlayGate.Register(miniBar,
+                        delegate { return TaskbarGeometry.MiniBarRect(miniBar.Count); },
+                        delegate { return miniBar.Count > 0; }, null);
+
+                    panelWatch.Stop();
+                    ErrorLog.Log("主面板首次加载完成，用时 " + panelWatch.ElapsedMilliseconds + "ms");
+                    return createdPanel;
+                };
+                trigger.AttachPanelFactory(ensurePanel);
 
                 // 全屏视频/游戏时隐藏悬浮按钮，鼠标移到按钮位置再临时显示
-                OverlayGate.HoldVisible = delegate { return panel.IsVisible; };
+                OverlayGate.HoldVisible = delegate { return panel != null && panel.IsVisible; };
                 OverlayGate.Enabled = settings.EffectiveFullscreenDetect;
                 OverlayGate.HoverReveal = settings.EffectiveHoverReveal;
                 OverlayGate.Register(trigger,
@@ -248,20 +274,22 @@ namespace Clover
                     delegate { return TaskbarGeometry.StartButtonRect(); },
                     delegate { return trigger.HideTaskbar; },
                     delegate { return !trigger.StartButton.GatePaused; });
-                OverlayGate.Register(miniBar,
-                    delegate { return TaskbarGeometry.MiniBarRect(miniBar.Count); },
-                    delegate { return miniBar.Count > 0; }, null);
                 OverlayGate.Start();
 
                 app.Startup += delegate
                 {
-                    watcher.Start();
-                    ResourceWatch.Start();
-                    ResourceWatch.Check();
-                    // 心跳：界面线程每 2 秒写一次 config\heartbeat 的时间戳。
-                    // 看门狗在主进程没有可检测窗口时，靠它判断是否卡死。
-                    Heartbeat.Start(baseDir);
-                    if (safeMode) ShowSafeModeTip();
+                    // 先让四叶草按钮完成首帧，再启动监听、自检和心跳。
+                    // 这些功能仍在启动后立即生效，只是不再阻塞可见反馈。
+                    app.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+                    {
+                        watcher.Start();
+                        ResourceWatch.Start();
+                        ResourceWatch.Check();
+                        // 心跳：界面线程每 2 秒写一次 config\heartbeat 的时间戳。
+                        // 看门狗在主进程没有可检测窗口时，靠它判断是否卡死。
+                        Heartbeat.Start(baseDir);
+                        if (safeMode) ShowSafeModeTip();
+                    }));
                 };
 
                 // 稳定运行 5 分钟后清除崩溃计数
@@ -289,7 +317,7 @@ namespace Clover
                             }
                             app.Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(delegate
                             {
-                                panel.ShowPanel();
+                                trigger.ShowPanel();
                             }));
                         }
                         catch { }
@@ -299,7 +327,10 @@ namespace Clover
                 waiter.Start();
 
                 trigger.Show();
-                if (show) panel.ShowPanel();
+                startupWatch.Stop();
+                ErrorLog.Log("启动就绪：四叶草按钮已显示，用时 "
+                    + startupWatch.ElapsedMilliseconds + "ms；主面板将在首次打开时加载");
+                if (show) trigger.ShowPanel();
 
                 app.Run();
             }
@@ -321,13 +352,13 @@ namespace Clover
             finally
             {
                 // 最后一道保险：无论怎么退出都还原系统状态
-                OnExit(baseDir);
+                OnExit(baseDir, watcher, miniBar);
                 GC.KeepAlive(instanceMutex);
             }
         }
 
         /// <summary>统一的退出清理：停监听、还原系统状态、清除运行标记。</summary>
-        static void OnExit(string baseDir)
+        static void OnExit(string baseDir, AppWatcher watcher, MiniTaskbarWindow miniBar)
         {
             try
             {
@@ -337,6 +368,9 @@ namespace Clover
                 // 连退 3 次就误判成"连续崩溃"进入安全模式（干净退出不该这样）。
                 ErrorLog.ShuttingDown = true;
 
+                OverlayGate.Stop();
+                if (watcher != null) watcher.Stop();
+                if (miniBar != null) miniBar.StopRefresh();
                 ResourceWatch.Stop();
                 Heartbeat.Stop();
                 Heartbeat.Cleanup(baseDir);

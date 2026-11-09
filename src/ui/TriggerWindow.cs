@@ -21,6 +21,8 @@ namespace Clover
     class TriggerWindow : Window
     {
         PanelWindow panel;
+        Func<PanelWindow> panelFactory;
+        bool panelLoading;
         string baseDir;
         string exePath;
         string startupLnk;
@@ -49,8 +51,9 @@ namespace Clover
             // 用 EffectiveHideTaskbar：安全模式下自动为 false。
             this.hideTaskbar = this.settings.EffectiveHideTaskbar;
             this.startWin = new StartButtonWindow();
-            this.startWin.Show();
-            if (!hideTaskbar) this.startWin.Hide();
+            // 不再先 Show 再 Hide：默认不隐藏任务栏时，这会白建一个 HWND，
+            // 还会在开机阶段短暂出现“开始”辅助窗。真正需要时再首次 Show。
+            if (hideTaskbar) this.startWin.Show();
 
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
@@ -110,7 +113,15 @@ namespace Clover
         public void AttachPanel(PanelWindow p)
         {
             panel = p;
+        }
 
+        /// <summary>
+        /// 注册主面板工厂。开机只显示 44x48 的四叶草按钮；完整面板、目录合并、
+        /// 背景和磁贴树留到用户第一次打开时再创建。
+        /// </summary>
+        public void AttachPanelFactory(Func<PanelWindow> factory)
+        {
+            panelFactory = factory;
         }
 
         /// <summary>“开始”浮动按钮（任务栏隐藏模式下与四叶草并排）。</summary>
@@ -409,9 +420,79 @@ namespace Clover
         public void TogglePanel()
         {
             Ui.Log("TogglePanel, panel=null? " + (panel == null) + " visible=" + (panel != null && panel.IsVisible));
-            if (panel == null) return;
-            if (panel.IsVisible) panel.HidePanel();
-            else panel.ShowPanel();
+            if (panel != null && panel.IsVisible) panel.HidePanel();
+            else ShowPanel();
+        }
+
+        /// <summary>显示主面板；第一次调用时先异步排到首帧之后构造。</summary>
+        public void ShowPanel()
+        {
+            WithPanel(delegate(PanelWindow p) { p.ShowPanel(); });
+        }
+
+        /// <summary>
+        /// 在主面板可用后执行动作。用 Background 优先级排队，让“正在加载”光标先画出来，
+        /// 避免首次构造 UI 树时按钮看起来像没有响应。
+        /// </summary>
+        void WithPanel(Action<PanelWindow> action)
+        {
+            if (panel != null)
+            {
+                if (action != null) action(panel);
+                return;
+            }
+            if (panelLoading) return;
+
+            panelLoading = true;
+            SetPanelLoading(true);
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+            {
+                try
+                {
+                    PanelWindow ready = EnsurePanel();
+                    if (ready != null && action != null) action(ready);
+                }
+                finally
+                {
+                    panelLoading = false;
+                    SetPanelLoading(false);
+                }
+            }));
+        }
+
+        PanelWindow EnsurePanel()
+        {
+            if (panel != null) return panel;
+            if (panelFactory == null) return null;
+            try
+            {
+                PanelWindow created = panelFactory();
+                if (created != null) panel = created;
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Hook(ex, "首次加载主面板");
+                try
+                {
+                    MessageBox.Show(this,
+                        "主面板加载失败：" + ex.Message + "\r\n详细信息已写入 config\\error.log。",
+                        "四叶草", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch { }
+            }
+            return panel;
+        }
+
+        void SetPanelLoading(bool loading)
+        {
+            try
+            {
+                if (root == null) return;
+                root.Cursor = loading ? Cursors.Wait : Cursors.Hand;
+                root.Opacity = loading ? 0.62 : 1;
+                root.ToolTip = loading ? "正在加载主面板…" : null;
+            }
+            catch { }
         }
 
         /// <summary>上次构建的菜单（仅测试用；生产代码不读它）。</summary>
@@ -446,7 +527,7 @@ namespace Clover
 
             MenuItem rescan = new MenuItem();
             rescan.Header = "重新扫描应用";
-            rescan.Click += delegate { if (panel != null) panel.Rescan(); };
+            rescan.Click += delegate { WithPanel(delegate(PanelWindow p) { p.Rescan(); }); };
             cm.Items.Add(rescan);
 
             cm.Items.Add(new Separator());
@@ -473,15 +554,18 @@ namespace Clover
             organizeItem.ToolTip = "标签一：桌面保持无快捷方式；标签二：已隐藏的应用";
             organizeItem.Click += delegate
             {
-                try
+                WithPanel(delegate(PanelWindow ready)
                 {
-                    OrganizeDialog dlg = new OrganizeDialog(
-                        this, baseDir, settings, panel == null ? null : panel.Watcher, panel,
-                        delegate { if (panel != null) panel.RefreshCatalogQuiet(); },
-                        OrganizeDialog.Tab.Desktop);
-                    dlg.Show();
-                }
-                catch (Exception ex) { ErrorLog.Warn("打开整理与隐藏窗口失败: " + ex.Message); }
+                    try
+                    {
+                        OrganizeDialog dlg = new OrganizeDialog(
+                            this, baseDir, settings, ready.Watcher, ready,
+                            delegate { ready.RefreshCatalogQuiet(); },
+                            OrganizeDialog.Tab.Desktop);
+                        dlg.Show();
+                    }
+                    catch (Exception ex) { ErrorLog.Warn("打开整理与隐藏窗口失败: " + ex.Message); }
+                });
             };
             cm.Items.Add(organizeItem);
 
@@ -589,11 +673,11 @@ namespace Clover
         /// <summary>打开设置窗口（单例，可定位到指定区块）。</summary>
         void OpenSettings(SettingsWindow.Section section)
         {
-            try
+            WithPanel(delegate(PanelWindow ready)
             {
-                SettingsWindow.Open(this, settings, panel, baseDir, section);
-            }
-            catch (Exception ex) { ErrorLog.Warn("打开设置窗口失败: " + ex.Message); }
+                try { SettingsWindow.Open(this, settings, ready, baseDir, section); }
+                catch (Exception ex) { ErrorLog.Warn("打开设置窗口失败: " + ex.Message); }
+            });
         }
 
         /// <summary>

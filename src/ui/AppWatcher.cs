@@ -16,7 +16,11 @@ namespace Clover
     class AppWatcher
     {
         string baseDir;
-        PanelWindow panel;
+        volatile PanelWindow panel;
+        readonly Dispatcher dispatcher;
+        readonly object pendingRemovedGate = new object();
+        readonly List<Dictionary<string, object>> pendingDesktopRemoved =
+            new List<Dictionary<string, object>>();
         /// <summary>
         /// readonly：构造函数已保证非 null（settings ?? Settings.Load(baseDir)），
         /// 编译期锁住这一点，就不必在每个用法前写 null 检查。
@@ -41,6 +45,43 @@ namespace Clover
             this.baseDir = baseDir;
             this.panel = panel;
             this.settings = settings ?? Settings.Load(baseDir);
+            // 监听器允许先于主面板启动。保存创建它的 UI Dispatcher，
+            // 这样开始菜单发生变化时不必依赖 panel.Dispatcher 才能做防抖。
+            this.dispatcher = Dispatcher.CurrentDispatcher;
+        }
+
+        /// <summary>
+        /// 主面板首次打开后补挂。开机阶段面板按需创建，监听器仍要立即工作；
+        /// 扫描完成但面板尚不存在时无需刷新 UI，首次构造会直接读取最新目录。
+        /// </summary>
+        public void AttachPanel(PanelWindow value)
+        {
+            panel = value;
+            if (value == null) return;
+
+            // 启动补扫可能在主面板创建前移走桌面快捷方式。
+            // 把这期间的提示合并后补给面板，不能因为懒加载丢掉撤销入口。
+            List<Dictionary<string, object>> pending = null;
+            lock (pendingRemovedGate)
+            {
+                if (pendingDesktopRemoved.Count > 0)
+                {
+                    pending = new List<Dictionary<string, object>>(pendingDesktopRemoved);
+                    pendingDesktopRemoved.Clear();
+                }
+            }
+            if (pending != null)
+            {
+                try
+                {
+                    value.Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        try { value.ShowDesktopRemovedTip(pending); }
+                        catch (Exception ex) { Ui.LogError(ex, "补发桌面移除提示"); }
+                    }));
+                }
+                catch (Exception ex) { Ui.LogError(ex, "调度桌面移除提示"); }
+            }
         }
 
         public void Start()
@@ -131,14 +172,7 @@ namespace Clover
                     desktopCleaner = new DesktopCleaner(baseDir, settings);
 
                     // 移除后弹轻提示（面板负责显示「保留 / 撤销」）
-                    desktopCleaner.OnRemoved = delegate(List<Dictionary<string, object>> removed)
-                    {
-                        try
-                        {
-                            if (panel != null) panel.ShowDesktopRemovedTip(removed);
-                        }
-                        catch (Exception ex) { Ui.LogError(ex, "桌面移除提示"); }
-                    };
+                    desktopCleaner.OnRemoved = NotifyDesktopRemoved;
                 }
 
                 desktopCleaner.Start();
@@ -168,14 +202,7 @@ namespace Clover
                     desktopCleaner = new DesktopCleaner(baseDir, settings);
 
                     // 移除后弹轻提示（面板负责显示「保留 / 撤销」）
-                    desktopCleaner.OnRemoved = delegate(List<Dictionary<string, object>> removed)
-                    {
-                        try
-                        {
-                            if (panel != null) panel.ShowDesktopRemovedTip(removed);
-                        }
-                        catch (Exception ex) { Ui.LogError(ex, "桌面移除提示"); }
-                    };
+                    desktopCleaner.OnRemoved = NotifyDesktopRemoved;
                 }
 
                 if (enabled) desktopCleaner.OnEnabled();
@@ -206,12 +233,17 @@ namespace Clover
 
         void OnChange(bool isStartMenu)
         {
-            panel.Dispatcher.BeginInvoke((Action)delegate
+            try
             {
-                if (isStartMenu) startMenuDirty = true;
-                debounce.Stop();
-                debounce.Start();
-            });
+                dispatcher.BeginInvoke((Action)delegate
+                {
+                    if (debounce == null || ErrorLog.ShuttingDown) return;
+                    if (isStartMenu) startMenuDirty = true;
+                    debounce.Stop();
+                    debounce.Start();
+                });
+            }
+            catch { }
         }
 
         void OnDebounce(object sender, EventArgs e)
@@ -240,11 +272,18 @@ namespace Clover
                 ScanService.RunAsync(baseDir, reason, delegate(bool ok)
                 {
                     if (!ok) return;
+                    PanelWindow target = panel;
+                    if (target == null)
+                    {
+                        Ui.Log("后台扫描完成(" + reason
+                            + ")，主面板尚未创建；首次打开时读取最新目录");
+                        return;
+                    }
                     try
                     {
-                        panel.Dispatcher.BeginInvoke(new Action(delegate
+                        target.Dispatcher.BeginInvoke(new Action(delegate
                         {
-                            try { panel.RefreshCatalogQuiet(); }
+                            try { target.RefreshCatalogQuiet(); }
                             catch (Exception ex) { Ui.LogError(ex, "刷新面板(" + reason + ")"); }
                         }));
                     }
@@ -258,6 +297,42 @@ namespace Clover
             {
                 ErrorLog.Hook(ex, "启动后台扫描");
             }
+        }
+
+        /// <summary>
+        /// 桌面清理回调来自后台线程。面板已有时切回它的 Dispatcher；
+        /// 尚未创建时先排队，首次打开后合并补发。
+        /// </summary>
+        void NotifyDesktopRemoved(List<Dictionary<string, object>> removed)
+        {
+            try
+            {
+                if (removed == null || removed.Count == 0) return;
+
+                PanelWindow target = panel;
+                if (target == null)
+                {
+                    lock (pendingRemovedGate)
+                    {
+                        // AttachPanel 可能正好在 target 的第一次读取之后完成。
+                        // 锁内再读一次，避免它已经冲刷完队列、这里却随后追加，
+                        // 导致这批撤销提示一直等不到下一次挂接。
+                        target = panel;
+                        if (target == null)
+                        {
+                            pendingDesktopRemoved.AddRange(removed);
+                            return;
+                        }
+                    }
+                }
+
+                target.Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    try { target.ShowDesktopRemovedTip(removed); }
+                    catch (Exception ex) { Ui.LogError(ex, "桌面移除提示"); }
+                }));
+            }
+            catch (Exception ex) { Ui.LogError(ex, "调度桌面移除提示"); }
         }
 
         /// <summary>

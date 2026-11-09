@@ -55,7 +55,17 @@ namespace Clover
             {
                 Settings cfg = Settings.Load(root);
                 TriggerWindow tw = new TriggerWindow(root, cfg);
+                int panelFactoryCalls = 0;
+                tw.AttachPanelFactory(delegate
+                {
+                    panelFactoryCalls++;
+                    return null;
+                });
                 ContextMenu cm = BuildMenu(tw);
+
+                Check(panelFactoryCalls == 0,
+                    "★构建四叶草按钮和右键菜单不会提前创建主面板",
+                    "工厂调用 " + panelFactoryCalls + " 次");
 
                 if (cm == null)
                 {
@@ -72,6 +82,13 @@ namespace Clover
                     TestOldItemsRemoved(cm);
                     TestStateBindings(cm);
                 }
+
+                tw.TogglePanel();
+                tw.Dispatcher.Invoke(new Action(delegate { }),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Check(panelFactoryCalls == 1,
+                    "★第一次打开面板时才调用主面板工厂",
+                    "工厂调用 " + panelFactoryCalls + " 次");
             }
             catch (Exception ex)
             {
