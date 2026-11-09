@@ -241,20 +241,8 @@ namespace Clover
             Grid.SetRow(sep, 1);
             body.Children.Add(sep);
 
-            // taskGrid（任务栏列表）在横向布局下不再需要：
-            // 它是侧栏下半部分的内容，顶部条放不下。保留字段但移出可视树，
-            // 避免 RefreshTasks 里一堆 null 检查。
-            // taskGrid（任务栏列表）在顶部横条布局下不再显示：
-            // 它是原侧栏下半部分的内容，横条放不下。
-            //
-            // 但仍要建出 taskStack 并挂在 taskGrid 里 ——
-            // RefreshTasks 会遍历 taskStack.Children 更新运行中窗口列表，
-            // 字段为 null 时它会提前 return（不崩，但也不工作）。
-            // 保留初始化是为了：以后想把这功能挪到别处时，数据层还在。
-            taskGrid = new Grid();
-            taskGrid.Visibility = Visibility.Collapsed;
-            taskStack = new StackPanel();
-            taskGrid.Children.Add(taskStack);
+            // 原侧栏任务列表在顶部横条布局中没有入口。不要为不可见功能创建
+            // 控件树；taskStack 保持 null，旧能力即使被误调用也会立即返回。
 
             // 磁贴区滚动容器（存成字段，记住滚动位置要用）
             contentScroll = new ScrollViewer();
@@ -447,9 +435,10 @@ namespace Clover
             {
                 try
                 {
-                    if (suppressScrollRecord) return;
-                    if (e.VerticalChange == 0 && e.ExtentHeightChange == 0) return;
-                    scrollOffsets[current] = contentScroll.VerticalOffset;
+                    if (!suppressScrollRecord &&
+                        (e.VerticalChange != 0 || e.ExtentHeightChange != 0))
+                        scrollOffsets[current] = contentScroll.VerticalOffset;
+                    ScheduleViewportIconRefresh();
                 }
                 catch { }
             };
@@ -785,9 +774,6 @@ namespace Clover
                 // 收起时把分类条整体藏起来（保留容器，避免重建）
                 if (navScroll != null) navScroll.Visibility =
                     navCollapsed ? Visibility.Collapsed : Visibility.Visible;
-                if (taskGrid != null) taskGrid.Visibility =
-                    navCollapsed ? Visibility.Collapsed : Visibility.Visible;
-
                 // 切换箭头方向：横条用左右箭头语义（收起 = 往右折）
                 if (navToggle != null)
                 {
@@ -827,7 +813,6 @@ namespace Clover
 
                 // 顶部横条布局下没有"列宽"可调，收起 = 隐藏整条胶囊
                 if (navScroll != null) navScroll.Visibility = Visibility.Collapsed;
-                if (taskGrid != null) taskGrid.Visibility = Visibility.Collapsed;
                 if (navToggle != null) navToggle.Content = MakeGlyph("\uE76C");
 
                 Ui.Log("分类栏按上次设置收起");

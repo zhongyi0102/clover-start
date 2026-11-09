@@ -47,6 +47,7 @@ namespace Clover
                 TestShellPath(root);
                 TestCacheInvalidation(root);
                 TestAsyncLoader();
+                TestBoundedLru();
             }
             finally
             {
@@ -354,6 +355,41 @@ namespace Clover
             {
                 done.Close();
             }
+            Console.WriteLine();
+        }
+
+        // ---------- 9. 有界 LRU ----------
+        static void TestBoundedLru()
+        {
+            Console.WriteLine("--- 9. 有界 LRU ---");
+
+            BoundedLruCache<string, string> cache =
+                new BoundedLruCache<string, string>(3, StringComparer.OrdinalIgnoreCase);
+            cache.Set("a", "A");
+            cache.Set("b", "B");
+            cache.Set("c", "C");
+
+            string value;
+            Check(cache.TryGetValue("a", out value) && value == "A",
+                "命中会返回缓存值");
+
+            // a 刚被访问，加入 d 后应淘汰最久没用的 b。
+            cache.Set("d", "D");
+            Check(cache.Count == 3, "★LRU 数量不会超过容量", Convert.ToString(cache.Count));
+            Check(!cache.TryGetValue("b", out value), "★淘汰最久未使用项");
+            Check(cache.TryGetValue("a", out value), "最近访问项被保留");
+
+            // null 也是有效缓存值（图标层用它表示“确认无图标”）。
+            BoundedLruCache<string, ImageSource> nullable =
+                new BoundedLruCache<string, ImageSource>(2, StringComparer.OrdinalIgnoreCase);
+            nullable.Set("missing", null);
+            ImageSource image;
+            Check(nullable.TryGetValue("MISSING", out image) && image == null,
+                "★null 值与未命中可区分且比较器生效");
+
+            Check(AppIcons.MemoryCacheCapacity <= 128 && IconCache.MemoryCacheCapacity <= 128,
+                "★两层图标内存缓存均有上限",
+                AppIcons.MemoryCacheCapacity + " / " + IconCache.MemoryCacheCapacity);
             Console.WriteLine();
         }
 

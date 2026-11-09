@@ -81,8 +81,11 @@ namespace Clover
         const int MaxCacheFiles = 800;
         const int MaxAgeDays = 90;
 
+        internal const int MemoryCacheCapacity = 96;
         static readonly object gate = new object();
-        static readonly Dictionary<string, ImageSource> memory = new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
+        static readonly BoundedLruCache<string, ImageSource> memory =
+            new BoundedLruCache<string, ImageSource>(MemoryCacheCapacity,
+                StringComparer.OrdinalIgnoreCase);
         static string cacheDir;
         static bool cleaned;
 
@@ -91,8 +94,17 @@ namespace Clover
         {
             try
             {
-                cacheDir = Path.Combine(baseDir, "config", "iconcache");
-                Directory.CreateDirectory(cacheDir);
+                string next = Path.Combine(baseDir, "config", "iconcache");
+                Directory.CreateDirectory(next);
+                lock (gate)
+                {
+                    if (!string.Equals(cacheDir, next, StringComparison.OrdinalIgnoreCase))
+                    {
+                        memory.Clear();
+                        cleaned = false;
+                    }
+                    cacheDir = next;
+                }
             }
             catch (Exception ex)
             {
@@ -124,10 +136,10 @@ namespace Clover
 
             lock (gate)
             {
-                memory[key] = result;
+                memory.Set(key, result);
                 // 同一路径的旧版本 key 顺手清掉，避免内存里堆积
                 List<string> stale = null;
-                foreach (string k in memory.Keys)
+                foreach (string k in memory.KeysSnapshot())
                 {
                     if (k == key) continue;
                     if (k.StartsWith(PathKeyPrefix(path), StringComparison.OrdinalIgnoreCase))
@@ -139,6 +151,11 @@ namespace Clover
                 if (stale != null) foreach (string k in stale) memory.Remove(k);
             }
             return result;
+        }
+
+        internal static int CachedCountForTest
+        {
+            get { lock (gate) return memory.Count; }
         }
 
         /// <summary>

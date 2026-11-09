@@ -53,6 +53,29 @@ namespace Clover
         /// <summary>磁贴 → 应用下标。拖动/选中用它反查，不再用 Children.IndexOf。</summary>
         readonly Dictionary<Border, int> tileAppIndex = new Dictionary<Border, int>();
 
+        sealed class TileIconState
+        {
+            public AppItem App;
+            public Grid Box;
+            public FrameworkElement Visual;
+            public TransformGroup Transform;
+            public int Generation;
+            public bool WantsImage;
+            public bool RequestPending;
+            public bool Unavailable;
+        }
+
+        /// <summary>
+        /// 每块磁贴的图标挂载状态。磁贴本身始终存在以保持键盘/拖拽索引稳定，
+        /// 真实 Image 只在视口前后一屏内挂载，远处恢复首字占位以释放位图引用。
+        /// </summary>
+        readonly Dictionary<Grid, TileIconState> tileIconStates =
+            new Dictionary<Grid, TileIconState>();
+        readonly Dictionary<Border, TileIconState> tileIconStatesByTile =
+            new Dictionary<Border, TileIconState>();
+
+        bool viewportIconRefreshScheduled;
+
         /// <summary>每批创建的磁贴数；一批控制在一帧内，批次之间允许输入与绘制插队。</summary>
         const int TileRenderBatchSize = 14;
 
@@ -1247,7 +1270,7 @@ namespace Clover
         /// <summary>
         /// 就地刷新所有已画磁贴的小圆点。
         ///
-        /// 由任务栏刷新定时器（1.5 秒）调用。两件事会需要它：
+        /// 由运行状态定时器（1.5 秒）调用。两件事会需要它：
         ///   1. 后台预热完成后，缓存从"没热"变成"热"，原先没画上的点要补上
         ///   2. 面板开着期间应用启动了/退出了
         /// 只查表 + 增删一个小 Border，不触发布局、不重建磁贴。
@@ -1978,6 +2001,8 @@ namespace Clover
             // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
             // 否则 RefreshRunningDots 会去改已经不存在的控件
             tileIconBoxes.Clear();
+            tileIconStates.Clear();
+            tileIconStatesByTile.Clear();
             // 映射表与 Children 同步清空：Children 是渲染容器，映射表才是索引真相
             renderedTiles.Clear();
             tileAppIndex.Clear();
@@ -2284,6 +2309,12 @@ namespace Clover
             // 只把已经存在对应 Border 的条目暴露给键盘、拖动与测试路径，
             // 因而分批期间也始终维持 tiles == apps 的不变式。
             renderedApps.Add(a);
+            Grid box;
+            TileIconState state;
+            if (a != null && tileIconBoxes.TryGetValue(a.Path, out box) &&
+                box != null && tileIconStates.TryGetValue(box, out state))
+                tileIconStatesByTile[tile] = state;
+            ScheduleViewportIconRefresh();
         }
 
         /// <summary>
@@ -2866,6 +2897,35 @@ namespace Clover
             catch { return false; }
         }
 
+        internal int TestMountedTileIconCount()
+        {
+            try
+            {
+                int count = 0;
+                foreach (TileIconState state in tileIconStates.Values)
+                    if (state != null && state.Visual is Image) count++;
+                return count;
+            }
+            catch { return -1; }
+        }
+
+        internal int TestWantedTileIconCount()
+        {
+            try
+            {
+                int count = 0;
+                foreach (TileIconState state in tileIconStates.Values)
+                    if (state != null && state.WantsImage) count++;
+                return count;
+            }
+            catch { return -1; }
+        }
+
+        internal void TestRefreshViewportTileIcons()
+        {
+            RefreshViewportTileIcons();
+        }
+
         /// <summary>测试用：设置/取消低价值标记。</summary>
         internal void TestSetLowValue(AppItem a, bool low)
         {
@@ -3228,18 +3288,10 @@ namespace Clover
             iconTrans.Children.Add(iconScale);
             iconTrans.Children.Add(iconLift);
 
-            FrameworkElement iconVisual;
-
-            ImageSource icon;
-            bool iconKnown = AppIcons.TryGetCached(a.Path, out icon);
-            if (icon != null)
-            {
-                iconVisual = MakeTileIconImage(icon);
-            }
-            else
-            {
-                iconVisual = MakeTileIconPlaceholder(a);
-            }
+            // 所有磁贴先用轻量首字占位。即使进程缓存已经有图，也只在磁贴
+            // 进入视口附近后才把 ImageSource 挂到可视树，避免缓存淘汰后仍被
+            // 上百个离屏 Image 控件强引用。
+            FrameworkElement iconVisual = MakeTileIconPlaceholder(a);
 
             iconVisual.RenderTransformOrigin = new Point(0.5, 0.5);
             iconVisual.RenderTransform = iconTrans;
@@ -3256,11 +3308,14 @@ namespace Clover
 
             // 记下容器，供 RefreshRunningDots 就地增删小圆点
             tileIconBoxes[a.Path] = iconBox;
-
-            // 首帧只放首字占位；磁盘/Shell 图标在单工作线程读取后就地替换。
-            // 已缓存（包括“确认无图标”的 null）时不再排后台任务。
-            if (!iconKnown)
-                QueueTileIcon(a.Path, iconBox, iconVisual, iconTrans, generation);
+            tileIconStates[iconBox] = new TileIconState
+            {
+                App = a,
+                Box = iconBox,
+                Visual = iconVisual,
+                Transform = iconTrans,
+                Generation = generation
+            };
 
             // 建磁贴时只读缓存（IsRunningCached 不解析 lnk）：
             // 首次解析 112 个快捷方式要 239 ms，那代价必须留在后台预热里。
@@ -3442,12 +3497,17 @@ namespace Clover
             return ph;
         }
 
-        void QueueTileIcon(string path, Grid expectedBox, FrameworkElement placeholder,
-            TransformGroup iconTransform, int generation)
+        void QueueTileIcon(TileIconState state)
         {
+            if (state == null || state.App == null || state.RequestPending) return;
+            state.RequestPending = true;
+            string path = state.App.Path;
+            int generation = state.Generation;
+            FrameworkElement expectedVisual = state.Visual;
+
             AppIcons.GetAsync(path, delegate(ImageSource loaded)
             {
-                if (loaded == null || panelClosed || generation != tileRenderGeneration) return;
+                if (panelClosed || generation != tileRenderGeneration) return;
                 try
                 {
                     Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
@@ -3456,24 +3516,117 @@ namespace Clover
                             try
                             {
                                 if (panelClosed || generation != tileRenderGeneration) return;
-                                Grid currentBox;
-                                if (!tileIconBoxes.TryGetValue(path, out currentBox)) return;
-                                if (!ReferenceEquals(currentBox, expectedBox)) return;
-                                if (!expectedBox.Children.Contains(placeholder)) return;
+                                TileIconState current;
+                                if (!tileIconStates.TryGetValue(state.Box, out current)) return;
+                                if (!ReferenceEquals(current, state)) return;
+                                state.RequestPending = false;
+                                state.Unavailable = loaded == null;
+                                if (!state.WantsImage || loaded == null) return;
+                                if (!ReferenceEquals(state.Visual, expectedVisual)) return;
+                                if (!state.Box.Children.Contains(expectedVisual)) return;
 
                                 FrameworkElement image = MakeTileIconImage(loaded);
                                 image.RenderTransformOrigin = new Point(0.5, 0.5);
-                                image.RenderTransform = iconTransform;
+                                image.RenderTransform = state.Transform;
 
-                                int index = expectedBox.Children.IndexOf(placeholder);
-                                expectedBox.Children.Remove(placeholder);
-                                expectedBox.Children.Insert(Math.Max(0, index), image);
+                                int index = state.Box.Children.IndexOf(expectedVisual);
+                                state.Box.Children.Remove(expectedVisual);
+                                state.Box.Children.Insert(Math.Max(0, index), image);
+                                state.Visual = image;
                             }
                             catch { }
                         }));
                 }
                 catch { }
             });
+        }
+
+        /// <summary>合并布局/滚动造成的密集请求，每个 Dispatcher 周期最多刷新一次。</summary>
+        void ScheduleViewportIconRefresh()
+        {
+            if (viewportIconRefreshScheduled || panelClosed) return;
+            viewportIconRefreshScheduled = true;
+            try
+            {
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+                    new Action(delegate
+                    {
+                        viewportIconRefreshScheduled = false;
+                        RefreshViewportTileIcons();
+                    }));
+            }
+            catch { viewportIconRefreshScheduled = false; }
+        }
+
+        /// <summary>
+        /// 只保留视口前后一屏的真实图标。预取一屏能让连续滚动时图标在进入
+        /// 可见区前完成解码；超过这个范围则恢复占位，释放 Image.Source 引用。
+        /// </summary>
+        void RefreshViewportTileIcons()
+        {
+            try
+            {
+                if (panelClosed || contentScroll == null || tilePanel == null) return;
+                if (tilePanel.Visibility != Visibility.Visible) return;
+
+                double viewport = contentScroll.ViewportHeight;
+                if (viewport <= 1) viewport = contentScroll.ActualHeight;
+                if (viewport <= 1) viewport = Math.Max(TileHeightPx * 2, ActualHeight);
+
+                for (int i = 0; i < renderedTiles.Count; i++)
+                {
+                    Border tile = renderedTiles[i];
+                    if (tile == null) continue;
+
+                    TileIconState state;
+                    if (!tileIconStatesByTile.TryGetValue(tile, out state) || state == null) continue;
+
+                    bool near = false;
+                    try
+                    {
+                        Point p = tile.TranslatePoint(new Point(0, 0), contentScroll);
+                        double h = tile.ActualHeight > 0 ? tile.ActualHeight : TileHeightPx;
+                        near = IsTileNearViewport(p.Y, h, viewport);
+                    }
+                    catch
+                    {
+                        // 尚未完成首轮布局时至少预取第一批，避免骨架停在占位状态。
+                        near = i < TileRenderBatchSize;
+                    }
+
+                    SetTileIconWanted(state, near);
+                }
+            }
+            catch { }
+        }
+
+        internal static bool IsTileNearViewport(double top, double height, double viewportHeight)
+        {
+            if (viewportHeight <= 0 || double.IsNaN(top) || double.IsInfinity(top)) return false;
+            double bottom = top + Math.Max(1, height);
+            return bottom >= -viewportHeight && top <= viewportHeight * 2;
+        }
+
+        void SetTileIconWanted(TileIconState state, bool wanted)
+        {
+            if (state == null) return;
+            state.WantsImage = wanted;
+            if (wanted)
+            {
+                if (!(state.Visual is Image) && !state.Unavailable) QueueTileIcon(state);
+                return;
+            }
+
+            Image old = state.Visual as Image;
+            if (old == null || state.Box == null) return;
+            FrameworkElement placeholder = MakeTileIconPlaceholder(state.App);
+            placeholder.RenderTransformOrigin = new Point(0.5, 0.5);
+            placeholder.RenderTransform = state.Transform;
+            int index = state.Box.Children.IndexOf(old);
+            if (index < 0) return;
+            state.Box.Children.RemoveAt(index);
+            state.Box.Children.Insert(index, placeholder);
+            state.Visual = placeholder;
         }
 
         /// <summary>

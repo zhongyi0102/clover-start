@@ -32,30 +32,29 @@ namespace Clover
         /// </summary>
         const int TaskEnumMinIntervalMs = 800;
 
-        /// <summary>启动任务栏列表的定时刷新；重复调用只会复用同一个定时器。</summary>
-        void StartTaskTimer()
+        /// <summary>
+        /// 启动磁贴运行状态刷新；重复调用只复用同一个定时器。
+        /// 隐藏任务列表已经没有界面入口，绝不能在这里顺带枚举系统窗口。
+        /// </summary>
+        void StartRunningStateTimer()
         {
-            if (taskTimer != null)
+            if (runningStateTimer != null)
             {
-                if (!taskTimer.IsEnabled) taskTimer.Start();
+                if (!runningStateTimer.IsEnabled) runningStateTimer.Start();
                 return;
             }
-            taskTimer = new DispatcherTimer();
-            taskTimer.Interval = TimeSpan.FromMilliseconds(1500);
-            taskTimer.Tick += delegate
+            runningStateTimer = new DispatcherTimer();
+            runningStateTimer.Interval = TimeSpan.FromMilliseconds(1500);
+            runningStateTimer.Tick += delegate
             {
-                // 关停期间不再刷新：枚举窗口会为每个窗口取图标，
-                // 而那时窗口正在被销毁，既白费力气也可能碰到半销毁状态
                 if (ErrorLog.ShuttingDown) return;
-                try { if (IsVisible) RefreshTaskList(); }
-                catch (Exception ex) { Ui.LogError(ex, "刷新任务栏列表"); }
-                // 顺带刷新磁贴上的"运行中"小圆点：应用可能在面板开着时启动/退出，
+                // 刷新磁贴上的“运行中”小圆点：应用可能在面板开着时启动/退出，
                 // 而后台预热完成后也要把先前没画上的点补上。
                 // 只有可见时才做（不可见时没人看），且内部只查表 + 增删一个小 Border。
-                try { RefreshRunningDots(); }
+                try { if (IsVisible) RefreshRunningDots(); }
                 catch (Exception ex) { Ui.LogError(ex, "刷新运行状态圆点"); }
             };
-            taskTimer.Start();
+            runningStateTimer.Start();
         }
 
         /// <summary>

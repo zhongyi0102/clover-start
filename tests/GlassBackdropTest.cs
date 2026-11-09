@@ -44,6 +44,7 @@ namespace Clover
             TestSettingsDefaults();
             TestCaptureDoesNotThrow();
             TestWeSceneReplacesFixedBackground();
+            TestDecodeSizing();
             TestAccentSettingsPreserved();
 
             Console.WriteLine();
@@ -299,6 +300,44 @@ namespace Clover
                 return Color.FromArgb(px[3], px[2], px[1], px[0]);
             }
             return Colors.Transparent;
+        }
+
+        // ---------- 5. 背景按面板尺寸解码 ----------
+        static void TestDecodeSizing()
+        {
+            Console.WriteLine("--- 5. 背景解码尺寸 ---");
+
+            GlassBackdrop.DecodeSize portrait = GlassBackdrop.CalculateCoverDecodeSize(
+                2880, 5120, 912, 632);
+            Check(portrait.Width < 3840,
+                "★普通面板不再把竖向 WE 图固定解码到 3840 宽",
+                portrait.Width + "x" + portrait.Height);
+            Check(portrait.Width >= Math.Ceiling(912 * GlassBackdrop.DecodeOverscan),
+                "竖图 cover 的宽度足够覆盖面板 + 余量",
+                portrait.Width + "x" + portrait.Height);
+
+            GlassBackdrop.DecodeSize landscape = GlassBackdrop.CalculateCoverDecodeSize(
+                5120, 2880, 912, 632);
+            Check(landscape.Height >= Math.Ceiling(632 * GlassBackdrop.DecodeOverscan),
+                "横图 cover 的高度足够覆盖面板 + 余量",
+                landscape.Width + "x" + landscape.Height);
+            Check(landscape.Width <= GlassBackdrop.MaxDecodedLongEdge,
+                "超大源图受长边内存上限保护", Convert.ToString(landscape.Width));
+
+            GlassBackdrop.DecodeSize small = GlassBackdrop.CalculateCoverDecodeSize(
+                2880, 5120, 640, 440);
+            GlassBackdrop.DecodeSize large = GlassBackdrop.CalculateCoverDecodeSize(
+                2880, 5120, 1500, 900);
+            Check(large.Width > small.Width && large.Height > small.Height,
+                "★窗口变大时会升级解码尺寸",
+                small.Width + "x" + small.Height + " -> " + large.Width + "x" + large.Height);
+
+            GlassBackdrop.DecodeSize anchored = GlassBackdrop.CalculateAnchoredCropDecodeSize(
+                3840, 2160, 912, 632, 1920);
+            Check(anchored.Width < BackgroundStore.MaxLongEdge,
+                "★自定义背景也按实际裁片需要解码",
+                anchored.Width + "x" + anchored.Height);
+            Console.WriteLine();
         }
 
         // ---------- 5. 已删除的强调色键：作为未知字段保留 ----------

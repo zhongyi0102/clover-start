@@ -244,6 +244,13 @@ namespace Clover
                 return "ok（只完成应用磁贴）";
             });
 
+            Verify("★隐藏任务列表保持休眠", delegate
+            {
+                return panel.TestHiddenTaskListDormant()
+                    ? "ok（未创建不可见任务列表，定时器只刷新运行圆点）"
+                    : "不可见任务列表仍创建了控件树";
+            });
+
             // ---------- 3. 界面证据：控件树真的建起来了 ----------
             Verify("窗口标题正确", delegate
             {
@@ -949,6 +956,56 @@ namespace Clover
                     return "ok（" + tiles + " 块磁贴映射一致）";
                 }
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            Verify("★磁贴图标只挂载视口附近并随滚动切换", delegate
+            {
+                double oldWidth = panel.Width;
+                double oldHeight = panel.Height;
+                try
+                {
+                    // 夹具只有 64 项；默认 912x632 时内容不足两屏，“当前屏 + 下一屏”
+                    // 合理地会覆盖全部。缩到产品允许的最小尺寸，形成真实多屏内容。
+                    panel.Width = panel.MinWidth;
+                    panel.Height = panel.MinHeight;
+                    panel.TestSwitchCategory("");
+                    panel.UpdateLayout();
+                    panel.TestRefreshViewportTileIcons();
+                    WaitForDispatcher(500);
+                    int total = panel.TestTileCount();
+                    int firstWanted = panel.TestWantedTileIconCount();
+                    if (total < 30) return "测试夹具磁贴不足: " + total;
+                    if (firstWanted <= 0 || firstWanted >= total)
+                        return "首屏应只预取部分图标，wanted=" + firstWanted + " total=" + total;
+
+                    panel.ScrollToForTest(100000);
+                    panel.TestRefreshViewportTileIcons();
+                    WaitForDispatcher(500);
+                    int afterWanted = panel.TestWantedTileIconCount();
+                    int mounted = panel.TestMountedTileIconCount();
+                    if (afterWanted <= 0 || afterWanted >= total)
+                        return "滚动后仍应只保留局部图标，wanted=" + afterWanted + " total=" + total;
+                    if (mounted > afterWanted)
+                        return "离屏真实图标未卸载，mounted=" + mounted + " wanted=" + afterWanted;
+                    if (!panel.TestTileMapConsistent()) return "滚动卸载图标后磁贴映射被破坏";
+
+                    panel.ScrollToForTest(0);
+                    WaitForDispatcher(300);
+                    return "ok（总 " + total + "，首屏预取 " + firstWanted
+                        + "，滚动后挂载 " + mounted + "）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+                finally
+                {
+                    try
+                    {
+                        panel.Width = oldWidth;
+                        panel.Height = oldHeight;
+                        panel.UpdateLayout();
+                        panel.TestRefreshViewportTileIcons();
+                    }
+                    catch { }
+                }
             });
 
             // ---------- 5b. 低价值段折叠：展开/收起都不破坏映射 ----------

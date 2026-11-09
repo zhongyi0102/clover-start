@@ -39,6 +39,12 @@ namespace Clover
             return miniBar != null;
         }
 
+        /// <summary>当前版本不创建隐藏任务列表；验收测试据此防止后台枚举复活。</summary>
+        internal bool TestHiddenTaskListDormant()
+        {
+            return taskStack == null;
+        }
+
         public bool CatalogHasPath(string path)
         {
             return catalog != null && catalog.ContainsPath(path);
@@ -65,8 +71,8 @@ namespace Clover
             {
                 Ui.LogError(ex, "刷新面板");
             }
-            // 任务栏刷新定时器由 StartTaskTimer 统一管理，这里不再重复创建（旧代码每次调用都漏一个）。
-            StartTaskTimer();
+            // 清单更新后继续刷新磁贴“运行中”圆点；不可见任务列表不再枚举。
+            StartRunningStateTimer();
         }
 
         /// <summary>

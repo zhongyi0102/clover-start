@@ -65,8 +65,10 @@ namespace Clover
         /// 直接和 GetWindowRect 比较，见 OnResizeHitTest。
         /// </summary>
         double edgeMargin = 16;
-        StackPanel taskStack;
-        DispatcherTimer taskTimer;
+        // 旧任务列表代码仍保留在 PanelWindow.Tasks.cs 供以后复用，但当前界面没有入口，
+        // 因此不创建 taskStack，也不再枚举系统窗口。这个定时器只刷新磁贴运行圆点。
+        StackPanel taskStack = null;
+        DispatcherTimer runningStateTimer;
 
         // ---- 拖放检测（防止拖拽中途被自动收起）----
         //
@@ -166,8 +168,6 @@ namespace Clover
         Grid navGrid;
         /// <summary>分类胶囊的容器（折叠时隐藏它）。</summary>
         ScrollViewer navScroll;
-        /// <summary>侧栏下半部分（任务栏列表，折叠时隐藏）。</summary>
-        Grid taskGrid;
         /// <summary>侧栏收起/展开的切换按钮。</summary>
         Button navToggle;
         /// <summary>侧栏是否已收起。</summary>
@@ -373,7 +373,7 @@ namespace Clover
             {
                 panelClosed = true;
                 try { StopDeferredRendering(); } catch { }
-                try { if (taskTimer != null) taskTimer.Stop(); } catch { }
+                try { if (runningStateTimer != null) runningStateTimer.Stop(); } catch { }
             };
 
             // 校正分类：last-category.json 里可能记着已删除的标签
@@ -426,9 +426,6 @@ namespace Clover
             {
                 everActivated = true;
                 Ui.Log("Activated");
-                // 面板被激活时刷新前台窗口缓存：此刻鼠标通常还没移到任务栏列表上，
-                // 先把缓存更新好，划过时高亮就是对的（避免读到最多 1.5 秒前的旧值）。
-                RefreshActiveCache();
             };
             // ---- 背景自适应：尺寸或位置变化都要重取景 ----
             //
@@ -701,10 +698,6 @@ namespace Clover
             }
             if (searchHint != null) searchHint.Visibility = Visibility.Visible;
 
-            // 前台句柄只是一条轻量 Win32 查询，可以立即刷新；窗口/进程全量枚举
-            // 留到首帧之后，不能再挡住面板出现。
-            RefreshActiveCache();
-
             if (!IsVisible)
             {
                 // 首次显示前才定位：此时 TaskbarGeometry 已探测完毕
@@ -783,7 +776,7 @@ namespace Clover
                     if (panelClosed || !IsVisible) return;
 
                     RenderAppsIfNeeded();
-                    StartTaskTimer();
+                    StartRunningStateTimer();
                     ScheduleDeferredPanelServices();
                 }));
             }
@@ -791,7 +784,7 @@ namespace Clover
         }
 
         /// <summary>
-        /// 不影响首帧的服务：外观背景、运行进程状态和已打开窗口清单。
+        /// 不影响首帧的服务：外观背景与运行进程状态。
         /// ApplicationIdle 低于磁贴批次的 Background，输入和绘制始终可以插队。
         /// </summary>
         void ScheduleDeferredPanelServices()
@@ -816,10 +809,6 @@ namespace Clover
                         RefreshRunningDots();
                     }
                     catch (Exception ex) { Ui.LogError(ex, "首帧后刷新运行状态"); }
-
-                    // taskGrid 当前折叠在可视树外，但保留数据能力；同样延后处理。
-                    try { RefreshTaskList(); }
-                    catch (Exception ex) { Ui.LogError(ex, "首帧后刷新窗口列表"); }
                 }));
             }
             catch (Exception ex) { Ui.LogError(ex, "安排首帧后服务"); }

@@ -81,6 +81,18 @@ namespace Clover
         /// 拉伸铺满时圆角区域被拉伸的像素覆盖，看不出接缝。
         /// </summary>
         const double Inset = 14;
+
+        /// <summary>解码比最终显示尺寸多留 15%，抵消高质量缩放与轻微裁切的清晰度损失。</summary>
+        internal const double DecodeOverscan = 1.15;
+
+        /// <summary>再大的源图也不让单张解码位图长边超过 4096，避免极端竖图吃掉数十 MB。</summary>
+        internal const int MaxDecodedLongEdge = 4096;
+
+        internal struct DecodeSize
+        {
+            public int Width;
+            public int Height;
+        }
         readonly Window owner;
         /// <summary>承载背景图的容器（背景会被插到它的最底层）。</summary>
         readonly Panel host;
@@ -361,8 +373,13 @@ namespace Clover
                 // WE 壁纸静态图优先（scene 类的 preview.*）
                 if (UseWeImage)
                 {
+                    ReleaseCustomImage();
                     ImageSource we = CaptureFromWeImage(rect);
                     if (we != null) return we;
+                }
+                else
+                {
+                    ReleaseWeImage();
                 }
 
                 if (UseCustomImage)
@@ -370,6 +387,10 @@ namespace Clover
                     ImageSource custom = CaptureFromCustom(rect);
                     if (custom != null) return custom;
                     // 回退：继续往下走固定图分支（不 return）
+                }
+                else
+                {
+                    ReleaseCustomImage();
                 }
 
                 if (FollowWallpaper) return CaptureFromScreen(rect, dpi);
@@ -500,24 +521,40 @@ namespace Clover
             try
             {
                 string path = WeImagePath;
+                int panelW = Math.Max(1, rect.Right - rect.Left);
+                int panelH = Math.Max(1, rect.Bottom - rect.Top);
 
-                // 路径变了就重读（换壁纸 / 首次加载）
-                if (weImage == null
-                    || !string.Equals(weImagePath, path, StringComparison.OrdinalIgnoreCase))
+                bool pathChanged = !string.Equals(weImagePath, path,
+                    StringComparison.OrdinalIgnoreCase);
+                if (pathChanged)
                 {
-                    weImage = null;
+                    ReleaseWeImage();
                     weImagePath = path;
-
                     if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
 
-                    BitmapImage bi = new BitmapImage();
-                    bi.BeginInit();
-                    bi.CacheOption = BitmapCacheOption.OnLoad;
-                    bi.UriSource = new Uri(path, UriKind.Absolute);
-                    bi.DecodePixelWidth = 3840;   // 限制解码尺寸
-                    bi.EndInit();
-                    bi.Freeze();
+                    if (!TryGetImageSize(path, out weSourceWidth, out weSourceHeight))
+                        return null;
+                }
+
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+                if (weSourceWidth <= 0 || weSourceHeight <= 0)
+                {
+                    if (!TryGetImageSize(path, out weSourceWidth, out weSourceHeight))
+                        return null;
+                }
+
+                DecodeSize need = CalculateCoverDecodeSize(
+                    weSourceWidth, weSourceHeight, panelW, panelH);
+
+                // 窗口变大时升级解码尺寸；缩小时保留现有版本，避免拖动尺寸来回抖动。
+                if (weImage == null || weDecodedWidth < need.Width || weDecodedHeight < need.Height)
+                {
+                    BitmapImage bi = LoadBitmap(path, need.Width);
+                    if (bi == null) return null;
+
                     weImage = bi;
+                    weDecodedWidth = need.Width;
+                    weDecodedHeight = need.Height;
                 }
 
                 if (weImage == null) return null;
@@ -533,8 +570,6 @@ namespace Clover
                 //
                 // 主体位置：实测这张 WE 贴图的人物在纵向 13%~89%，
                 // 中心约 51%。裁切时以这个点为锚，避免把头或脚裁掉。
-                double panelW = Math.Max(1, rect.Right - rect.Left);
-                double panelH = Math.Max(1, rect.Bottom - rect.Top);
                 double panelRatio = panelW / panelH;
 
                 double srcW = cached.PixelWidth;
@@ -584,26 +619,62 @@ namespace Clover
         /// <summary>已加载的 WE 静态图。</summary>
         BitmapImage weImage;
         string weImagePath = "";
+        int weSourceWidth;
+        int weSourceHeight;
+        int weDecodedWidth;
+        int weDecodedHeight;
 
         /// <summary>丢弃 WE 静态图缓存（换壁纸后调）。</summary>
         public void InvalidateWeCache()
         {
+            ReleaseWeImage();
+        }
+
+        void ReleaseWeImage()
+        {
             weImage = null;
             weImagePath = "";
+            weSourceWidth = weSourceHeight = 0;
+            weDecodedWidth = weDecodedHeight = 0;
         }
 
         ImageSource CaptureFromCustom(Native.RECT rect)
         {
             try
             {
-                if (customImage == null)
-                {
-                    if (string.IsNullOrEmpty(BaseDir)) return null;
+                if (string.IsNullOrEmpty(BaseDir)) return null;
+                string path = BackgroundStore.Find(BaseDir);
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
 
-                    // 解码宽度限制到 3840：4K 图全解码要几十 MB，
-                    // 而背景最终只显示在面板那么大一块上
-                    customImage = BackgroundStore.Load(BaseDir, BackgroundStore.MaxLongEdge);
+                bool pathChanged = !string.Equals(customImagePath, path,
+                    StringComparison.OrdinalIgnoreCase);
+                if (pathChanged)
+                {
+                    ReleaseCustomImage();
+                    customImagePath = path;
+                    if (!TryGetImageSize(path, out customSourceWidth, out customSourceHeight))
+                        return null;
+                }
+
+                if (customSourceWidth <= 0 || customSourceHeight <= 0)
+                {
+                    if (!TryGetImageSize(path, out customSourceWidth, out customSourceHeight))
+                        return null;
+                }
+
+                int panelW = Math.Max(1, rect.Right - rect.Left);
+                int panelH = Math.Max(1, rect.Bottom - rect.Top);
+                double screenW = Math.Max(1, SystemParameters.PrimaryScreenWidth);
+                DecodeSize need = CalculateAnchoredCropDecodeSize(
+                    customSourceWidth, customSourceHeight, panelW, panelH, screenW);
+
+                if (customImage == null || customDecodedWidth < need.Width ||
+                    customDecodedHeight < need.Height)
+                {
+                    customImage = LoadBitmap(path, need.Width);
                     if (customImage == null) return null;
+                    customDecodedWidth = need.Width;
+                    customDecodedHeight = need.Height;
                 }
 
                 BitmapImage cached = customImage;
@@ -612,9 +683,6 @@ namespace Clover
                 double scrH = Math.Max(1, SystemParameters.PrimaryScreenHeight);
                 double relX = (rect.Left + (rect.Right - rect.Left) / 2.0) / scrW;
                 double relY = (rect.Top + (rect.Bottom - rect.Top) / 2.0) / scrH;
-
-                double panelW = Math.Max(1, rect.Right - rect.Left);
-                double panelH = Math.Max(1, rect.Bottom - rect.Top);
 
                 // 等比映射：面板占屏幕多大比例，就从图里取多大比例。
                 //
@@ -661,11 +729,116 @@ namespace Clover
 
         /// <summary>已加载的自定义背景图（只读一次）。</summary>
         BitmapImage customImage;
+        string customImagePath = "";
+        int customSourceWidth;
+        int customSourceHeight;
+        int customDecodedWidth;
+        int customDecodedHeight;
 
         /// <summary>丢弃缓存（导入/清除后调用，让下次重读）。</summary>
         public void InvalidateCustomCache()
         {
+            ReleaseCustomImage();
+        }
+
+        void ReleaseCustomImage()
+        {
             customImage = null;
+            customImagePath = "";
+            customSourceWidth = customSourceHeight = 0;
+            customDecodedWidth = customDecodedHeight = 0;
+        }
+
+        /// <summary>
+        /// 计算 cover 模式需要的解码尺寸：两个方向都覆盖面板并留 15% 余量，
+        /// 但不放大超过源图，也不突破内存长边上限。
+        /// </summary>
+        internal static DecodeSize CalculateCoverDecodeSize(
+            int sourceWidth, int sourceHeight, double panelWidth, double panelHeight)
+        {
+            if (sourceWidth <= 0 || sourceHeight <= 0 || panelWidth <= 0 || panelHeight <= 0)
+                return new DecodeSize { Width = 1, Height = 1 };
+
+            double scale = Math.Max(
+                panelWidth * DecodeOverscan / sourceWidth,
+                panelHeight * DecodeOverscan / sourceHeight);
+            return ClampDecodeSize(sourceWidth, sourceHeight, scale);
+        }
+
+        /// <summary>
+        /// 自定义/固定图按“整张图铺在屏幕后，从面板位置裁一块”的旧语义取景。
+        /// 先算全尺寸时实际会裁到多少像素，再反推让该裁片达到面板 115% 所需的
+        /// 最小解码比例；因此不改变锚点与裁剪，只减少源位图内存。
+        /// </summary>
+        internal static DecodeSize CalculateAnchoredCropDecodeSize(
+            int sourceWidth, int sourceHeight, double panelWidth, double panelHeight,
+            double screenWidth)
+        {
+            if (sourceWidth <= 0 || sourceHeight <= 0 || panelWidth <= 0 ||
+                panelHeight <= 0 || screenWidth <= 0)
+                return new DecodeSize { Width = 1, Height = 1 };
+
+            double cropW = sourceWidth * Math.Min(1.0, panelWidth / screenWidth);
+            double cropH = cropW * panelHeight / panelWidth;
+            if (cropH > sourceHeight)
+            {
+                cropH = sourceHeight;
+                cropW = cropH * panelWidth / panelHeight;
+            }
+            double scale = cropW <= 0 ? 1 : panelWidth * DecodeOverscan / cropW;
+            return ClampDecodeSize(sourceWidth, sourceHeight, scale);
+        }
+
+        static DecodeSize ClampDecodeSize(int sourceWidth, int sourceHeight, double scale)
+        {
+            scale = Math.Max(0.0001, Math.Min(1.0, scale));
+            int sourceLong = Math.Max(sourceWidth, sourceHeight);
+            if (sourceLong * scale > MaxDecodedLongEdge)
+                scale = (double)MaxDecodedLongEdge / sourceLong;
+
+            return new DecodeSize
+            {
+                Width = Math.Max(1, Math.Min(sourceWidth,
+                    (int)Math.Ceiling(sourceWidth * scale))),
+                Height = Math.Max(1, Math.Min(sourceHeight,
+                    (int)Math.Ceiling(sourceHeight * scale)))
+            };
+        }
+
+        static bool TryGetImageSize(string path, out int width, out int height)
+        {
+            width = height = 0;
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete))
+                {
+                    BitmapDecoder decoder = BitmapDecoder.Create(fs,
+                        BitmapCreateOptions.PreservePixelFormat | BitmapCreateOptions.DelayCreation,
+                        BitmapCacheOption.None);
+                    if (decoder.Frames.Count == 0) return false;
+                    width = decoder.Frames[0].PixelWidth;
+                    height = decoder.Frames[0].PixelHeight;
+                    return width > 0 && height > 0;
+                }
+            }
+            catch { return false; }
+        }
+
+        static BitmapImage LoadBitmap(string path, int decodePixelWidth)
+        {
+            try
+            {
+                BitmapImage bi = new BitmapImage();
+                bi.BeginInit();
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.UriSource = new Uri(path, UriKind.Absolute);
+                if (decodePixelWidth > 0) bi.DecodePixelWidth = decodePixelWidth;
+                bi.EndInit();
+                bi.Freeze();
+                return bi;
+            }
+            catch { return null; }
         }
 
         ImageSource CaptureFromFile(Native.RECT rect, int dpi)
@@ -1074,8 +1247,17 @@ namespace Clover
                 }
                 outerLayer = null;
                 innerLayer = null;
+                tintLayer = null;
+                brightLayer = null;
+                grainLayer = null;
+                highlightLayer = null;
+                guardLayer = null;
+                blur = null;
                 cached = null;
                 cacheKey = "";
+                backgroundImage = null;
+                ReleaseCustomImage();
+                ReleaseWeImage();
             }
             catch { }
         }

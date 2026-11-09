@@ -25,8 +25,10 @@ namespace Clover
 
         static readonly object Gate = new object();
         static readonly object LoadGate = new object();
-        static readonly Dictionary<string, ImageSource> Cache =
-            new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
+        internal const int MemoryCacheCapacity = 96;
+        static readonly BoundedLruCache<string, ImageSource> Cache =
+            new BoundedLruCache<string, ImageSource>(MemoryCacheCapacity,
+                StringComparer.OrdinalIgnoreCase);
         static readonly Dictionary<string, List<Action<ImageSource>>> Waiters =
             new Dictionary<string, List<Action<ImageSource>>>(StringComparer.OrdinalIgnoreCase);
         static readonly Queue<PendingLoad> Queue = new Queue<PendingLoad>();
@@ -46,7 +48,7 @@ namespace Clover
             // LoadGate，避免同一个缓存文件被两个线程同时提取/写入。
             ImageSource result;
             lock (LoadGate) result = IconCache.Get(path);
-            lock (Gate) Cache[path] = result;
+            lock (Gate) Cache.Set(path, result);
             return result;
         }
 
@@ -151,7 +153,7 @@ namespace Clover
                     // Clear() 之后到达的旧结果不能重新污染新缓存。
                     if (work.Generation == generation)
                     {
-                        Cache[work.Path] = result;
+                        Cache.Set(work.Path, result);
                         Waiters.TryGetValue(work.Path, out callbacks);
                         Waiters.Remove(work.Path);
                     }
@@ -176,6 +178,11 @@ namespace Clover
                 Queue.Clear();
                 Waiters.Clear();
             }
+        }
+
+        internal static int CachedCountForTest
+        {
+            get { lock (Gate) return Cache.Count; }
         }
     }
 }
