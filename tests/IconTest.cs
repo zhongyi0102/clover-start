@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -45,6 +46,7 @@ namespace Clover
                 TestMissingPath();
                 TestShellPath(root);
                 TestCacheInvalidation(root);
+                TestAsyncLoader();
             }
             finally
             {
@@ -303,6 +305,55 @@ namespace Clover
             int filesAfter = Directory.Exists(cacheDir) ? Directory.GetFiles(cacheDir, "*.png").Length : 0;
             Check(filesAfter > filesBefore, "文件时间变了 → 生成新缓存条目",
                 filesBefore + " → " + filesAfter);
+            Console.WriteLine();
+        }
+
+        // ---------- 8. 异步加载器 ----------
+        static void TestAsyncLoader()
+        {
+            Console.WriteLine("--- 8. 异步图标加载器 ---");
+
+            string exe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32", "notepad.exe");
+            if (!File.Exists(exe))
+            {
+                Console.WriteLine("      跳过：找不到 notepad.exe");
+                Console.WriteLine();
+                return;
+            }
+
+            AppIcons.Clear();
+            ImageSource loaded = null;
+            ApartmentState callbackApartment = ApartmentState.Unknown;
+            ManualResetEvent done = new ManualResetEvent(false);
+            try
+            {
+                AppIcons.GetAsync(exe, delegate(ImageSource image)
+                {
+                    loaded = image;
+                    callbackApartment = Thread.CurrentThread.GetApartmentState();
+                    done.Set();
+                });
+
+                bool completed = done.WaitOne(5000);
+                Check(completed, "★异步图标在 5 秒内回调");
+                Check(loaded != null, "异步加载能取到图标");
+                Check(callbackApartment == ApartmentState.STA,
+                    "★Shell 图标工作线程使用 STA", callbackApartment.ToString());
+                Check(loaded == null || loaded.IsFrozen,
+                    "★异步图标已冻结，可安全回到界面线程");
+
+                bool inlineHit = false;
+                AppIcons.GetAsync(exe, delegate(ImageSource image)
+                {
+                    inlineHit = ReferenceEquals(image, loaded);
+                });
+                Check(inlineHit, "缓存命中立即复用同一图标对象");
+            }
+            finally
+            {
+                done.Close();
+            }
             Console.WriteLine();
         }
 

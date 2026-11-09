@@ -50,6 +50,7 @@ namespace Clover
         List<string> hiddenCats;
         bool taskMenuOpen;
         MiniTaskbarWindow miniBar;
+        Func<MiniTaskbarWindow> miniBarFactory;
         bool showingCommon;
         Dictionary<string, List<string>> customOrders = new Dictionary<string, List<string>>();
         List<AppItem> renderedApps = new List<AppItem>();
@@ -105,6 +106,10 @@ namespace Clover
         /// <summary>旧标签迁移冲突提示（面板首次显示时弹一次）。</summary>
         string deskMigrationNotice;
         DeskMigrationNotice deskMigrationNoticeStore;
+        /// <summary>旧桌面别名是否已完成迁移检查；检查前先不把旧别名画进导航。</summary>
+        bool legacyDeskMigrationChecked;
+        /// <summary>虚拟桌面存储与安全迁移是否已完整初始化。</summary>
+        bool virtualDesksReady;
 
         // ---- 虚拟桌面（自定义标签）----
         Canvas deskCanvas;
@@ -170,6 +175,21 @@ namespace Clover
 
         /// <summary>磁贴区的滚动容器（记住滚动位置要用）。</summary>
         ScrollViewer contentScroll;
+
+        /// <summary>
+        /// 内容层宿主。应用磁贴随骨架一起创建；文件库与桌面收纳的完整控件树
+        /// 直到第一次进入对应页面才挂进来。
+        /// </summary>
+        Grid contentStack;
+
+        /// <summary>首次显示后是否已安排内容加载。</summary>
+        bool panelContentScheduled;
+        /// <summary>背景设置是否已在首帧之后应用。</summary>
+        bool deferredAppearanceApplied;
+        /// <summary>窗口已关闭；后台图标与分批渲染回调看到它后立即退出。</summary>
+        bool panelClosed;
+        /// <summary>从首次请求内容到磁贴树完整可用的耗时。</summary>
+        Stopwatch firstContentWatch;
 
         /// <summary>
         /// 各分类的滚动偏移（分类名 -> 垂直偏移）。
@@ -302,26 +322,6 @@ namespace Clover
             customTabs = new NavTabs(baseDir);
             customTabs.Load();
 
-            // 默认内置「桌面文件」启动即存在：不等用户首次点击标签才建目录。
-            try
-            {
-                virtualDesks = new VirtualDesks(baseDir);
-                virtualDesks.Load();
-                if (string.IsNullOrEmpty(virtualDesks.Root))
-                    virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
-
-                deskMigrationNoticeStore = new DeskMigrationNotice(baseDir);
-                deskMigrationNoticeStore.Load();
-
-                // 兼容历史名称（「虚拟桌面」「桌面」）：安全迁移到内置「桌面文件」。
-                // 目标非空时绝不合并，只记录冲突提示。
-                MigrateLegacyVirtualDesktop();
-
-                virtualDesks.EnsureDesk(VirtualDesktopCategory);
-                virtualDesks.Save();
-            }
-            catch (Exception ex) { Ui.LogError(ex, "初始化默认虚拟桌面"); }
-
             LoadLastCategory();
 
             // 后台预热"应用是否在运行"要用的 .lnk 目标缓存。
@@ -366,13 +366,15 @@ namespace Clover
                 Ui.LogError(ex, "构建面板界面");
             }
 
-            // ★ 启动时应用一次完整的背景设置。
-            //
-            // 为什么必须有这一步：以前只在「外观…」窗口里调 ApplyGlassSetting()，
-            // 所以重启程序后背景一直是默认状态 —— WE 壁纸/自定义图/视频都不生效，
-            // 用户必须打开一次外观窗口才"活过来"。
-            try { ApplyGlassSetting(); }
-            catch (Exception ex) { Ui.LogError(ex, "启动时应用背景设置"); }
+            // 背景应用可能涉及图片解码、Wallpaper Engine 包解析或 MediaElement。
+            // 留到窗口首帧之后再做：用户先看到完整骨架，背景随后无缝补上。
+            Loaded += delegate { SchedulePanelContentLoad(); };
+            Closed += delegate
+            {
+                panelClosed = true;
+                try { StopDeferredRendering(); } catch { }
+                try { if (taskTimer != null) taskTimer.Stop(); } catch { }
+            };
 
             // 校正分类：last-category.json 里可能记着已删除的标签
             // （办公/开发/桌面/壁纸/收藏夹/隐藏的项目…），一律回退到「常用」。
@@ -699,14 +701,9 @@ namespace Clover
             }
             if (searchHint != null) searchHint.Visibility = Visibility.Visible;
 
-            // 先刷前台窗口缓存（不受枚举限流影响），再决定要不要全量刷新任务列表。
-            // RefreshTaskList 有 800ms 最小间隔，可能整段被跳过；那样缓存的句柄就是旧的，
-            // 面板刚打开时划过任务栏会高亮错行。
+            // 前台句柄只是一条轻量 Win32 查询，可以立即刷新；窗口/进程全量枚举
+            // 留到首帧之后，不能再挡住面板出现。
             RefreshActiveCache();
-            RefreshTaskList();
-            // 只有在内容可能变化时才重建磁贴：反复开关面板不必每次销毁/重建
-            // 113 个控件（会持续推高内存，实测 30 次开关涨 100+ MB）。
-            RenderAppsIfNeeded();
 
             if (!IsVisible)
             {
@@ -754,6 +751,10 @@ namespace Clover
 
             if (searchBox != null) searchBox.Focus();
 
+            // Show/Activate 已经完成，此时再排内容。Dispatcher 的 Render 优先级高于
+            // Background，所以窗口骨架会先获得一次真实绘制机会。
+            SchedulePanelContentLoad();
+
             // 毛玻璃背景：在**动画结束后**再截屏。
             //
             // 为什么不能立即做：此刻面板正从透明淡入 + 从下方上移，
@@ -763,6 +764,109 @@ namespace Clover
 
             // 面板已显示：立即按当前环境恢复/保持暂停；后续变化由自适应定时器接管。
             RefreshVideoPolicy();
+        }
+
+        /// <summary>
+        /// 首次显示后加载内容；重复打开只在签名变化时重建。
+        /// </summary>
+        void SchedulePanelContentLoad()
+        {
+            try
+            {
+                if (panelClosed || panelContentScheduled) return;
+                panelContentScheduled = true;
+                if (firstContentWatch == null) firstContentWatch = Stopwatch.StartNew();
+
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+                {
+                    panelContentScheduled = false;
+                    if (panelClosed || !IsVisible) return;
+
+                    RenderAppsIfNeeded();
+                    StartTaskTimer();
+                    ScheduleDeferredPanelServices();
+                }));
+            }
+            catch (Exception ex) { Ui.LogError(ex, "安排主面板内容加载"); }
+        }
+
+        /// <summary>
+        /// 不影响首帧的服务：外观背景、运行进程状态和已打开窗口清单。
+        /// ApplicationIdle 低于磁贴批次的 Background，输入和绘制始终可以插队。
+        /// </summary>
+        void ScheduleDeferredPanelServices()
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
+                {
+                    if (panelClosed || !IsVisible) return;
+
+                    if (!deferredAppearanceApplied)
+                    {
+                        deferredAppearanceApplied = true;
+                        try { ApplyGlassSetting(); }
+                        catch (Exception ex) { Ui.LogError(ex, "首帧后应用背景设置"); }
+                    }
+
+                    // MainModule 枚举实测约 50~75ms；现在不会再发生在 Show() 之前。
+                    try
+                    {
+                        RunningApps.Refresh();
+                        RefreshRunningDots();
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "首帧后刷新运行状态"); }
+
+                    // taskGrid 当前折叠在可视树外，但保留数据能力；同样延后处理。
+                    try { RefreshTaskList(); }
+                    catch (Exception ex) { Ui.LogError(ex, "首帧后刷新窗口列表"); }
+                }));
+            }
+            catch (Exception ex) { Ui.LogError(ex, "安排首帧后服务"); }
+        }
+
+        /// <summary>磁贴批次完成时记一条真实的首次可用耗时。</summary>
+        void MarkFirstContentReady()
+        {
+            try
+            {
+                if (firstContentWatch == null) return;
+                firstContentWatch.Stop();
+                ErrorLog.Log("主面板内容加载完成，用时 " + firstContentWatch.ElapsedMilliseconds + "ms");
+                firstContentWatch = null;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 跨页面的撤销/通知条统一挂在 toastHost。文件页面本身仍保留自己的
+        /// filesUndoHost，但桌面清理、隐藏应用和背景故障不能依赖文件页先创建。
+        /// </summary>
+        UndoBar EnsureGeneralUndoBar()
+        {
+            try
+            {
+                if (undoBarForDesktop != null) return undoBarForDesktop;
+                if (toastHost == null) return null;
+
+                undoBarForDesktop = new UndoBar(toastHost);
+                undoBarForDesktop.OnFocusBack = delegate
+                {
+                    try { if (tilePanel != null) tilePanel.Focus(); } catch { }
+                };
+                undoBarForDesktop.OnVisibilityChanged = delegate(bool on)
+                {
+                    try
+                    {
+                        if (toastHost == null) return;
+                        bool otherVisible = dropTipBar != null && dropTipBar.IsVisible;
+                        toastHost.IsHitTestVisible = on || otherVisible;
+                    }
+                    catch { }
+                };
+                return undoBarForDesktop;
+            }
+            catch { return null; }
         }
 
         /// <summary>
@@ -1328,7 +1432,12 @@ namespace Clover
                     // 提示条消失后把容器命中关回去，别挡住底下的按钮
                     dropTipBar.OnVisibilityChanged = delegate(bool on)
                     {
-                        try { if (toastHost != null) toastHost.IsHitTestVisible = on; }
+                        try
+                        {
+                            if (toastHost == null) return;
+                            bool otherVisible = undoBarForDesktop != null && undoBarForDesktop.IsVisible;
+                            toastHost.IsHitTestVisible = on || otherVisible;
+                        }
                         catch { }
                     };
                 }

@@ -54,6 +54,7 @@ namespace Clover
             try
             {
                 Settings cfg = Settings.Load(root);
+                cfg.HideTaskbar = false;   // 测试默认路径，不修改磁盘也不碰系统任务栏
                 TriggerWindow tw = new TriggerWindow(root, cfg);
                 int panelFactoryCalls = 0;
                 tw.AttachPanelFactory(delegate
@@ -66,6 +67,8 @@ namespace Clover
                 Check(panelFactoryCalls == 0,
                     "★构建四叶草按钮和右键菜单不会提前创建主面板",
                     "工厂调用 " + panelFactoryCalls + " 次");
+                Check(!tw.TestHasStartButton(),
+                    "★默认设置不创建“开始”辅助窗");
 
                 if (cm == null)
                 {

@@ -213,6 +213,16 @@ namespace Clover
                 return;
             }
 
+            Verify("★主面板构造阶段只建骨架", delegate
+            {
+                if (panel.TestTileCount() != 0)
+                    return "显示前已经创建了 " + panel.TestTileCount() + " 块磁贴";
+                if (panel.TestFilesSurfaceCreated()) return "显示前已创建文件库表面";
+                if (panel.TestDeskSurfaceCreated()) return "显示前已创建桌面收纳表面";
+                if (panel.TestHasMiniBar()) return "默认关闭时已创建迷你任务栏";
+                return "ok（磁贴/文件库/桌面收纳/迷你任务栏均未提前创建）";
+            });
+
             // WPF 的窗口在 Show 之前，可视化树不完整（子元素尚未应用到 VisualTree），
             // 所以要先真的显示出来，才能验证"界面确实画出来了"。
             // 这也是验收测试区别于单元测试的地方：它需要一个真实的窗口生命周期。
@@ -222,7 +232,16 @@ namespace Clover
                 // 让布局跑完
                 panel.Dispatcher.Invoke(new Action(delegate { }), DispatcherPriority.Loaded);
                 panel.UpdateLayout();
+                if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                    return "面板显示后分批渲染未在 5 秒内完成";
                 return panel.IsVisible ? "ok" : "Show 后 IsVisible 仍为 false";
+            });
+
+            Verify("★首屏完成后低频页面仍未创建", delegate
+            {
+                if (panel.TestFilesSurfaceCreated()) return "未进入文件库就创建了表面";
+                if (panel.TestDeskSurfaceCreated()) return "未进入桌面收纳就创建了表面";
+                return "ok（只完成应用磁贴）";
             });
 
             // ---------- 3. 界面证据：控件树真的建起来了 ----------
@@ -381,12 +400,15 @@ namespace Clover
                     panel.TestSwitchCategory("文件");
                     if (panel.TestSearchHint().IndexOf("文件来源", StringComparison.Ordinal) < 0)
                         return "文件库搜索提示错误：" + panel.TestSearchHint();
+                    if (!panel.TestFilesSurfaceCreated()) return "首次进入后仍未创建文件库表面";
+                    if (panel.TestDeskSurfaceCreated()) return "进入文件库却提前创建了桌面收纳表面";
                     if (panel.TestFooterHint().IndexOf("文件库", StringComparison.Ordinal) < 0)
                         return "文件库底部提示错误：" + panel.TestFooterHint();
 
                     panel.TestSwitchCategory("桌面文件");
                     if (panel.TestSearchHint().IndexOf("桌面收纳", StringComparison.Ordinal) < 0)
                         return "桌面收纳搜索提示错误：" + panel.TestSearchHint();
+                    if (!panel.TestDeskSurfaceCreated()) return "首次进入后仍未创建桌面收纳表面";
                     if (panel.TestFooterHint().IndexOf("真实目录", StringComparison.Ordinal) < 0)
                         return "桌面收纳底部提示错误：" + panel.TestFooterHint();
 
@@ -1141,8 +1163,12 @@ namespace Clover
                 File.WriteAllText(lastCat, "{\"category\":\"常用\"}", new UTF8Encoding(false));
 
                 PanelWindow reborn = new PanelWindow(root, null, Settings.Load(root));
-                reborn.UpdateLayout();
-                // 触发一次渲染（ShowPanel 里会调 RenderAppsIfNeeded）
+                reborn.Show();
+                if (!WaitUntilDeferredRenderComplete(reborn, 5000))
+                {
+                    reborn.Close();
+                    return "分批渲染未完成";
+                }
                 string cat = reborn.CurrentCategory();
                 reborn.Close();
 
@@ -1428,6 +1454,8 @@ namespace Clover
                 string catB = "常用";
 
                 panel.SwitchCategoryForTest(catA);
+                if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                    return "全部页分批渲染未完成";
                 panel.UpdateLayout();
 
                 // 滚到 120px 处
@@ -1439,8 +1467,11 @@ namespace Clover
 
                 // 切到另一个分类，再切回来
                 panel.SwitchCategoryForTest(catB);
+                WaitUntilDeferredRenderComplete(panel, 5000);
                 panel.UpdateLayout();
                 panel.SwitchCategoryForTest(catA);
+                if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                    return "切回全部页后分批渲染未完成";
                 panel.UpdateLayout();
 
                 double back = panel.CurrentScrollOffset();
@@ -1889,6 +1920,23 @@ namespace Clover
             t.Tick += delegate { t.Stop(); frame.Continue = false; };
             t.Start();
             System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+
+        /// <summary>等待生产代码报告磁贴批次已收尾，不用固定毫秒数猜机器速度。</summary>
+        static bool WaitUntilDeferredRenderComplete(PanelWindow panel, int timeoutMs)
+        {
+            try
+            {
+                int elapsed = 0;
+                while (elapsed < timeoutMs)
+                {
+                    if (panel != null && panel.TestDeferredRenderComplete()) return true;
+                    WaitForDispatcher(25);
+                    elapsed += 25;
+                }
+                return panel != null && panel.TestDeferredRenderComplete();
+            }
+            catch { return false; }
         }
 
         /// <summary>

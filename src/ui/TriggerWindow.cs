@@ -50,10 +50,6 @@ namespace Clover
             // 功能被关掉时强制视为“不隐藏”，避免配置文件里留着旧的 true 却无法取消。
             // 用 EffectiveHideTaskbar：安全模式下自动为 false。
             this.hideTaskbar = this.settings.EffectiveHideTaskbar;
-            this.startWin = new StartButtonWindow();
-            // 不再先 Show 再 Hide：默认不隐藏任务栏时，这会白建一个 HWND，
-            // 还会在开机阶段短暂出现“开始”辅助窗。真正需要时再首次 Show。
-            if (hideTaskbar) this.startWin.Show();
 
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
@@ -104,6 +100,7 @@ namespace Clover
             {
                 try { if (followTimer != null) { followTimer.Stop(); followTimer = null; } } catch { }
                 try { if (topTimer != null) { topTimer.Stop(); topTimer = null; } } catch { }
+                try { if (startWin != null) startWin.Close(); } catch { }
             };
         }
 
@@ -124,10 +121,27 @@ namespace Clover
             panelFactory = factory;
         }
 
-        /// <summary>“开始”浮动按钮（任务栏隐藏模式下与四叶草并排）。</summary>
+        /// <summary>已创建的“开始”浮动按钮；读取不会隐式构造。</summary>
         public StartButtonWindow StartButton { get { return startWin; } }
 
         public bool HideTaskbar { get { return hideTaskbar; } }
+
+        StartButtonWindow EnsureStartButton()
+        {
+            if (startWin != null) return startWin;
+
+            startWin = new StartButtonWindow();
+            OverlayGate.Register(startWin,
+                delegate { return TaskbarGeometry.StartButtonRect(); },
+                delegate { return hideTaskbar; },
+                delegate { return startWin != null && !startWin.GatePaused; });
+            return startWin;
+        }
+
+        internal bool TestHasStartButton()
+        {
+            return startWin != null;
+        }
 
         void Reposition()
         {
@@ -379,6 +393,11 @@ namespace Clover
             };
             top.Start();
             topTimer = top;
+            if (hideTaskbar)
+            {
+                StartButtonWindow start = EnsureStartButton();
+                if (start != null) start.Show();
+            }
             ApplyTaskbarVisibility(hideTaskbar);
         }
 
@@ -648,8 +667,15 @@ namespace Clover
                 settings.Save();
 
                 TaskbarVisibility.Apply(on);
-                if (on) startWin.Show();
-                else startWin.Hide();
+                if (on)
+                {
+                    StartButtonWindow start = EnsureStartButton();
+                    if (start != null) start.Show();
+                }
+                else if (startWin != null)
+                {
+                    startWin.Hide();
+                }
 
                 lastLeft = double.NaN;
                 lastTop = double.NaN;

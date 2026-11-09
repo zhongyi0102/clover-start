@@ -226,7 +226,11 @@ namespace Clover
 
             MenuItem pin = new MenuItem();
             pin.Header = "显示在任务栏";
-            pin.Click += delegate { if (miniBar != null) miniBar.Add(w.Hwnd); };
+            pin.Click += delegate
+            {
+                MiniTaskbarWindow bar = EnsureMiniBar();
+                if (bar != null) bar.Add(w.Hwnd);
+            };
             cm.Items.Add(pin);
 
             taskMenuOpen = true;

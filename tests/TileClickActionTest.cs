@@ -177,7 +177,7 @@ namespace Clover
                 return;
             }
 
-            int start = src.IndexOf("Border MakeTile(AppItem a)");
+            int start = src.IndexOf("Border MakeTile(AppItem a, int generation)");
             int end = start < 0 ? -1 : src.IndexOf("void BeginDragVisual", start);
             string body = start >= 0 && end > start ? src.Substring(start, end - start) : "";
 

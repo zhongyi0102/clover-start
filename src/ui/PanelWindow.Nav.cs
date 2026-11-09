@@ -53,6 +53,26 @@ namespace Clover
         /// <summary>磁贴 → 应用下标。拖动/选中用它反查，不再用 Children.IndexOf。</summary>
         readonly Dictionary<Border, int> tileAppIndex = new Dictionary<Border, int>();
 
+        /// <summary>每批创建的磁贴数；一批控制在一帧内，批次之间允许输入与绘制插队。</summary>
+        const int TileRenderBatchSize = 14;
+
+        /// <summary>每次重渲染递增。旧批次和旧图标回调看到不同代次就立即退出。</summary>
+        int tileRenderGeneration;
+
+        /// <summary>当前代次是否仍在分批创建磁贴。</summary>
+        bool tileRenderPending;
+
+        /// <summary>本代次最终要渲染的应用快照；renderedApps 只放已经创建好的磁贴。</summary>
+        List<AppItem> pendingRenderApps;
+
+        /// <summary>正常段结束下标；低价值节标题必须恰好插在这里。</summary>
+        int pendingNormalCount;
+
+        int pendingLowCount;
+        bool pendingCollapseLow;
+        string pendingQuery = "";
+        bool pendingSearching;
+
         /// <summary>
         /// 悬停时图标放大的比例（纯视觉，不改布局）。
         ///
@@ -319,6 +339,10 @@ namespace Clover
                 foreach (NavTabs.Tab t in customTabs.Items)
                 {
                     if (t == null || string.IsNullOrEmpty(t.Name)) continue;
+                    // 旧版本的「桌面 / 虚拟桌面」会在首次进入桌面收纳时安全迁移。
+                    // 检查完成前先隐藏别名，避免导航同时出现“桌面”和“桌面收纳”；
+                    // 若检测到两边都有文件，迁移会保留旧项并在检查后重新显示。
+                    if (!legacyDeskMigrationChecked && IsLegacyDesktopName(t.Name)) continue;
                     if (cats.Contains(t.Name)) continue;
                     cats.Add(t.Name);
                 }
@@ -648,6 +672,28 @@ namespace Clover
                         && Directory.Exists(oldDir)
                         && Directory.GetFileSystemEntries(oldDir).Length > 0;
 
+                    // 上一次迁移可能已把文件和坐标接管到新名称，但在清理旧标签前
+                    // 异常退出，留下“目标有内容 + 旧目录为空”的半收尾状态。
+                    // 这时不能重新创建旧桌面再尝试改名；只清理确认无内容的旧壳。
+                    if (targetHasContent && !oldHasContent)
+                    {
+                        try
+                        {
+                            if (asDesk) virtualDesks.ForgetDesk(legacy);
+                            if (!string.IsNullOrEmpty(oldDir) && Directory.Exists(oldDir)
+                                && Directory.GetFileSystemEntries(oldDir).Length == 0)
+                                Directory.Delete(oldDir, false);
+
+                            RemoveLegacyNavRecord(legacy);
+                            Ui.Log("已清理迁移完成后残留的旧标签「" + legacy + "」");
+                        }
+                        catch (Exception ex)
+                        {
+                            Ui.LogError(ex, "清理旧桌面残留");
+                        }
+                        continue;
+                    }
+
                     // 目标已有内容 → 绝不合并。保留旧目录与旧标签，并留下提示。
                     if (targetHasContent && oldHasContent)
                     {
@@ -706,23 +752,28 @@ namespace Clover
                     }
 
                     // 只有目标确认存在、源确认消失后，才移除旧标签记录。
+                    bool sourceGone = string.IsNullOrEmpty(oldDir) || !Directory.Exists(oldDir);
+                    if (!sourceGone)
+                    {
+                        try
+                        {
+                            if (Directory.GetFileSystemEntries(oldDir).Length == 0)
+                            {
+                                Directory.Delete(oldDir, false);
+                                sourceGone = !Directory.Exists(oldDir);
+                            }
+                        }
+                        catch { }
+                    }
                     bool moved = !string.IsNullOrEmpty(targetDir) && Directory.Exists(targetDir)
-                        && (string.IsNullOrEmpty(oldDir) || !Directory.Exists(oldDir));
+                        && sourceGone;
                     if (!moved)
                     {
                         Ui.Log("旧标签「" + legacy + "」迁移后核对失败：保留旧标签记录，请检查 " + targetDir);
                         continue;
                     }
 
-                    if (asCustom)
-                    {
-                        err = customTabs.Remove(legacy);
-                        if (err != null)
-                        {
-                            Ui.Log("旧标签记录迁移失败（文件已迁到桌面文件）: " + err);
-                            continue;
-                        }
-                    }
+                    RemoveLegacyNavRecord(legacy);
 
                     targetHasContent = true;
                     Ui.Log("旧标签「" + legacy + "」已迁移为内置「" + VirtualDesktopCategory + "」");
@@ -736,13 +787,70 @@ namespace Clover
         {
             try
             {
-                if (virtualDesks != null) return;
-                virtualDesks = new VirtualDesks(baseDir);
-                virtualDesks.Load();
+                if (virtualDesksReady) return;
+                if (virtualDesks == null)
+                {
+                    virtualDesks = new VirtualDesks(baseDir);
+                    virtualDesks.Load();
+                }
                 if (string.IsNullOrEmpty(virtualDesks.Root))
                     virtualDesks.Root = VirtualDesks.DefaultRoot(baseDir);
+
+                deskMigrationNoticeStore = new DeskMigrationNotice(baseDir);
+                deskMigrationNoticeStore.Load();
+
+                // 这些步骤过去在 PanelWindow 构造函数里执行，会在用户从未使用
+                // 桌面收纳时也访问磁盘。现在统一随 VirtualDesks 首次需求执行。
+                MigrateLegacyVirtualDesktop();
+                legacyDeskMigrationChecked = true;
+                virtualDesks.EnsureDesk(VirtualDesktopCategory);
+                virtualDesks.Save();
+
+                // 上次停在旧别名，而别名已成功迁移时，当前页也跟着切到新名称。
+                if (IsLegacyDesktopName(current)
+                    && (customTabs == null || customTabs.FindIndex(current) < 0))
+                {
+                    current = VirtualDesktopCategory;
+                    SaveLastCategory();
+                }
+
+                virtualDesksReady = true;
+                if (navStack != null) RebuildNav();
             }
             catch (Exception ex) { Ui.LogError(ex, "初始化虚拟桌面存储"); }
+        }
+
+        static bool IsLegacyDesktopName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            foreach (string legacy in LegacyDesktopNames)
+                if (string.Equals(name, legacy, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// 清理 nav-tabs.json 里的旧别名。通常直接改当前 customTabs；若测试或
+        /// 其他临时界面正在使用未保存的标签快照，再从磁盘加载一份做幂等清理。
+        /// </summary>
+        void RemoveLegacyNavRecord(string legacy)
+        {
+            try
+            {
+                if (customTabs != null && customTabs.FindIndex(legacy) >= 0)
+                {
+                    string err = customTabs.Remove(legacy);
+                    if (err == null) return;
+                    Ui.Log("清理旧标签「" + legacy + "」失败: " + err);
+                }
+
+                NavTabs persisted = new NavTabs(baseDir);
+                persisted.Load();
+                if (persisted.FindIndex(legacy) < 0) return;
+                string persistedError = persisted.Remove(legacy);
+                if (persistedError != null)
+                    Ui.Log("清理磁盘旧标签「" + legacy + "」失败: " + persistedError);
+            }
+            catch (Exception ex) { Ui.LogError(ex, "清理旧桌面标签记录"); }
         }
 
         // ========== 存放目录（设置窗口用）==========
@@ -1203,6 +1311,40 @@ namespace Clover
             {
                 Ui.LogError(ex, "渲染应用磁贴");
             }
+        }
+
+        /// <summary>
+        /// 取消旧批次与其图标回调。DispatcherOperation 不需要逐个保存：代次守卫
+        /// 会让已排队回调成为 O(1) 空操作。
+        /// </summary>
+        void StopDeferredRendering()
+        {
+            unchecked { tileRenderGeneration++; }
+            tileRenderPending = false;
+            pendingRenderApps = null;
+        }
+
+        /// <summary>骨架阶段的静态加载提示；不使用 shimmer/bounce，避免额外动画与分心。</summary>
+        void ShowTileLoadingState(string text)
+        {
+            if (tilePanel == null) return;
+            tilePanel.Children.Clear();
+
+            StackPanel loading = new StackPanel();
+            loading.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl + Ui.S.Sm, 0, 0);
+            loading.HorizontalAlignment = HorizontalAlignment.Left;
+
+            TextBlock glyph = Ui.T("\uE895", 18, Ui.Sub);
+            glyph.FontFamily = Ui.Mdl;
+            glyph.Opacity = 0.55;
+            loading.Children.Add(glyph);
+
+            TextBlock label = Ui.T(text ?? "正在准备内容…", 12, Ui.Sub);
+            label.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+            AutomationProperties.SetName(label, text ?? "正在准备内容");
+            loading.Children.Add(label);
+
+            tilePanel.Children.Add(loading);
         }
 
         /// <summary>
@@ -1717,6 +1859,8 @@ namespace Clover
         {
             try
             {
+                StopDeferredRendering();
+                EnsureDeskSurface();
                 ShowContentLayer(ContentLayer.Desks);
                 if (searchResults != null) searchResults.Clear();
 
@@ -1724,6 +1868,7 @@ namespace Clover
 
                 // 首次：建存储与视图（复用统一初始化）
                 EnsureVirtualDesks();
+                name = current;
 
                 if (deskView == null)
                 {
@@ -1761,6 +1906,7 @@ namespace Clover
                     }
                     catch { }
                 }
+                MarkFirstContentReady();
             }
             catch (Exception ex) { Ui.LogError(ex, "渲染虚拟桌面"); }
         }
@@ -1769,6 +1915,8 @@ namespace Clover
         {
             try
             {
+                StopDeferredRendering();
+                EnsureFilesSurface();
                 // 三者互斥：只显示文件层
                 ShowContentLayer(ContentLayer.Files);
                 if (searchResults != null) searchResults.Clear();
@@ -1791,6 +1939,7 @@ namespace Clover
                     filesView.ApplyFilter(q);
                     filesView.Refresh(false);
                 }
+                MarkFirstContentReady();
             }
             catch (Exception ex)
             {
@@ -1822,6 +1971,9 @@ namespace Clover
                 return;
             }
 
+            StopDeferredRendering();
+            int generation = tileRenderGeneration;
+
             tilePanel.Children.Clear();
             // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
             // 否则 RefreshRunningDots 会去改已经不存在的控件
@@ -1832,9 +1984,6 @@ namespace Clover
 
             string q = searchBox == null ? "" : searchBox.Text.Trim();
             showingCommon = (q.Length == 0 && current == "常用");
-            bool showingHidden = false;   // 「隐藏的项目」标签已移除
-
-
             List<AppItem> list;
 
             // ---- 系统级搜索（开始菜单 + 注册表 + 磁盘）----
@@ -1920,37 +2069,64 @@ namespace Clover
             List<AppItem> lowPart;
             SplitLowValueSegment(list, collapseLow, out normalPart, out lowPart);
 
-            renderedApps = new List<AppItem>(normalPart);
-            renderedApps.AddRange(lowPart);
-
-            // 刷新"哪些应用在运行"，供磁贴右上角的小圆点用。
-            //
-            // RunningApps.Refresh 内部有 1.5 秒节流（枚举 300+ 进程约 50-75 ms），
-            // 而建磁贴只用 IsRunningCached（只读缓存，不解析 lnk）——
-            // 首次解析 112 个快捷方式要 239 ms，那代价放在后台预热里做。
-            RunningApps.Refresh();
+            pendingRenderApps = new List<AppItem>(normalPart);
+            pendingRenderApps.AddRange(lowPart);
+            pendingNormalCount = normalPart.Count;
+            // 收起态不会把低价值项放进 lowPart，但入口仍要显示真实数量。
+            pendingLowCount = collapseLow ? (list.Count - normalPart.Count) : lowPart.Count;
+            pendingCollapseLow = collapseLow;
+            pendingQuery = q;
+            pendingSearching = searching;
+            renderedApps = new List<AppItem>();
 
             // 重渲染会丢弃旧的 Border 对象，选中状态必须一起清掉（否则 selectedTile 指向已移除的控件）
             selectedTile = null;
             selectedIndex = -1;
 
-            // 展开态才有节标题。收起态只在末尾放一行「低价值 N 项（点击展开）」。
-            //
-            // ★ 节标题与展开行只 `Children.Add`，**绝不进 renderedTiles** ——
-            //   这正是第一章修复索引映射的用途：Children 是纯渲染容器，
-            //   索引真相在 renderedTiles / tileAppIndex 里。
-            if (lowPart.Count > 0 && !collapseLow)
-                tilePanel.Children.Add(MakeLowValueSectionHeader(lowPart.Count));
+            tileRenderPending = pendingRenderApps.Count > 0;
+            if (pendingRenderApps.Count == 0)
+            {
+                CompleteTileRendering(generation, list.Count);
+                return;
+            }
 
-            int normalCount = normalPart.Count;
-            for (int i = 0; i < normalCount; i++)
-                AddTileAt(normalPart[i]);
+            // 第一批立即创建，让用户在本次 Dispatcher 回调结束时就看到真实内容；
+            // 余下批次排到 Background，窗口绘制和输入都可以插队。
+            RenderTileBatch(generation, list.Count);
+        }
 
-            for (int i = 0; i < lowPart.Count; i++)
-                AddTileAt(lowPart[i]);
+        void RenderTileBatch(int generation, int originalListCount)
+        {
+            if (panelClosed || generation != tileRenderGeneration || pendingRenderApps == null) return;
 
-            if (lowPart.Count > 0 && collapseLow)
-                tilePanel.Children.Add(MakeLowValueCollapsedRow(lowPart.Count));
+            int start = renderedApps.Count;
+            if (start == pendingNormalCount && pendingLowCount > 0 && !pendingCollapseLow)
+                tilePanel.Children.Add(MakeLowValueSectionHeader(pendingLowCount));
+
+            int end = Math.Min(pendingRenderApps.Count, start + TileRenderBatchSize);
+            // 不跨越分段点：标题必须在正常段之后、第一块低价值磁贴之前。
+            if (start < pendingNormalCount && end > pendingNormalCount) end = pendingNormalCount;
+
+            for (int i = start; i < end; i++)
+                AddTileAt(pendingRenderApps[i], generation);
+
+            if (end >= pendingRenderApps.Count)
+            {
+                CompleteTileRendering(generation, originalListCount);
+                return;
+            }
+
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                new Action(delegate { RenderTileBatch(generation, originalListCount); }));
+        }
+
+        void CompleteTileRendering(int generation, int originalListCount)
+        {
+            if (panelClosed || generation != tileRenderGeneration) return;
+            tileRenderPending = false;
+
+            if (pendingLowCount > 0 && pendingCollapseLow)
+                tilePanel.Children.Add(MakeLowValueCollapsedRow(pendingLowCount));
 
             // 空状态：只在**没有系统搜索结果**时才显示。
             //
@@ -1962,13 +2138,13 @@ namespace Clover
                 && searchResultPanel.Visibility == Visibility.Visible
                 && searchResultPanel.Children.Count > 0;
 
-            if (list.Count == 0 && !(q.Length > 0 && hasSystemResults))
+            if (originalListCount == 0 && !(pendingQuery.Length > 0 && hasSystemResults))
             {
                 string tip, sub, glyph;
-                if (q.Length > 0)
+                if (pendingQuery.Length > 0)
                 {
                     glyph = "\uE721";                                   // 放大镜
-                    tip = "没有找到「" + q + "」";
+                    tip = "没有找到「" + pendingQuery + "」";
                     sub = "换个说法试试，或者用拼音首字母（如 wx → 微信）";
                 }
                 else if (current == "常用")
@@ -2017,7 +2193,7 @@ namespace Clover
             // 搜索时计数改成"已找到多少条系统结果" ——
             // 原先显示"共 61 个应用"，但页面显示的是搜索结果，数字与内容无关。
             // SearchResultList 暴露 ShownCount；系统搜索还没出结果时显示"搜索中"。
-            if (searching)
+            if (pendingSearching)
             {
                 int n = searchResults != null ? searchResults.ShownCount : 0;
                 footerCount.Text = n > 0
@@ -2026,64 +2202,57 @@ namespace Clover
             }
             else
             {
-                if (showingHidden)
+                // ★ 两个可点入口共用一行：
+                //   · 「已隐藏 M 个」 → 打开「整理与隐藏」窗口并定位到标签二
+                //   · 「K 个低价值」 → 打开低价值清单窗口，可批量取消标记
+                int hiddenCount = catalog.HiddenItems().Count;
+                // 低价值只在「全部」页显示：「常用」页不受沉底影响，提它只会让人困惑
+                int lowCount = (current == "") ? CountLowValueVisible() : 0;
+
+                footerCount.Inlines.Clear();
+
+                Run head = new Run("共 " + visible + " 个应用");
+                head.Foreground = Ui.Sub;
+                footerCount.Inlines.Add(head);
+
+                if (hiddenCount > 0)
                 {
-                    footerCount.Text = "共 " + catalog.HiddenItems().Count + " 个隐藏项 · 右键可取消隐藏";
+                    Run sep = new Run("，");
+                    sep.Foreground = Ui.Sub;
+                    footerCount.Inlines.Add(sep);
+
+                    Hyperlink link = new Hyperlink();
+                    link.Inlines.Add(new Run("已隐藏 " + hiddenCount + " 个"));
+                    link.Foreground = Ui.Accent;
+                    link.TextDecorations = null;
+                    link.Cursor = System.Windows.Input.Cursors.Hand;
+                    link.ToolTip = "点击查看并恢复已隐藏的应用";
+                    link.Click += delegate
+                    {
+                        try { ShowHiddenItems(); }
+                        catch (Exception ex) { Ui.LogError(ex, "打开整理与隐藏窗口"); }
+                    };
+                    footerCount.Inlines.Add(link);
                 }
-                else
+
+                if (lowCount > 0)
                 {
-                    // ★ 两个可点入口共用一行：
-                    //   · 「已隐藏 M 个」 → 打开「整理与隐藏」窗口并定位到标签二
-                    //   · 「K 个低价值」 → 打开低价值清单窗口，可批量取消标记
-                    int hiddenCount = catalog.HiddenItems().Count;
-                    // 低价值只在「全部」页显示：「常用」页不受沉底影响，提它只会让人困惑
-                    int lowCount = (current == "") ? CountLowValueVisible() : 0;
+                    Run sep2 = new Run(hiddenCount > 0 ? "，" : "，其中 ");
+                    sep2.Foreground = Ui.Sub;
+                    footerCount.Inlines.Add(sep2);
 
-                    footerCount.Inlines.Clear();
-
-                    Run head = new Run("共 " + visible + " 个应用");
-                    head.Foreground = Ui.Sub;
-                    footerCount.Inlines.Add(head);
-
-                    if (hiddenCount > 0)
+                    Hyperlink lowLink = new Hyperlink();
+                    lowLink.Inlines.Add(new Run(lowCount + " 个低价值"));
+                    lowLink.Foreground = Ui.Accent;
+                    lowLink.TextDecorations = null;
+                    lowLink.Cursor = System.Windows.Input.Cursors.Hand;
+                    lowLink.ToolTip = "点击查看低价值清单，可批量取消标记";
+                    lowLink.Click += delegate
                     {
-                        Run sep = new Run("，");
-                        sep.Foreground = Ui.Sub;
-                        footerCount.Inlines.Add(sep);
-
-                        Hyperlink link = new Hyperlink();
-                        link.Inlines.Add(new Run("已隐藏 " + hiddenCount + " 个"));
-                        link.Foreground = Ui.Accent;
-                        link.TextDecorations = null;
-                        link.Cursor = System.Windows.Input.Cursors.Hand;
-                        link.ToolTip = "点击查看并恢复已隐藏的应用";
-                        link.Click += delegate
-                        {
-                            try { ShowHiddenItems(); }
-                            catch (Exception ex) { Ui.LogError(ex, "打开整理与隐藏窗口"); }
-                        };
-                        footerCount.Inlines.Add(link);
-                    }
-
-                    if (lowCount > 0)
-                    {
-                        Run sep2 = new Run(hiddenCount > 0 ? "，" : "，其中 ");
-                        sep2.Foreground = Ui.Sub;
-                        footerCount.Inlines.Add(sep2);
-
-                        Hyperlink lowLink = new Hyperlink();
-                        lowLink.Inlines.Add(new Run(lowCount + " 个低价值"));
-                        lowLink.Foreground = Ui.Accent;
-                        lowLink.TextDecorations = null;
-                        lowLink.Cursor = System.Windows.Input.Cursors.Hand;
-                        lowLink.ToolTip = "点击查看低价值清单，可批量取消标记";
-                        lowLink.Click += delegate
-                        {
-                            try { ShowLowValueList(); }
-                            catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
-                        };
-                        footerCount.Inlines.Add(lowLink);
-                    }
+                        try { ShowLowValueList(); }
+                        catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
+                    };
+                    footerCount.Inlines.Add(lowLink);
                 }
             }
 
@@ -2094,7 +2263,8 @@ namespace Clover
 
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
             RestoreScrollOffset();
-
+            pendingRenderApps = null;
+            MarkFirstContentReady();
         }
 
 
@@ -2104,13 +2274,16 @@ namespace Clover
         /// **所有磁贴都必须走这里** —— 手动 Children.Add + renderedTiles.Add
         /// 两处一旦漏一处，索引映射就会错位（这正是要消灭的那类 bug）。
         /// </summary>
-        void AddTileAt(AppItem a)
+        void AddTileAt(AppItem a, int generation)
         {
-            Border tile = MakeTile(a);
+            Border tile = MakeTile(a, generation);
             tilePanel.Children.Add(tile);
             // ★ 登记映射：tile 的下标 = 应用下标（与 Children 的位置无关）
             tileAppIndex[tile] = renderedTiles.Count;
             renderedTiles.Add(tile);
+            // 只把已经存在对应 Border 的条目暴露给键盘、拖动与测试路径，
+            // 因而分批期间也始终维持 tiles == apps 的不变式。
+            renderedApps.Add(a);
         }
 
         /// <summary>
@@ -2629,6 +2802,27 @@ namespace Clover
             catch { return -1; }
         }
 
+        /// <summary>测试用：当前分批磁贴是否已完整收尾。</summary>
+        internal bool TestDeferredRenderComplete()
+        {
+            try
+            {
+                return !tileRenderPending && pendingRenderApps == null
+                    && !string.IsNullOrEmpty(renderedSig);
+            }
+            catch { return false; }
+        }
+
+        internal bool TestFilesSurfaceCreated()
+        {
+            return filesPanel != null;
+        }
+
+        internal bool TestDeskSurfaceCreated()
+        {
+            return deskPanel != null;
+        }
+
         /// <summary>测试用：设置低价值段折叠状态并重渲染（走生产路径 SetCollapseLowValue）。</summary>
         internal void TestSetCollapseLowValue(bool collapsed)
         {
@@ -3001,7 +3195,7 @@ namespace Clover
             catch { return DisplayNameOf(a); }
         }
 
-        Border MakeTile(AppItem a)
+        Border MakeTile(AppItem a, int generation)
         {
             Border b = new Border();
             b.Width = TileWidthPx;
@@ -3036,33 +3230,15 @@ namespace Clover
 
             FrameworkElement iconVisual;
 
-            ImageSource icon = AppIcons.Get(a.Path);
+            ImageSource icon;
+            bool iconKnown = AppIcons.TryGetCached(a.Path, out icon);
             if (icon != null)
             {
-                Image img = new Image();
-                img.Source = icon;
-                img.Width = IconSizePx;
-                img.Height = IconSizePx;
-                img.HorizontalAlignment = HorizontalAlignment.Center;
-                img.VerticalAlignment = VerticalAlignment.Center;
-                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-                iconVisual = img;
+                iconVisual = MakeTileIconImage(icon);
             }
             else
             {
-                Border ph = new Border();
-                ph.Width = IconSizePx;
-                ph.Height = IconSizePx;
-                ph.CornerRadius = new CornerRadius(Ui.R.Sm);
-                ph.Background = Ui.AccentSoft;
-                ph.HorizontalAlignment = HorizontalAlignment.Center;
-                ph.VerticalAlignment = VerticalAlignment.Center;
-                string initial = string.IsNullOrEmpty(a.Name) ? "?" : a.Name.Substring(0, 1);
-                TextBlock init = Ui.T(initial, 14.5, Ui.AccentText, FontWeights.SemiBold);
-                init.HorizontalAlignment = HorizontalAlignment.Center;
-                init.VerticalAlignment = VerticalAlignment.Center;
-                ph.Child = init;
-                iconVisual = ph;
+                iconVisual = MakeTileIconPlaceholder(a);
             }
 
             iconVisual.RenderTransformOrigin = new Point(0.5, 0.5);
@@ -3080,6 +3256,11 @@ namespace Clover
 
             // 记下容器，供 RefreshRunningDots 就地增删小圆点
             tileIconBoxes[a.Path] = iconBox;
+
+            // 首帧只放首字占位；磁盘/Shell 图标在单工作线程读取后就地替换。
+            // 已缓存（包括“确认无图标”的 null）时不再排后台任务。
+            if (!iconKnown)
+                QueueTileIcon(a.Path, iconBox, iconVisual, iconTrans, generation);
 
             // 建磁贴时只读缓存（IsRunningCached 不解析 lnk）：
             // 首次解析 112 个快捷方式要 239 ms，那代价必须留在后台预热里。
@@ -3230,6 +3411,69 @@ namespace Clover
             };
             b.MouseRightButtonUp += delegate { ShowTileMenu(a, b); };
             return b;
+        }
+
+        FrameworkElement MakeTileIconImage(ImageSource icon)
+        {
+            Image img = new Image();
+            img.Source = icon;
+            img.Width = IconSizePx;
+            img.Height = IconSizePx;
+            img.HorizontalAlignment = HorizontalAlignment.Center;
+            img.VerticalAlignment = VerticalAlignment.Center;
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            return img;
+        }
+
+        FrameworkElement MakeTileIconPlaceholder(AppItem a)
+        {
+            Border ph = new Border();
+            ph.Width = IconSizePx;
+            ph.Height = IconSizePx;
+            ph.CornerRadius = new CornerRadius(Ui.R.Sm);
+            ph.Background = Ui.AccentSoft;
+            ph.HorizontalAlignment = HorizontalAlignment.Center;
+            ph.VerticalAlignment = VerticalAlignment.Center;
+            string initial = a == null || string.IsNullOrEmpty(a.Name) ? "?" : a.Name.Substring(0, 1);
+            TextBlock init = Ui.T(initial, 14.5, Ui.AccentText, FontWeights.SemiBold);
+            init.HorizontalAlignment = HorizontalAlignment.Center;
+            init.VerticalAlignment = VerticalAlignment.Center;
+            ph.Child = init;
+            return ph;
+        }
+
+        void QueueTileIcon(string path, Grid expectedBox, FrameworkElement placeholder,
+            TransformGroup iconTransform, int generation)
+        {
+            AppIcons.GetAsync(path, delegate(ImageSource loaded)
+            {
+                if (loaded == null || panelClosed || generation != tileRenderGeneration) return;
+                try
+                {
+                    Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
+                        new Action(delegate
+                        {
+                            try
+                            {
+                                if (panelClosed || generation != tileRenderGeneration) return;
+                                Grid currentBox;
+                                if (!tileIconBoxes.TryGetValue(path, out currentBox)) return;
+                                if (!ReferenceEquals(currentBox, expectedBox)) return;
+                                if (!expectedBox.Children.Contains(placeholder)) return;
+
+                                FrameworkElement image = MakeTileIconImage(loaded);
+                                image.RenderTransformOrigin = new Point(0.5, 0.5);
+                                image.RenderTransform = iconTransform;
+
+                                int index = expectedBox.Children.IndexOf(placeholder);
+                                expectedBox.Children.Remove(placeholder);
+                                expectedBox.Children.Insert(Math.Max(0, index), image);
+                            }
+                            catch { }
+                        }));
+                }
+                catch { }
+            });
         }
 
         /// <summary>
@@ -3807,16 +4051,8 @@ namespace Clover
             {
                 if (removed == null || removed.Count == 0) return;
 
-                // 提示条宿主：面板底部的 undoHost（和文件页共用样式）
-                if (undoBarForDesktop == null && filesUndoHost != null)
-                {
-                    undoBarForDesktop = new UndoBar(filesUndoHost);
-                    undoBarForDesktop.OnFocusBack = delegate
-                    {
-                        try { if (tilePanel != null) tilePanel.Focus(); } catch { }
-                    };
-                }
-                if (undoBarForDesktop == null) return;
+                UndoBar generalBar = EnsureGeneralUndoBar();
+                if (generalBar == null) return;
 
                 List<string> paths = new List<string>();
                 foreach (Dictionary<string, object> d in removed)
@@ -3864,7 +4100,7 @@ namespace Clover
                         catch (Exception ex) { Ui.LogError(ex, "保留桌面快捷方式"); }
                     };
 
-                    undoBarForDesktop.Show("已移除桌面快捷方式：" + name, undo, keep);
+                    generalBar.Show("已移除桌面快捷方式：" + name, undo, keep);
                 }
                 else
                 {
@@ -3881,7 +4117,7 @@ namespace Clover
                         catch (Exception ex) { Ui.LogError(ex, "撤销桌面移除"); }
                     };
 
-                    undoBarForDesktop.Show("已移除 " + removed.Count + " 个桌面快捷方式", undo);
+                    generalBar.Show("已移除 " + removed.Count + " 个桌面快捷方式", undo);
                 }
             }
             catch (Exception ex) { Ui.LogError(ex, "显示桌面移除提示"); }
@@ -3900,18 +4136,11 @@ namespace Clover
             {
                 if (a == null) return;
 
-                if (undoBarForDesktop == null && filesUndoHost != null)
-                {
-                    undoBarForDesktop = new UndoBar(filesUndoHost);
-                    undoBarForDesktop.OnFocusBack = delegate
-                    {
-                        try { if (tilePanel != null) tilePanel.Focus(); } catch { }
-                    };
-                }
-                if (undoBarForDesktop == null) return;
+                UndoBar generalBar = EnsureGeneralUndoBar();
+                if (generalBar == null) return;
 
                 AppItem captured = a;
-                undoBarForDesktop.Show("已隐藏：" + (a.Name ?? ""), delegate
+                generalBar.Show("已隐藏：" + (a.Name ?? ""), delegate
                 {
                     try { SetAppHidden(captured, false); }
                     catch (Exception ex) { Ui.LogError(ex, "撤销隐藏"); }
@@ -4489,8 +4718,9 @@ namespace Clover
                     {
                         try
                         {
-                            if (miniBar == null) return;
-                            foreach (TaskWindow w in captured) miniBar.Add(w.Hwnd);
+                            MiniTaskbarWindow bar = EnsureMiniBar();
+                            if (bar == null) return;
+                            foreach (TaskWindow w in captured) bar.Add(w.Hwnd);
                             Ui.Log("钉到迷你任务栏: " + a.Name + " (" + captured.Count + " 个窗口)");
                         }
                         catch (Exception ex) { Ui.LogError(ex, "钉到迷你任务栏"); }

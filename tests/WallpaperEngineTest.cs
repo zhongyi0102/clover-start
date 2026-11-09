@@ -516,8 +516,14 @@ namespace Clover
                     app.ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown;
                 }
 
-                // 构造函数会走真实的 BuildUi → ApplyGlassSetting 调用链。
+                // 背景已移到首帧后应用；测试显式显示并泵到 ApplicationIdle，
+                // 覆盖与生产相同的延迟生命周期，不能再依赖构造函数同步解码。
                 panel = new PanelWindow(root, null, s);
+                panel.Show();
+                panel.Dispatcher.Invoke(new Action(delegate { }),
+                    System.Windows.Threading.DispatcherPriority.Background);
+                panel.Dispatcher.Invoke(new Action(delegate { }),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 string actual = panel.TestVideoBackdropPath();
 
                 Check(!string.IsNullOrEmpty(actual),

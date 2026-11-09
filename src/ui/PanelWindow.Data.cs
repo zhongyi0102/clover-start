@@ -19,6 +19,26 @@ namespace Clover
             miniBar = bar;
         }
 
+        /// <summary>注册迷你任务栏工厂；默认关闭时不构造窗口和刷新定时器。</summary>
+        public void AttachMiniBarFactory(Func<MiniTaskbarWindow> factory)
+        {
+            miniBarFactory = factory;
+        }
+
+        MiniTaskbarWindow EnsureMiniBar()
+        {
+            if (miniBar != null) return miniBar;
+            if (settings == null || !settings.EffectiveMiniTaskbar) return null;
+            if (miniBarFactory == null) return null;
+            miniBar = miniBarFactory();
+            return miniBar;
+        }
+
+        internal bool TestHasMiniBar()
+        {
+            return miniBar != null;
+        }
+
         public bool CatalogHasPath(string path)
         {
             return catalog != null && catalog.ContainsPath(path);
@@ -297,20 +317,8 @@ namespace Clover
 
                 Ui.Log("WE 壁纸失效提示: " + msg + (string.IsNullOrEmpty(reason) ? "" : "（" + reason + "）"));
 
-                // 有面板 → 用轻提示条
-                if (undoBarForDesktop == null && filesUndoHost != null)
-                {
-                    undoBarForDesktop = new UndoBar(filesUndoHost);
-                    undoBarForDesktop.OnFocusBack = delegate
-                    {
-                        try { if (tilePanel != null) tilePanel.Focus(); } catch { }
-                    };
-                }
-
-                if (undoBarForDesktop != null)
-                {
-                    undoBarForDesktop.Show(msg, null);
-                }
+                UndoBar generalBar = EnsureGeneralUndoBar();
+                if (generalBar != null) generalBar.Show(msg, null);
             }
             catch (Exception ex) { Ui.LogError(ex, "提示 WE 壁纸失效"); }
         }
@@ -355,14 +363,9 @@ namespace Clover
                             Ui.Log("视频背景不可用，回退到静态图");
                             try
                             {
-                                if (undoBarForDesktop == null && filesUndoHost != null)
-                                {
-                                    undoBarForDesktop = new UndoBar(filesUndoHost);
-                                    undoBarForDesktop.OnFocusBack = delegate
-                                    { try { if (tilePanel != null) tilePanel.Focus(); } catch { } };
-                                }
-                                if (undoBarForDesktop != null)
-                                    undoBarForDesktop.Show("视频背景无法播放，已回退内置背景", null);
+                                UndoBar generalBar = EnsureGeneralUndoBar();
+                                if (generalBar != null)
+                                    generalBar.Show("视频背景无法播放，已回退内置背景", null);
                             }
                             catch { }
                             if (videoBackdrop != null) videoBackdrop.Unload();
@@ -420,9 +423,11 @@ namespace Clover
         {
             try
             {
-                if (miniBar == null) return;
-                miniBar.Enabled = settings.EffectiveMiniTaskbar;   // 安全模式下自动为 false
-                if (!miniBar.Enabled) miniBar.Clear();
+                bool enabled = settings != null && settings.EffectiveMiniTaskbar;
+                MiniTaskbarWindow bar = enabled ? EnsureMiniBar() : miniBar;
+                if (bar == null) return;
+                bar.Enabled = enabled;   // 安全模式下自动为 false
+                if (!bar.Enabled) bar.Clear();
                 OverlayGate.Refresh();
             }
             catch (Exception ex)

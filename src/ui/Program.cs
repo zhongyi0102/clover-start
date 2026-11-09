@@ -235,6 +235,21 @@ namespace Clover
                 PanelWindow panel = null;
                 watcher = new AppWatcher(baseDir, null, settings);
 
+                Func<MiniTaskbarWindow> ensureMiniBar = delegate
+                {
+                    if (miniBar != null) return miniBar;
+
+                    MiniTaskbarWindow createdBar = new MiniTaskbarWindow();
+                    createdBar.Enabled = settings.EffectiveMiniTaskbar;
+                    miniBar = createdBar;
+                    if (panel != null) panel.AttachMiniBar(createdBar);
+
+                    OverlayGate.Register(createdBar,
+                        delegate { return TaskbarGeometry.MiniBarRect(createdBar.Count); },
+                        delegate { return createdBar.Count > 0; }, null);
+                    return createdBar;
+                };
+
                 // 开机关键路径只创建四叶草按钮。完整主面板（目录合并、虚拟桌面、
                 // 背景与磁贴树）以及当前为空的迷你任务栏，都在第一次使用时再建。
                 Func<PanelWindow> ensurePanel = delegate
@@ -244,18 +259,12 @@ namespace Clover
                     Stopwatch panelWatch = Stopwatch.StartNew();
                     PanelWindow createdPanel = new PanelWindow(baseDir, trigger, settings);
 
-                    miniBar = new MiniTaskbarWindow();
-                    miniBar.Enabled = settings.EffectiveMiniTaskbar;   // 安全模式下自动为 false
-                    createdPanel.AttachMiniBar(miniBar);
+                    createdPanel.AttachMiniBarFactory(ensureMiniBar);
                     createdPanel.AttachWatcher(watcher);
 
                     panel = createdPanel;
                     watcher.AttachPanel(createdPanel);
                     trigger.AttachPanel(createdPanel);
-
-                    OverlayGate.Register(miniBar,
-                        delegate { return TaskbarGeometry.MiniBarRect(miniBar.Count); },
-                        delegate { return miniBar.Count > 0; }, null);
 
                     panelWatch.Stop();
                     ErrorLog.Log("主面板首次加载完成，用时 " + panelWatch.ElapsedMilliseconds + "ms");
@@ -270,10 +279,6 @@ namespace Clover
                 OverlayGate.Register(trigger,
                     delegate { return new Rect(trigger.Left, trigger.Top, trigger.Width, trigger.Height); },
                     delegate { return true; }, null);
-                OverlayGate.Register(trigger.StartButton,
-                    delegate { return TaskbarGeometry.StartButtonRect(); },
-                    delegate { return trigger.HideTaskbar; },
-                    delegate { return !trigger.StartButton.GatePaused; });
                 OverlayGate.Start();
 
                 app.Startup += delegate

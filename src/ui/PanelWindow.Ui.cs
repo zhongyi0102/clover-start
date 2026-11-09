@@ -280,124 +280,14 @@ namespace Clover
             searchResults.CatalogProvider = delegate { return catalog == null ? null : catalog.Apps; };
 
             // 两者放进同一个 Grid，靠 Visibility 切换
-            Grid contentStack = new Grid();
+            contentStack = new Grid();
             contentStack.Children.Add(tilePanel);
             contentStack.Children.Add(searchResultPanel);
 
-            // ---- 「文件」标签面板（与磁贴区、搜索结果三者互斥显示）----
-            //
-            // 结构：来源筛选行 + 后缀筛选行 + 提示行 + 文件列表（含表头）
-            // 全部在 StackPanel 里竖排，外面套 ScrollViewer（contentScroll 已有）。
-            filesPanel = new StackPanel();
-            filesPanel.Orientation = Orientation.Vertical;
-            filesPanel.Visibility = Visibility.Collapsed;
-
-            // 来源胶囊行（横向，可滚动）
-            ScrollViewer chipScroll = new ScrollViewer();
-            chipScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-            chipScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            chipScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            filesChipRow = new StackPanel();
-            filesChipRow.Orientation = Orientation.Horizontal;
-            chipScroll.Content = filesChipRow;
-            filesPanel.Children.Add(chipScroll);
-
-            // ---- 「把文件夹拖进来」放置提示（常驻）----
-            //
-            // 放在来源胶囊行之后：用户看到 chip 行，紧接着看到"还能加"。
-            // 复用 DropHint，样式令牌一个不改。
-            // 文案由 DropSpec 从 FileFolders.MaxFolders 派生，不在这里手写。
-            filesDropHint = new DropHint("把文件夹拖进来", DropSpec.FolderHintText());
-            filesDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            filesPanel.Children.Add(filesDropHint.Root);
-
-            // 后缀筛选行（横向，可滚动 —— 分组 + 自定义 + 刷新可能超出宽度）
-            ScrollViewer extScroll = new ScrollViewer();
-            extScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-            extScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            extScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            filesExtRow = new StackPanel();
-            filesExtRow.Orientation = Orientation.Horizontal;
-            extScroll.Content = filesExtRow;
-            filesPanel.Children.Add(extScroll);
-
-            // 提示行（错误 / 截断 / 空目录）
-            filesNotice = Ui.T("", 11, Ui.Sub);
-            filesNotice.Margin = new Thickness(2, 0, 0, Ui.S.Sm);
-            filesNotice.TextWrapping = TextWrapping.Wrap;
-            filesNotice.Visibility = Visibility.Collapsed;
-            filesPanel.Children.Add(filesNotice);
-
-            // 文件列表（纵向）
-            filesListPanel = new StackPanel();
-            filesListPanel.Orientation = Orientation.Vertical;
-            filesPanel.Children.Add(filesListPanel);
-
-            // 撤销提示条（固定在文件面板底部）
-            filesUndoHost = new StackPanel();
-            filesUndoHost.Orientation = Orientation.Vertical;
-            filesPanel.Children.Add(filesUndoHost);
-
-            contentStack.Children.Add(filesPanel);
-
-            // ---- 虚拟桌面层（自定义标签用）----
-            //
-            // 结构：Grid 三行（按钮 Auto / 提示 Auto / 图标画布 Star）。
-            // ★ 不能用纵向 StackPanel：StackPanel 不会把剩余高度分给 Canvas，
-            // 实测视口 449px 时画布永远只有 MinHeight=240px，图标拖到下半页就被裁掉。
-            deskPanel = new Grid();
-            deskPanel.Visibility = Visibility.Collapsed;
-            deskPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-            deskPanel.VerticalAlignment = VerticalAlignment.Stretch;
-            deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            deskPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
-            deskToolRow = new StackPanel();
-            deskToolRow.Orientation = Orientation.Horizontal;
-            deskToolRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            Grid.SetRow(deskToolRow, 0);
-            deskPanel.Children.Add(deskToolRow);
-
-            deskNotice = Ui.T("", 10.5, Ui.Sub);
-            deskNotice.TextWrapping = TextWrapping.Wrap;
-            deskNotice.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
-            deskNotice.Visibility = Visibility.Collapsed;
-            Grid.SetRow(deskNotice, 1);
-            deskPanel.Children.Add(deskNotice);
-
-            deskCanvas = new Canvas();
-            deskCanvas.Background = Brushes.Transparent;
-            deskCanvas.ClipToBounds = true;
-            deskCanvas.MinHeight = 240;
-            deskCanvas.HorizontalAlignment = HorizontalAlignment.Stretch;
-            deskCanvas.VerticalAlignment = VerticalAlignment.Stretch;
-            Grid.SetRow(deskCanvas, 2);
-            deskPanel.Children.Add(deskCanvas);
-
-            // ---- 空桌面提示层（常驻）----
-            //
-            // 与 deskCanvas **同一个 Grid 单元格**，叠在它上面。
-            // 为什么放这里而不是 contentStack（像 deskOverlay 那样）：
-            // contentStack 是整个内容区，「文件」页和「常用」页也会被它盖住。
-            // 放 deskPanel 第 2 行才能自然跟着桌面页显隐。
-            //
-            // ★ IsHitTestVisible 只关在 DropHint 自己（root）身上，
-            //   绝不加在 deskCanvas 或 deskPanel 上 —— 框选绑在 deskCanvas，
-            //   关掉它的命中就等于废掉框选。
-            deskDropHint = new DropHint("把文件拖到桌面收纳", "文件会进入当前收纳目录，可在资源管理器中正常访问");
-            Grid.SetRow(deskDropHint.Root, 2);
-            Panel.SetZIndex(deskDropHint.Root, 5);   // 盖在图标之上，但不吃事件
-            deskPanel.Children.Add(deskDropHint.Root);
-
-            contentStack.Children.Add(deskPanel);
-
-            deskOverlay = new Canvas();
-            deskOverlay.IsHitTestVisible = false;
-            deskOverlay.Visibility = Visibility.Collapsed;
-            deskOverlay.HorizontalAlignment = HorizontalAlignment.Stretch;
-            deskOverlay.VerticalAlignment = VerticalAlignment.Stretch;
-            contentStack.Children.Add(deskOverlay);
+            // 文件库与桌面收纳都是低频页面。它们的筛选行、画布、DropHint 和
+            // 列表控件在首次进入对应标签时由 Ensure*Surface 创建，首开面板不为
+            // 看不见的页面分配整棵 WPF 可视树。
+            ShowTileLoadingState("正在准备内容…");
 
             // ---- 拖拽插入标记（参考 GlassBoard 的 insertMarker）----
             //
@@ -566,13 +456,119 @@ namespace Clover
 
             RebuildNav();
             UpdateContextChrome();
-            RenderApps();
 
             // 恢复上次的侧栏收起状态（必须在 RebuildNav 之后：
             // 那一步会把分类项建出来，收起逻辑要作用于已存在的控件）
             ApplyNavCollapsedFromSettings();
 
-            StartTaskTimer();
+        }
+
+        /// <summary>首次进入「文件库」时才创建完整表面。</summary>
+        void EnsureFilesSurface()
+        {
+            if (filesPanel != null || contentStack == null) return;
+
+            filesPanel = new StackPanel();
+            filesPanel.Orientation = Orientation.Vertical;
+            filesPanel.Visibility = Visibility.Collapsed;
+
+            ScrollViewer chipScroll = new ScrollViewer();
+            chipScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            chipScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            chipScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesChipRow = new StackPanel();
+            filesChipRow.Orientation = Orientation.Horizontal;
+            chipScroll.Content = filesChipRow;
+            filesPanel.Children.Add(chipScroll);
+
+            filesDropHint = new DropHint("把文件夹拖进来", DropSpec.FolderHintText());
+            filesDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesPanel.Children.Add(filesDropHint.Root);
+
+            ScrollViewer extScroll = new ScrollViewer();
+            extScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            extScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+            extScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesExtRow = new StackPanel();
+            filesExtRow.Orientation = Orientation.Horizontal;
+            extScroll.Content = filesExtRow;
+            filesPanel.Children.Add(extScroll);
+
+            filesNotice = Ui.T("", 11, Ui.Sub);
+            filesNotice.Margin = new Thickness(2, 0, 0, Ui.S.Sm);
+            filesNotice.TextWrapping = TextWrapping.Wrap;
+            filesNotice.Visibility = Visibility.Collapsed;
+            filesPanel.Children.Add(filesNotice);
+
+            filesListPanel = new StackPanel();
+            filesListPanel.Orientation = Orientation.Vertical;
+            filesPanel.Children.Add(filesListPanel);
+
+            filesUndoHost = new StackPanel();
+            filesUndoHost.Orientation = Orientation.Vertical;
+            filesPanel.Children.Add(filesUndoHost);
+
+            InsertBeforeInteractionLayer(filesPanel);
+        }
+
+        /// <summary>首次进入「桌面收纳」时才创建画布与操作表面。</summary>
+        void EnsureDeskSurface()
+        {
+            if (deskPanel != null || contentStack == null) return;
+
+            deskPanel = new Grid();
+            deskPanel.Visibility = Visibility.Collapsed;
+            deskPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+            deskPanel.VerticalAlignment = VerticalAlignment.Stretch;
+            deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            deskPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            deskToolRow = new StackPanel();
+            deskToolRow.Orientation = Orientation.Horizontal;
+            deskToolRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            Grid.SetRow(deskToolRow, 0);
+            deskPanel.Children.Add(deskToolRow);
+
+            deskNotice = Ui.T("", 10.5, Ui.Sub);
+            deskNotice.TextWrapping = TextWrapping.Wrap;
+            deskNotice.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            deskNotice.Visibility = Visibility.Collapsed;
+            Grid.SetRow(deskNotice, 1);
+            deskPanel.Children.Add(deskNotice);
+
+            deskCanvas = new Canvas();
+            deskCanvas.Background = Brushes.Transparent;
+            deskCanvas.ClipToBounds = true;
+            deskCanvas.MinHeight = 240;
+            deskCanvas.HorizontalAlignment = HorizontalAlignment.Stretch;
+            deskCanvas.VerticalAlignment = VerticalAlignment.Stretch;
+            Grid.SetRow(deskCanvas, 2);
+            deskPanel.Children.Add(deskCanvas);
+
+            deskDropHint = new DropHint("把文件拖到桌面收纳", "文件会进入当前收纳目录，可在资源管理器中正常访问");
+            Grid.SetRow(deskDropHint.Root, 2);
+            Panel.SetZIndex(deskDropHint.Root, 5);
+            deskPanel.Children.Add(deskDropHint.Root);
+
+            deskOverlay = new Canvas();
+            deskOverlay.IsHitTestVisible = false;
+            deskOverlay.Visibility = Visibility.Collapsed;
+            deskOverlay.HorizontalAlignment = HorizontalAlignment.Stretch;
+            deskOverlay.VerticalAlignment = VerticalAlignment.Stretch;
+
+            InsertBeforeInteractionLayer(deskPanel);
+            InsertBeforeInteractionLayer(deskOverlay);
+        }
+
+        /// <summary>懒页面永远插在拖拽覆盖层下方。</summary>
+        void InsertBeforeInteractionLayer(UIElement element)
+        {
+            if (contentStack == null || element == null) return;
+            int index = insertCanvas == null ? contentStack.Children.Count
+                : contentStack.Children.IndexOf(insertCanvas);
+            if (index < 0) index = contentStack.Children.Count;
+            contentStack.Children.Insert(index, element);
         }
 
         /// <summary>
