@@ -226,7 +226,7 @@ namespace Clover
                 catch (InvalidOperationException) { return; }   // 窗口已关闭
 
                 Native.RECT rect;
-                if (!Native.GetWindowRect(hwnd, out rect)) return;
+                if (!Native.GetWindowRectPhysical(hwnd, out rect)) return;
                 int w = rect.Right - rect.Left, h = rect.Bottom - rect.Top;
                 if (w < 56 || h < 56) return;
 

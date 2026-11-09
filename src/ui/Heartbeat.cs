@@ -27,6 +27,7 @@ namespace Clover
             {
                 if (timer != null) return;
                 baseDir = dir;
+                writeWarned = false;
 
                 timer = new DispatcherTimer(DispatcherPriority.Background);
                 timer.Interval = TimeSpan.FromMilliseconds(IntervalMs);
@@ -42,7 +43,13 @@ namespace Clover
 
         public static void Stop()
         {
-            try { if (timer != null) timer.Stop(); } catch { }
+            try
+            {
+                if (timer != null) timer.Stop();
+                timer = null;
+                baseDir = null;
+            }
+            catch { }
         }
 
         static void Beat()

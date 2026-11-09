@@ -15,6 +15,7 @@ namespace Clover
     {
         StackPanel stack;
         List<IntPtr> items = new List<IntPtr>();
+        IntPtr hwnd;
 
         /// <summary>刷新定时器（存成字段，退出时要停）。</summary>
         DispatcherTimer refreshTimer;
@@ -59,6 +60,8 @@ namespace Clover
             };
             t.Start();
             refreshTimer = t;   // 存成字段，退出时要停（否则关停期间还会跳）
+            TaskbarGeometry.LayoutChanged += OnTaskbarLayoutChanged;
+            Closed += delegate { TaskbarGeometry.LayoutChanged -= OnTaskbarLayoutChanged; };
         }
 
         /// <summary>
@@ -132,27 +135,17 @@ namespace Clover
         {
             try
             {
-                System.Text.StringBuilder sb = new System.Text.StringBuilder();
-
-                sb.Append(SystemParameters.PrimaryScreenWidth).Append('x')
-                  .Append(SystemParameters.PrimaryScreenHeight).Append('|');
-
-                Rect wa = SystemParameters.WorkArea;
-                sb.Append(wa.Left).Append(',').Append(wa.Top).Append(',')
-                  .Append(wa.Width).Append(',').Append(wa.Height).Append('|');
-
-                sb.Append(TaskbarGeometry.ScaleFactor()).Append('|');
-
-                uint edge;
-                Native.RECT rc;
-                if (Native.GetTaskbarPos(out edge, out rc))
-                    sb.Append(edge).Append(':').Append(rc.Top).Append(',').Append(rc.Bottom);
-
-                sb.Append('|').Append(Native.TaskbarAutoHide());
-
-                return sb.ToString();
+                TaskbarGeometry.Snapshot s = TaskbarGeometry.Current;
+                return s.Generation + "|" + s.Edge + "|" + s.Dpi + "|"
+                    + RectKey(s.TaskbarPx) + "|" + RectKey(s.MonitorPx) + "|"
+                    + RectKey(s.WorkPx) + "|" + s.TaskbarVisible + "|" + s.AutoHide;
             }
             catch { return ""; }
+        }
+
+        static string RectKey(Native.RECT r)
+        {
+            return r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom;
         }
 
         void Refresh()
@@ -166,12 +159,33 @@ namespace Clover
             foreach (IntPtr h in items) stack.Children.Add(MakeButton(h));
 
             TaskbarGeometry.Refresh();
-            Rect bar = TaskbarGeometry.MiniBarRect(items.Count);
-            Width = bar.Width;
-            Left = bar.X;
-            Top = bar.Y;
+            ApplyTaskbarLayout();
             // 显示/隐藏（含全屏时隐藏 + 悬停显示）由 OverlayGate 统一处理；
             // 功能停用时 Count 视为 0，OverlayGate 会直接隐藏整条
+        }
+
+        void ApplyTaskbarLayout()
+        {
+            TaskbarGeometry.Snapshot snapshot = TaskbarGeometry.Current;
+            stack.Orientation = (snapshot.Edge == TaskbarGeometry.Edge.Left
+                || snapshot.Edge == TaskbarGeometry.Edge.Right)
+                ? Orientation.Vertical : Orientation.Horizontal;
+            Native.RECT bar = TaskbarGeometry.MiniBarRectPx(items.Count);
+            TaskbarGeometry.PositionWindow(this, hwnd, bar, true);
+        }
+
+        void OnTaskbarLayoutChanged()
+        {
+            try
+            {
+                if (!Dispatcher.CheckAccess())
+                {
+                    Dispatcher.BeginInvoke(new Action(OnTaskbarLayoutChanged));
+                    return;
+                }
+                ApplyTaskbarLayout();
+            }
+            catch { }
         }
 
         Border MakeButton(IntPtr h)
@@ -223,8 +237,9 @@ namespace Clover
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
-            IntPtr h = new WindowInteropHelper(this).Handle;
-            Native.SetWindowLong(h, -20, Native.GetWindowLong(h, -20) | 0x80);
+            hwnd = new WindowInteropHelper(this).Handle;
+            Native.SetWindowLong(hwnd, -20, Native.GetWindowLong(hwnd, -20) | 0x80);
+            Refresh();
         }
     }
 }

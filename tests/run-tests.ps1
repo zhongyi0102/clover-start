@@ -43,7 +43,8 @@ $wpfRefs = $baseRefs + @(
     ('/r:' + (Join-Path $refDir 'System.Xaml.dll')),
     $webRef
 )
-foreach ($n in @('WindowsBase', 'PresentationCore', 'PresentationFramework', 'UIAutomationClient', 'UIAutomationTypes')) {
+foreach ($n in @('WindowsBase', 'PresentationCore', 'PresentationFramework',
+    'UIAutomationClient', 'UIAutomationTypes', 'UIAutomationProvider')) {
     $asm = [System.Reflection.Assembly]::LoadWithPartialName($n)
     if ($asm) { $wpfRefs += ('/r:' + $asm.Location) }
 }
@@ -54,7 +55,8 @@ $script:startedAt = Get-Date
 $script:results = @()
 $script:desktopSuites = @(
     'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest',
-    'IconTest', 'FullscreenTest', 'TaskbarCreatedTest', 'ActiveRowTest',
+    'IconTest', 'FullscreenTest', 'TaskbarCreatedTest', 'TaskbarStabilityTest',
+    'TaskbarAccessibilityTest', 'ActiveRowTest',
     'MenuStructureTest', 'OrganizeShellTest', 'DeskRootDialogTest', 'DropHintTest',
     'WindowPosTest', 'BackgroundStoreTest', 'WallpaperEngineTest'
 )
@@ -227,6 +229,8 @@ Invoke-Suite 'NavTabsTest' $baseRefs `
     (@((Join-Path $coreDir 'NavTabs.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'NavTabsTest.cs')))
 Invoke-Suite 'SafeCallTest' $baseRefs `
     (@((Join-Path $coreDir 'SafeCall.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SafeCallTest.cs')))
+Invoke-Suite 'VisibleLoadTimerTest' $baseRefs `
+    (@((Join-Path $coreDir 'VisibleLoadTimer.cs'), (Join-Path $testDir 'VisibleLoadTimerTest.cs')))
 Invoke-Suite 'ScanServiceTest' $baseRefs `
     (@((Join-Path $coreDir 'ScanService.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'ScanServiceTest.cs')))
 Invoke-Suite 'WatcherTest' $baseRefs `
@@ -348,6 +352,14 @@ Invoke-Suite 'SearchMergeTest' $baseRefs `
 
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
     ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))
+
+# 任务栏稳定性：500 次事件风暴、generation、有限重试、负坐标与混合 DPI 几何
+Invoke-Suite 'TaskbarStabilityTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'TaskbarStabilityTest.cs')))
+
+# 四叶草按钮：原生 Button、Tab/焦点、UIAutomation InvokePattern 与冗余状态文本
+Invoke-Suite 'TaskbarAccessibilityTest' $wpfRefs `
+    ($allSrc + @((Join-Path $testDir 'TaskbarAccessibilityTest.cs')))
 
 # 任务栏行高亮判定：输入回调只读缓存后，「哪一行该亮」的纯逻辑
 Invoke-Suite 'ActiveRowTest' $wpfRefs `

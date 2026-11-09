@@ -1312,7 +1312,11 @@ namespace Clover
             try
             {
                 string sig = CurrentContentSig();
-                if (sig == renderedSig) return;
+                if (sig == renderedSig && !tileRenderPending && pendingRenderApps == null)
+                {
+                    MarkFirstContentReady();
+                    return;
+                }
                 RenderApps();
             }
             catch (Exception ex)
@@ -1996,6 +2000,7 @@ namespace Clover
 
             StopDeferredRendering();
             int generation = tileRenderGeneration;
+            int contentGeneration = firstContentGeneration;
 
             tilePanel.Children.Clear();
             // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
@@ -2111,16 +2116,16 @@ namespace Clover
             tileRenderPending = pendingRenderApps.Count > 0;
             if (pendingRenderApps.Count == 0)
             {
-                CompleteTileRendering(generation, list.Count);
+                CompleteTileRendering(generation, list.Count, contentGeneration);
                 return;
             }
 
             // 第一批立即创建，让用户在本次 Dispatcher 回调结束时就看到真实内容；
             // 余下批次排到 Background，窗口绘制和输入都可以插队。
-            RenderTileBatch(generation, list.Count);
+            RenderTileBatch(generation, list.Count, contentGeneration);
         }
 
-        void RenderTileBatch(int generation, int originalListCount)
+        void RenderTileBatch(int generation, int originalListCount, int contentGeneration)
         {
             if (panelClosed || generation != tileRenderGeneration || pendingRenderApps == null) return;
 
@@ -2137,15 +2142,15 @@ namespace Clover
 
             if (end >= pendingRenderApps.Count)
             {
-                CompleteTileRendering(generation, originalListCount);
+                CompleteTileRendering(generation, originalListCount, contentGeneration);
                 return;
             }
 
             Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background,
-                new Action(delegate { RenderTileBatch(generation, originalListCount); }));
+                new Action(delegate { RenderTileBatch(generation, originalListCount, contentGeneration); }));
         }
 
-        void CompleteTileRendering(int generation, int originalListCount)
+        void CompleteTileRendering(int generation, int originalListCount, int contentGeneration)
         {
             if (panelClosed || generation != tileRenderGeneration) return;
             tileRenderPending = false;
@@ -2289,7 +2294,7 @@ namespace Clover
             // 内容重建完再恢复滚动位置（放在最后，确保布局已经反映了新的磁贴集合）
             RestoreScrollOffset();
             pendingRenderApps = null;
-            MarkFirstContentReady();
+            MarkFirstContentReady(contentGeneration);
         }
 
 
@@ -2841,6 +2846,13 @@ namespace Clover
                 return !tileRenderPending && pendingRenderApps == null
                     && !string.IsNullOrEmpty(renderedSig);
             }
+            catch { return false; }
+        }
+
+        /// <summary>测试用：分批磁贴是否仍有后续工作排队。</summary>
+        internal bool TestDeferredRenderPending()
+        {
+            try { return tileRenderPending && pendingRenderApps != null; }
             catch { return false; }
         }
 

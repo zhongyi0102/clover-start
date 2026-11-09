@@ -13,13 +13,13 @@ namespace Clover
     /// </summary>
     static class OverlayGate
     {
-        /// <summary>鼠标离按钮边缘多少 DIP 之内算“悬停”。</summary>
+        /// <summary>鼠标离按钮边缘多少 DIP 之内算“悬停”（使用时换算为物理像素）。</summary>
         const double HoverMargin = 10;
 
         class Entry
         {
             public Window Win;
-            public Func<Rect> Area;     // 按钮区域（DIP），用于判断悬停
+            public Func<Native.RECT> Area; // 按钮区域（物理像素），用于判断悬停
             public Func<bool> CanShow;  // 是否允许显示（例如迷你任务栏为空时不显示）
             public Func<bool> Enabled;  // 为 false 时本窗口不参与管理（例如正在打开开始菜单）
         }
@@ -38,9 +38,16 @@ namespace Clover
         /// <summary>悬停唤出开关（settings.hoverReveal）。关掉后全屏时按钮直接隐藏、不随鼠标浮现。</summary>
         public static bool HoverReveal = true;
 
+        /// <summary>
+        /// 复用现有低频 Tick 做轻量维护。
+        /// 当前由 TriggerWindow 用来消费看门狗恢复标记，避免再养一只常驻定时器。
+        /// 回调里不得再次调用 Refresh()，否则会递归进入 Tick。
+        /// </summary>
+        public static Action Maintenance;
+
         public static bool Fullscreen { get; private set; }
 
-        public static void Register(Window win, Func<Rect> area, Func<bool> canShow, Func<bool> enabled)
+        public static void Register(Window win, Func<Native.RECT> area, Func<bool> canShow, Func<bool> enabled)
         {
             if (win == null) return;
             entries.Add(new Entry { Win = win, Area = area, CanShow = canShow, Enabled = enabled });
@@ -68,6 +75,8 @@ namespace Clover
             {
                 if (timer != null) { timer.Stop(); timer = null; }
                 entries.Clear();
+                Maintenance = null;
+                HoldVisible = null;
             }
             catch { }
         }
@@ -81,6 +90,16 @@ namespace Clover
 
         static void Tick()
         {
+            try
+            {
+                Action maintenance = Maintenance;
+                if (maintenance != null) maintenance();
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("悬浮窗维护失败: " + ex.Message);
+            }
+
             bool fs;
             // 全屏检测被关掉时，永远按“非全屏”处理，按钮常显
             if (!Enabled) fs = false;
@@ -101,17 +120,15 @@ namespace Clover
                 Ui.Log("fullscreen=" + fs);
             }
 
-            double cx = -100000;
-            double cy = -100000;
-            double scale = 1;
-            try { scale = TaskbarGeometry.ScaleFactor(); } catch { }
+            int cx = -100000;
+            int cy = -100000;
             try
             {
                 Native.POINT p;
                 if (Native.GetCursorPos(out p))
                 {
-                    cx = p.X / scale;
-                    cy = p.Y / scale;
+                    cx = p.X;
+                    cy = p.Y;
                 }
             }
             catch { }
@@ -140,13 +157,14 @@ namespace Clover
                     }
                     else
                     {
-                        Rect r = Rect.Empty;
+                        Native.RECT r = new Native.RECT();
                         try { if (e.Area != null) r = e.Area(); } catch { }
-                        if (r.IsEmpty || r.Width <= 0 || r.Height <= 0) show = false;
+                        if (r.Right <= r.Left || r.Bottom <= r.Top) show = false;
                         else
                         {
-                            show = cx >= r.Left - HoverMargin && cx <= r.Right + HoverMargin
-                                && cy >= r.Top - HoverMargin && cy <= r.Bottom + HoverMargin;
+                            int margin = (int)Math.Round(HoverMargin * TaskbarGeometry.Current.Scale);
+                            show = cx >= r.Left - margin && cx <= r.Right + margin
+                                && cy >= r.Top - margin && cy <= r.Bottom + margin;
                         }
                     }
                 }

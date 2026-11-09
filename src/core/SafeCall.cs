@@ -55,6 +55,23 @@ namespace Clover
         /// </summary>
         public static void RunWithDeadline<T>(Func<T> func, int timeoutMs, Action<bool, T> onDone)
         {
+            RunWithDeadlineCore(func, timeoutMs, onDone, true);
+        }
+
+        /// <summary>
+        /// 带截止时间但不记录底层异常的版本。
+        /// UIAutomation 在 Explorer 正重建时会短暂返回 COM E_FAIL；调用方已经有缓存、
+        /// 有限重试与降级状态时，这类预期瞬态失败不应每次都写成 WARN。
+        /// 超时和迟到结果仍保留 INFO，便于判断系统调用是否长期卡住。
+        /// </summary>
+        public static void RunWithDeadlineQuiet<T>(Func<T> func, int timeoutMs, Action<bool, T> onDone)
+        {
+            RunWithDeadlineCore(func, timeoutMs, onDone, false);
+        }
+
+        static void RunWithDeadlineCore<T>(Func<T> func, int timeoutMs,
+            Action<bool, T> onDone, bool logFailure)
+        {
             if (func == null || onDone == null) return;
             if (timeoutMs <= 0) timeoutMs = DefaultTimeoutMs;
 
@@ -82,7 +99,8 @@ namespace Clover
                 }
                 catch (Exception ex)
                 {
-                    Log.Warn("后台调用失败: " + ex.GetType().Name + ": " + ex.Message);
+                    if (logFailure)
+                        Log.Warn("后台调用失败: " + ex.GetType().Name + ": " + ex.Message);
                 }
 
                 double ms = (DateTime.Now - started).TotalMilliseconds;

@@ -27,6 +27,7 @@ namespace Clover
             bool guard = false;
             int guardPid = 0;
             string guardBaseDir = null;
+            string guardStopEvent = null;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -43,6 +44,7 @@ namespace Clover
                     guard = true;
                     if (i + 1 < args.Length) int.TryParse(args[i + 1], out guardPid);
                     if (i + 2 < args.Length) guardBaseDir = args[i + 2];
+                    if (i + 3 < args.Length) guardStopEvent = args[i + 3];
                 }
             }
 
@@ -77,7 +79,8 @@ namespace Clover
             // ---------- 看门狗模式：无界面，只等主进程退出后还原系统状态 ----------
             if (guard)
             {
-                Guard.Run(guardPid, string.IsNullOrEmpty(guardBaseDir) ? baseDir : guardBaseDir);
+                Guard.Run(guardPid, string.IsNullOrEmpty(guardBaseDir) ? baseDir : guardBaseDir,
+                    guardStopEvent);
                 return;
             }
 
@@ -198,10 +201,7 @@ namespace Clover
                         + "。你的设置没被改动，退出安全模式后即恢复。");
                 }
 
-                // ---------- 4) 拉起看门狗（安全模式下也拉，它只负责还原） ----------
-                Guard.Spawn(baseDir);
-
-                // ---------- 4b) 应用主题（必须在任何窗口创建之前）----------
+                // ---------- 4) 应用主题（必须在任何窗口创建之前）----------
                 // 颜色刷子是全局对象，窗口构造时就把它们挂到控件上了；
                 // 这里先定好颜色，后续所有窗口一建出来就是对的。
                 Ui.ApplyTheme(Ui.ParseTheme(settings.Theme));
@@ -245,7 +245,7 @@ namespace Clover
                     if (panel != null) panel.AttachMiniBar(createdBar);
 
                     OverlayGate.Register(createdBar,
-                        delegate { return TaskbarGeometry.MiniBarRect(createdBar.Count); },
+                        delegate { return TaskbarGeometry.MiniBarRectPx(createdBar.Count); },
                         delegate { return createdBar.Count > 0; }, null);
                     return createdBar;
                 };
@@ -277,22 +277,19 @@ namespace Clover
                 OverlayGate.Enabled = settings.EffectiveFullscreenDetect;
                 OverlayGate.HoverReveal = settings.EffectiveHoverReveal;
                 OverlayGate.Register(trigger,
-                    delegate { return new Rect(trigger.Left, trigger.Top, trigger.Width, trigger.Height); },
+                    delegate { return trigger.ActualWindowRectPx(); },
                     delegate { return true; }, null);
                 OverlayGate.Start();
 
                 app.Startup += delegate
                 {
-                    // 先让四叶草按钮完成首帧，再启动监听、自检和心跳。
+                    // 先让四叶草按钮完成首帧，再启动监听与自检。
                     // 这些功能仍在启动后立即生效，只是不再阻塞可见反馈。
                     app.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
                     {
                         watcher.Start();
                         ResourceWatch.Start();
                         ResourceWatch.Check();
-                        // 心跳：界面线程每 2 秒写一次 config\heartbeat 的时间戳。
-                        // 看门狗在主进程没有可检测窗口时，靠它判断是否卡死。
-                        Heartbeat.Start(baseDir);
                         if (safeMode) ShowSafeModeTip();
                     }));
                 };
@@ -377,9 +374,11 @@ namespace Clover
                 if (watcher != null) watcher.Stop();
                 if (miniBar != null) miniBar.StopRefresh();
                 ResourceWatch.Stop();
+                // 先恢复系统任务栏，再协作式停看门狗；默认模式两者都只是快速空操作。
+                TaskbarVisibility.RestoreSystemState("程序退出");
+                Guard.Stop();
                 Heartbeat.Stop();
                 Heartbeat.Cleanup(baseDir);
-                TaskbarVisibility.RestoreSystemState("程序退出");
                 // 清除运行标记：表示这次是干净退出，下次启动不算异常退出
                 CrashGuard.EndRun("正常退出");
             }

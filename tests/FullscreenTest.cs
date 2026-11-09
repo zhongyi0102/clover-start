@@ -94,6 +94,12 @@ namespace Clover
         static extern bool BringWindowToTop(IntPtr h);
         [DllImport("user32.dll")]
         static extern bool ShowWindowAsync(IntPtr h, int cmd);
+        [DllImport("user32.dll")]
+        static extern uint GetWindowThreadProcessId(IntPtr h, out int pid);
+        [DllImport("kernel32.dll")]
+        static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")]
+        static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
 
         const uint KEYEVENTF_KEYUP = 0x0002;
         const byte VK_MENU = 0x12; // ALT
@@ -110,6 +116,52 @@ namespace Clover
         {
             keybd_event(VK_MENU, 0, 0, IntPtr.Zero);
             keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+        }
+
+        /// <summary>
+        /// 把目标窗口切到前台。先走正常公开 API；若当前桌面有别的交互式程序
+        /// 持续抢焦点，短暂附加双方输入队列后再切换。测试结束立即解除，不改变
+        /// 产品代码的前台策略，也不把“根本没成为前台”误判成全屏检测失败。
+        /// </summary>
+        static bool TryMakeForeground(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return false;
+            for (int attempt = 0; attempt < 20; attempt++)
+            {
+                UnlockForeground();
+                BringWindowToTop(hwnd);
+                ShowWindowAsync(hwnd, 5);
+                SetForegroundWindow(hwnd);
+                Thread.Sleep(150);
+                if (GetForegroundWindow() == hwnd) return true;
+
+                IntPtr foreground = GetForegroundWindow();
+                uint currentThread = GetCurrentThreadId();
+                int ignored;
+                uint foregroundThread = foreground == IntPtr.Zero
+                    ? 0 : GetWindowThreadProcessId(foreground, out ignored);
+                uint targetThread = GetWindowThreadProcessId(hwnd, out ignored);
+                bool attachedForeground = false;
+                bool attachedTarget = false;
+                try
+                {
+                    if (foregroundThread != 0 && foregroundThread != currentThread)
+                        attachedForeground = AttachThreadInput(currentThread, foregroundThread, true);
+                    if (targetThread != 0 && targetThread != currentThread)
+                        attachedTarget = AttachThreadInput(currentThread, targetThread, true);
+                    BringWindowToTop(hwnd);
+                    ShowWindowAsync(hwnd, 5);
+                    SetForegroundWindow(hwnd);
+                }
+                finally
+                {
+                    if (attachedTarget) AttachThreadInput(currentThread, targetThread, false);
+                    if (attachedForeground) AttachThreadInput(currentThread, foregroundThread, false);
+                }
+                Thread.Sleep(150);
+                if (GetForegroundWindow() == hwnd) return true;
+            }
+            return false;
         }
 
         static IntPtr HostProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
@@ -137,15 +189,7 @@ namespace Clover
 
             // 抢前台：先按 ALT 解锁，再多次尝试。
             // 单次 SetForegroundWindow 在有别的程序占着前台时会被系统拒绝。
-            for (int i = 0; i < 30; i++)
-            {
-                UnlockForeground();
-                BringWindowToTop(hwnd);
-                ShowWindowAsync(hwnd, 5);
-                SetForegroundWindow(hwnd);
-                Thread.Sleep(200);
-                if (GetForegroundWindow() == hwnd) break;
-            }
+            TryMakeForeground(hwnd);
 
             MSG m;
             while (GetMessage(out m, IntPtr.Zero, 0, 0))
@@ -208,16 +252,7 @@ namespace Clover
                 //   1. 按 ALT 解锁前台（模拟用户输入，系统才放行）
                 //   2. 反复尝试并校验 GetForegroundWindow 确实是它
                 // 避免偶发失败被误判成功能坏了。
-                bool foreground = false;
-                for (int attempt = 0; attempt < 20; attempt++)
-                {
-                    UnlockForeground();
-                    BringWindowToTop(hwnd);
-                    ShowWindowAsync(hwnd, 5);
-                    SetForegroundWindow(hwnd);
-                    Thread.Sleep(250);
-                    if (GetForegroundWindow() == hwnd) { foreground = true; break; }
-                }
+                bool foreground = TryMakeForeground(hwnd);
                 Check(foreground, "全屏窗口成功成为前台窗口（若失败是环境干扰，非功能问题）");
 
                 Thread.Sleep(400);

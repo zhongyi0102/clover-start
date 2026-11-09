@@ -270,6 +270,8 @@ namespace Clover
             // 任务栏定位
             Grid locRow = InfoRow("任务栏定位", out locationValue,
                 delegate { CopyText(locationValue.Text); });
+            locationValue.TextWrapping = TextWrapping.Wrap;
+            locationValue.TextTrimming = TextTrimming.None;
             col.Children.Add(locRow);
 
             // 运行状态
@@ -494,7 +496,7 @@ namespace Clover
             try
             {
                 if (locationValue != null)
-                    locationValue.Text = BuildLocationSummary();
+                    locationValue.Text = BuildLocationDisplay();
                 if (healthValue != null)
                     healthValue.Text = BuildHealthSummary();
 
@@ -687,13 +689,31 @@ namespace Clover
                     default: edgeName = "底部"; break;
                 }
 
-                string src = TaskbarGeometry.LastSource;
-                if (src == "workArea") src = "工作区推断";
-                else if (src == "trayWindow") src = "任务栏窗口矩形";
-                else src = "回退估算（降级）";
+                TaskbarGeometry.Snapshot snapshot = TaskbarGeometry.Current;
+                string src = TaskbarGeometry.SourceDisplayName(snapshot.Source);
+                string calibration = snapshot.TaskButtonsLocated
+                    ? "应用按钮组已校准"
+                    : (snapshot.StartLocated ? "开始按钮已校准" : "等待精确校准");
 
                 return edgeName + "，" + Math.Round(TaskbarGeometry.Thickness) + " px"
-                    + "（" + src + (TaskbarGeometry.PreciseLocated ? "，已校准" : "，未校准") + "）";
+                    + "（" + src + "，" + calibration + "）";
+            }
+            catch { return "读取失败"; }
+        }
+
+        /// <summary>维护页直接可见的任务栏定位详情。</summary>
+        string BuildLocationDisplay()
+        {
+            try
+            {
+                Rect actual = owner != null ? owner.ActualWindowRect() : TaskbarGeometry.CloverRect();
+                string source = owner != null ? owner.PositionSource : "任务栏几何估算（窗口未连接）";
+                string calibrated = TriggerWindow.LastLayoutCalibrated == DateTime.MinValue
+                    ? "尚未成功"
+                    : TriggerWindow.LastLayoutCalibrated.ToString("HH:mm:ss");
+                return BuildLocationSummary()
+                    + "\r\n实际窗口 " + FmtRect(actual)
+                    + "\r\n" + source + "；最后校准 " + calibrated;
             }
             catch { return "读取失败"; }
         }
@@ -704,11 +724,12 @@ namespace Clover
             {
                 int crashes = ReadCrashCount();
                 bool safe = Settings.SafeModeActive;
-                bool wd = WatchdogRunning();
+                bool required = owner != null ? owner.HideTaskbar : settings.EffectiveHideTaskbar;
+                bool wd = Guard.IsRunning || WatchdogRunning();
 
                 return "崩溃 " + crashes + " 次"
                     + (safe ? "（安全模式）" : "")
-                    + "，看门狗" + (wd ? "运行中" : "未运行");
+                    + "，看门狗" + (!required ? "按需待机" : (wd ? "运行中" : "正在启动"));
             }
             catch { return "读取失败"; }
         }
@@ -791,11 +812,17 @@ namespace Clover
             {
                 TaskbarGeometry.Refresh();
                 Rect s = TaskbarGeometry.StartCell;
-                Rect c = TaskbarGeometry.CloverRect();
+                Rect c = owner != null ? owner.ActualWindowRect() : TaskbarGeometry.CloverRect();
+                string source = owner != null ? owner.PositionSource : "任务栏几何估算（窗口未连接）";
+                string calibrated = TriggerWindow.LastLayoutCalibrated == DateTime.MinValue
+                    ? "尚未成功"
+                    : TriggerWindow.LastLayoutCalibrated.ToString("yyyy-MM-dd HH:mm:ss");
                 return "  " + BuildLocationSummary() + "\r\n"
                     + "  DPI 缩放：" + TaskbarGeometry.ScaleFactor().ToString("0.##") + "\r\n"
                     + "  开始按钮格：" + FmtRect(s) + "\r\n"
-                    + "  四叶草按钮：" + FmtRect(c);
+                    + "  四叶草实际窗口：" + FmtRect(c) + "\r\n"
+                    + "  按钮定位来源：" + source + "\r\n"
+                    + "  最后按钮组校准：" + calibrated;
             }
             catch { return "  读取失败"; }
         }
@@ -804,9 +831,12 @@ namespace Clover
         {
             try
             {
+                bool required = owner != null ? owner.HideTaskbar : settings.EffectiveHideTaskbar;
+                string watchdog = !required ? "按需待机（仅隐藏系统任务栏时运行）"
+                    : ((Guard.IsRunning || WatchdogRunning()) ? "运行中" : "正在启动");
                 return "  " + BuildHealthSummary() + "\r\n"
                     + "  安全模式：" + (Settings.SafeModeActive ? "是" : "否") + "\r\n"
-                    + "  看门狗：" + (WatchdogRunning() ? "运行中" : "未运行");
+                    + "  看门狗：" + watchdog;
             }
             catch { return "  读取失败"; }
         }

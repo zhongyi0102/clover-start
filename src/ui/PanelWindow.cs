@@ -184,12 +184,16 @@ namespace Clover
 
         /// <summary>首次显示后是否已安排内容加载。</summary>
         bool panelContentScheduled;
+        /// <summary>每次安排/取消首屏工作都递增；迟到的 Dispatcher 回调不得接管新一轮显示。</summary>
+        int panelContentLoadGeneration;
         /// <summary>背景设置是否已在首帧之后应用。</summary>
         bool deferredAppearanceApplied;
         /// <summary>窗口已关闭；后台图标与分批渲染回调看到它后立即退出。</summary>
         bool panelClosed;
-        /// <summary>从首次请求内容到磁贴树完整可用的耗时。</summary>
-        Stopwatch firstContentWatch;
+        /// <summary>只统计当前可见周期；隐藏期间绝不累计。</summary>
+        readonly VisibleLoadTimer firstContentTimer = new VisibleLoadTimer();
+        int firstContentGeneration;
+        bool firstContentEverReady;
 
         /// <summary>
         /// 各分类的滚动偏移（分类名 -> 垂直偏移）。
@@ -242,6 +246,11 @@ namespace Clover
         List<TextBlock> navCounts = new List<TextBlock>();
 
         Rect normalRect = Rect.Empty;
+        Native.RECT normalRectPx;
+        bool hasNormalRectPx;
+        Native.RECT pendingTaskbarPositionPx;
+        Native.RECT savedLayoutPx;
+        bool hasSavedLayoutPx;
 
         /// <summary>用户手工指定的分类覆盖表（右键「移到分类」写入）。</summary>
         CategoryOverrides overrides;
@@ -369,10 +378,14 @@ namespace Clover
             // 背景应用可能涉及图片解码、Wallpaper Engine 包解析或 MediaElement。
             // 留到窗口首帧之后再做：用户先看到完整骨架，背景随后无缝补上。
             Loaded += delegate { SchedulePanelContentLoad(); };
+            IsVisibleChanged += delegate
+            {
+                if (!IsVisible) CancelVisibleContentLoad();
+            };
             Closed += delegate
             {
                 panelClosed = true;
-                try { StopDeferredRendering(); } catch { }
+                CancelVisibleContentLoad();
                 try { if (runningStateTimer != null) runningStateTimer.Stop(); } catch { }
             };
 
@@ -570,7 +583,7 @@ namespace Clover
                 int sy = (short)((lp >> 16) & 0xFFFF);
 
                 Native.RECT r;
-                if (!Native.GetWindowRect(hwnd, out r)) return IntPtr.Zero;
+                if (!Native.GetWindowRectPhysical(hwnd, out r)) return IntPtr.Zero;
 
                 const int Band = 6;   // 缩放热区宽度（物理像素）
 
@@ -604,82 +617,76 @@ namespace Clover
         }
         void PositionPanel()
         {
-            Rect wa = SystemParameters.WorkArea;
-            // edgeMargin 参与展开/还原时的尺寸计算（见下方 expanded 分支）
-            double em = edgeMargin;
-
-            // 面板位置**跟随四叶草按钮**，而不是硬编码。
-            //
-            // 原先写的是 `Left = 55 + 6 - 16`，即假设"开始按钮固定占屏幕 0-55px"。
-            // 但四叶草按钮的真实位置来自 TaskbarGeometry（UIAutomation 探测 +
-            // 三级回退），两者用不同参考系 —— 任务栏不在底部、或开始按钮不居中时，
-            // 面板就会和按钮错位（按钮在 A 处，面板从 B 处开始）。
-            //
-            // 现在统一：面板左缘 = 四叶草按钮右缘 + 间距，纵向贴任务栏。
+            TaskbarGeometry.Snapshot layout = TaskbarGeometry.Current;
+            Native.RECT wa = layout.WorkPx;
+            Native.RECT clover = layout.CloverPx;
             try
             {
-                // ★ 优先用「四叶草按钮的真实右边缘」定位。
-                //
-                // 为什么不用 TaskbarGeometry.CloverRect()：
-                // 那套基于"开始按钮格"，算出来 x≈59；
-                // 而四叶草按钮实际贴在**任务栏图标组末尾**（实测 x=411）。
-                // 两套机制不一致，面板和按钮会错位 350px。
-                //
-                // TriggerWindow 已经用 UIA 探测出了真实位置，这里直接复用，
-                // 保证"面板从按钮右边开始"这件事真的成立。
-                double buttonRight;
-                if (TriggerWindow.TryGetButtonRight(out buttonRight))
+                IntPtr h = new WindowInteropHelper(this).Handle;
+                Native.RECT actual;
+                int panelW;
+                int panelH;
+                if (h != IntPtr.Zero && Native.GetWindowRectPhysical(h, out actual)
+                    && actual.Right > actual.Left && actual.Bottom > actual.Top)
                 {
-                    if (TaskbarGeometry.CurrentEdge == TaskbarGeometry.Edge.Bottom)
-                    {
-                        // ⚠ TryGetButtonRight 返回的是四叶草按钮的**左缘** X
-                        // （它就是 TriggerWindow 用来设置 Left 的那个值），
-                        // 所以要先加按钮宽度才是"右缘"。
-                        // 实测：按钮 Left=411、Width=44 → 右缘 455；
-                        // 不加宽度会算出 Left=401，面板压在按钮上（差 54px）。
-                        double btnW = 44;
-                        Left = buttonRight + btnW + 6 - 16;   // 16 = root 的 Margin
-                        Top = wa.Bottom - Height + 10;
-                        if (Top < 0) Top = 0;
-                        if (Left < 0) Left = 0;
-                        return;
-                    }
+                    panelW = actual.Right - actual.Left;
+                    panelH = actual.Bottom - actual.Top;
+                }
+                else
+                {
+                    double systemScale = TaskbarGeometry.SystemScale();
+                    panelW = Math.Max(1, (int)Math.Round(Width * systemScale));
+                    panelH = Math.Max(1, (int)Math.Round(Height * systemScale));
                 }
 
-                Rect clover = TaskbarGeometry.CloverRect();
-                if (!clover.IsEmpty && clover.Width > 0)
+                int gap = Math.Max(1, (int)Math.Round(6 * layout.Scale));
+                int outerMargin = Math.Max(0, (int)Math.Round(edgeMargin * layout.Scale));
+                int bottomInset = Math.Max(0, (int)Math.Round(10 * layout.Scale));
+                int x;
+                int y;
+
+                switch (layout.Edge)
                 {
-                    switch (TaskbarGeometry.CurrentEdge)
-                    {
-                        case TaskbarGeometry.Edge.Top:
-                            Left = clover.X - 16;
-                            Top = wa.Top + TaskbarGeometry.Thickness + 6;
-                            break;
-                        case TaskbarGeometry.Edge.Left:
-                            Left = wa.Left + TaskbarGeometry.Thickness + 6;
-                            Top = clover.Bottom + 6;
-                            break;
-                        case TaskbarGeometry.Edge.Right:
-                            Left = wa.Right - Width - 6;
-                            Top = clover.Bottom + 6;
-                            break;
-                        default:   // Bottom
-                            Left = clover.Right + 6 - 16;   // 16 = root 的 Margin
-                            Top = wa.Bottom - Height + 10;
-                            break;
-                    }
-                    if (Top < 0) Top = 0;
-                    if (Left < 0) Left = 0;
-                    return;
+                    case TaskbarGeometry.Edge.Top:
+                        x = clover.Left - outerMargin;
+                        y = wa.Top + gap;
+                        break;
+                    case TaskbarGeometry.Edge.Left:
+                        x = wa.Left + gap;
+                        y = clover.Bottom + gap;
+                        break;
+                    case TaskbarGeometry.Edge.Right:
+                        x = wa.Right - panelW - gap;
+                        y = clover.Bottom + gap;
+                        break;
+                    default:
+                        x = clover.Right + gap - outerMargin;
+                        y = wa.Bottom - panelH + bottomInset;
+                        break;
                 }
+
+                int minVisible = Math.Max(1, (int)Math.Round(120 * layout.Scale));
+                if (x + minVisible > wa.Right) x = wa.Right - minVisible;
+                if (x + panelW - minVisible < wa.Left) x = wa.Left - panelW + minVisible;
+                if (y < wa.Top) y = wa.Top;
+                if (y + minVisible > wa.Bottom) y = wa.Bottom - minVisible;
+
+                pendingTaskbarPositionPx = new Native.RECT
+                {
+                    Left = x,
+                    Top = y,
+                    Right = x + panelW,
+                    Bottom = y + panelH
+                };
+                TaskbarGeometry.PositionWindow(this, h, pendingTaskbarPositionPx, false);
+                return;
             }
             catch { }
 
-            // 兜底：拿不到按钮位置时用工作区右下角（不依赖"开始按钮在 0-55"这个假设）
-            Left = wa.Left + 8;
-            Top = wa.Bottom - Height + 10;
-            if (Top < 0) Top = 0;
-            if (Left < 0) Left = 0;
+            // 原生信息也失败时保留 WPF 的安全主屏回退。
+            Rect fallback = SystemParameters.WorkArea;
+            Left = fallback.Left + 8;
+            Top = fallback.Bottom - Height + 10;
         }
 
         public void ShowPanel()
@@ -711,6 +718,10 @@ namespace Clover
                 }
                 Opacity = Ui.ReducedMotion ? 1 : 0;
                 Show();
+                // 句柄建立后再用物理像素校正一次：构造阶段只能做逻辑坐标预定位，
+                // 混合 DPI 或负坐标副屏必须以这里的 SetWindowPos 结果为准。
+                if (needPosition) PositionPanel();
+                else if (hasSavedLayoutPx) ApplySavedPhysicalLayout();
             }
             Activate();
             IntPtr h = new WindowInteropHelper(this).Handle;
@@ -768,12 +779,25 @@ namespace Clover
             {
                 if (panelClosed || panelContentScheduled) return;
                 panelContentScheduled = true;
-                if (firstContentWatch == null) firstContentWatch = Stopwatch.StartNew();
+                int loadGeneration;
+                unchecked
+                {
+                    panelContentLoadGeneration++;
+                    if (panelContentLoadGeneration <= 0) panelContentLoadGeneration = 1;
+                    loadGeneration = panelContentLoadGeneration;
+                }
+                if (!firstContentEverReady && !firstContentTimer.Running)
+                    firstContentGeneration = firstContentTimer.Begin();
 
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
                 {
+                    if (loadGeneration != panelContentLoadGeneration) return;
                     panelContentScheduled = false;
-                    if (panelClosed || !IsVisible) return;
+                    if (panelClosed || !IsVisible)
+                    {
+                        CancelVisibleContentLoad();
+                        return;
+                    }
 
                     RenderAppsIfNeeded();
                     StartRunningStateTimer();
@@ -781,6 +805,31 @@ namespace Clover
                 }));
             }
             catch (Exception ex) { Ui.LogError(ex, "安排主面板内容加载"); }
+        }
+
+        /// <summary>
+        /// 取消当前可见周期。若磁贴只创建了一部分，同时让内容签名失效：下一次显示
+        /// 必须从完整快照重建，不能把半成品误认成“内容没变”并提前结束首屏计时。
+        /// </summary>
+        void CancelVisibleContentLoad()
+        {
+            try
+            {
+                unchecked
+                {
+                    panelContentLoadGeneration++;
+                    if (panelContentLoadGeneration <= 0) panelContentLoadGeneration = 1;
+                }
+                panelContentScheduled = false;
+                firstContentTimer.Cancel();
+
+                if (tileRenderPending || pendingRenderApps != null)
+                {
+                    StopDeferredRendering();
+                    renderedSig = "";
+                }
+            }
+            catch { }
         }
 
         /// <summary>
@@ -817,12 +866,19 @@ namespace Clover
         /// <summary>磁贴批次完成时记一条真实的首次可用耗时。</summary>
         void MarkFirstContentReady()
         {
+            MarkFirstContentReady(firstContentGeneration);
+        }
+
+        void MarkFirstContentReady(int expectedGeneration)
+        {
             try
             {
-                if (firstContentWatch == null) return;
-                firstContentWatch.Stop();
-                ErrorLog.Log("主面板内容加载完成，用时 " + firstContentWatch.ElapsedMilliseconds + "ms");
-                firstContentWatch = null;
+                if (firstContentEverReady) return;
+                if (!IsVisible) { firstContentTimer.Cancel(); return; }
+                long elapsed;
+                if (!firstContentTimer.TryComplete(expectedGeneration, out elapsed)) return;
+                firstContentEverReady = true;
+                ErrorLog.Log("主面板内容加载完成，用时 " + elapsed + "ms");
             }
             catch { }
         }
@@ -1581,7 +1637,7 @@ namespace Clover
 
                 Native.RECT r;
                 IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-                if (!Native.GetWindowRect(hwnd, out r)) return false;
+                if (!Native.GetWindowRectPhysical(hwnd, out r)) return false;
 
                 return p.X >= r.Left && p.X <= r.Right
                     && p.Y >= r.Top && p.Y <= r.Bottom;
@@ -1592,6 +1648,7 @@ namespace Clover
         public void HidePanel()
         {
             Ui.Log("HidePanel, visible=" + IsVisible);
+            CancelVisibleContentLoad();
             if (!IsVisible) return;
 
             // 开始收起就暂停视频，不等淡出完成，也不浪费后台解码。
@@ -1651,6 +1708,11 @@ namespace Clover
                 if (!expanded)
                 {
                     normalRect = new Rect(Left, Top, Width, Height);
+                    IntPtr h = new WindowInteropHelper(this).Handle;
+                    hasNormalRectPx = h != IntPtr.Zero
+                        && Native.GetWindowRectPhysical(h, out normalRectPx)
+                        && normalRectPx.Right > normalRectPx.Left
+                        && normalRectPx.Bottom > normalRectPx.Top;
                     expanded = true;
                     edgeMargin = 0;
                     rootBorder.Margin = new Thickness(0);
@@ -1658,13 +1720,14 @@ namespace Clover
                     // 最大化时铺满工作区：外层也要去掉投影，否则阴影会溢出到屏幕外
                     // （外层没有 Margin，投影会画在窗口边界之外，看起来像屏幕边缘发黑）
                     SetShadowHostEffect(false);
-                    Rect wa = SystemParameters.WorkArea;
-            // edgeMargin 参与展开/还原时的尺寸计算（见下方 expanded 分支）
-            double em = edgeMargin;
-                    Left = wa.Left;
-                    Top = wa.Top;
-                    Width = wa.Width;
-                    Height = wa.Height;
+                    Native.MONITORINFO monitor;
+                    if (h != IntPtr.Zero && Native.TryGetMonitorInfoForWindow(h, out monitor))
+                        TaskbarGeometry.PositionWindow(this, h, monitor.rcWork, true);
+                    else
+                    {
+                        TaskbarGeometry.Snapshot s = TaskbarGeometry.Current;
+                        TaskbarGeometry.PositionWindow(this, h, s.WorkPx, true);
+                    }
                     maxBtn.Content = MakeGlyph("\uE923");
                     maxBtn.ToolTip = "还原";
                     AutomationProperties.SetName(maxBtn, "还原面板");
@@ -1678,10 +1741,16 @@ namespace Clover
                     rootBorder.CornerRadius = new CornerRadius(Ui.R.Lg);
                     // 还原：恢复双层投影
                     SetShadowHostEffect(true);
-                    Left = normalRect.X;
-                    Top = normalRect.Y;
-                    Width = normalRect.Width;
-                    Height = normalRect.Height;
+                    IntPtr h = new WindowInteropHelper(this).Handle;
+                    if (hasNormalRectPx && h != IntPtr.Zero)
+                        TaskbarGeometry.PositionWindow(this, h, normalRectPx, true);
+                    else
+                    {
+                        Left = normalRect.X;
+                        Top = normalRect.Y;
+                        Width = normalRect.Width;
+                        Height = normalRect.Height;
+                    }
                     maxBtn.Content = MakeGlyph("\uE922");
                     maxBtn.ToolTip = "最大化";
                     AutomationProperties.SetName(maxBtn, "最大化面板");
@@ -1709,7 +1778,24 @@ namespace Clover
                 Height = h;
                 Left = l;
                 Top = t;
-                ClampToScreen();
+                object pl, pt, pw, ph;
+                if (d.TryGetValue("physicalLeft", out pl)
+                    && d.TryGetValue("physicalTop", out pt)
+                    && d.TryGetValue("physicalWidth", out pw)
+                    && d.TryGetValue("physicalHeight", out ph))
+                {
+                    savedLayoutPx = new Native.RECT
+                    {
+                        Left = Convert.ToInt32(pl),
+                        Top = Convert.ToInt32(pt),
+                        Right = Convert.ToInt32(pl) + Convert.ToInt32(pw),
+                        Bottom = Convert.ToInt32(pt) + Convert.ToInt32(ph)
+                    };
+                    hasSavedLayoutPx = savedLayoutPx.Right > savedLayoutPx.Left
+                        && savedLayoutPx.Bottom > savedLayoutPx.Top;
+                    if (hasSavedLayoutPx) savedLayoutPx = ClampPhysicalLayout(savedLayoutPx);
+                }
+                if (!hasSavedLayoutPx) ClampToScreen();
                 return true;
             }
             catch { return false; }
@@ -1724,6 +1810,38 @@ namespace Clover
                 d["top"] = expanded ? normalRect.Y : Top;
                 d["width"] = expanded ? normalRect.Width : Width;
                 d["height"] = expanded ? normalRect.Height : Height;
+
+                Native.RECT physical = new Native.RECT();
+                bool physicalOk = false;
+                if (expanded && hasNormalRectPx)
+                {
+                    physical = normalRectPx;
+                    physicalOk = true;
+                }
+                else
+                {
+                    IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                    physicalOk = hwnd != IntPtr.Zero
+                        && Native.GetWindowRectPhysical(hwnd, out physical)
+                        && physical.Right > physical.Left && physical.Bottom > physical.Top;
+                }
+                if (physicalOk)
+                {
+                    d["physicalLeft"] = physical.Left;
+                    d["physicalTop"] = physical.Top;
+                    d["physicalWidth"] = physical.Right - physical.Left;
+                    d["physicalHeight"] = physical.Bottom - physical.Top;
+                    int dpi = 0;
+                    try
+                    {
+                        IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                        if (hwnd != IntPtr.Zero) dpi = Native.GetDpiForWindow(hwnd);
+                    }
+                    catch { }
+                    d["dpi"] = dpi > 0 ? dpi : 96;
+                    savedLayoutPx = physical;
+                    hasSavedLayoutPx = true;
+                }
                 System.Web.Script.Serialization.JavaScriptSerializer ser = new System.Web.Script.Serialization.JavaScriptSerializer();
                 JsonIO.WriteAtomic(layoutPath, ser.Serialize(d));
 
@@ -1736,14 +1854,56 @@ namespace Clover
 
         void ClampToScreen()
         {
-            double sw = SystemParameters.PrimaryScreenWidth;
-            double sh = SystemParameters.PrimaryScreenHeight;
-            if (Left < -60) Left = 0;
-            if (Top < 0) Top = 0;
-            if (Left > sw - 120) Left = sw - 120;
-            if (Top > sh - 120) Top = sh - 120;
-            if (Width > sw + 40) Width = sw + 40;
+            double left, top;
+            WindowPos.ClampToVisible(Left, Top, Width, Height, out left, out top);
+            Left = left;
+            Top = top;
         }
+
+        void ApplySavedPhysicalLayout()
+        {
+            try
+            {
+                if (!hasSavedLayoutPx) return;
+                savedLayoutPx = ClampPhysicalLayout(savedLayoutPx);
+                IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                TaskbarGeometry.PositionWindow(this, hwnd, savedLayoutPx, true);
+            }
+            catch { }
+        }
+
+        static Native.RECT ClampPhysicalLayout(Native.RECT rect)
+        {
+            try
+            {
+                Native.MONITORINFO info;
+                if (!Native.TryGetMonitorInfoForRect(rect, out info)) return rect;
+                Native.RECT wa = info.rcWork;
+                int width = Math.Max(1, rect.Right - rect.Left);
+                int height = Math.Max(1, rect.Bottom - rect.Top);
+                int maxWidth = Math.Max(1, wa.Right - wa.Left);
+                int maxHeight = Math.Max(1, wa.Bottom - wa.Top);
+                if (width > maxWidth) width = maxWidth;
+                if (height > maxHeight) height = maxHeight;
+
+                int x = rect.Left;
+                int y = rect.Top;
+                const int MinVisible = 120;
+                if (x + MinVisible > wa.Right) x = wa.Right - MinVisible;
+                if (x + width - MinVisible < wa.Left) x = wa.Left - width + MinVisible;
+                if (y < wa.Top) y = wa.Top;
+                if (y + MinVisible > wa.Bottom) y = wa.Bottom - MinVisible;
+                return new Native.RECT
+                {
+                    Left = x,
+                    Top = y,
+                    Right = x + width,
+                    Bottom = y + height
+                };
+            }
+            catch { return rect; }
+        }
+
 
         void Launch(AppItem a)
         {

@@ -26,8 +26,11 @@ namespace Clover
         string baseDir;
         string exePath;
         string startupLnk;
-        Border root;
+        Button root;
+        Border panelIndicator;
         IntPtr hwnd;
+        HwndSource hwndSource;
+        bool shellHookRegistered;
         double lastLeft = double.NaN;
         double lastTop = double.NaN;
         bool hideTaskbar;
@@ -37,8 +40,17 @@ namespace Clover
 
         /// <summary>TaskbarCreated 消息号（explorer 重启后广播）。</summary>
         static uint taskbarCreatedMsg;
+        /// <summary>Shell Hook 消息号（顶层窗口创建/销毁）。</summary>
+        static uint shellHookMsg;
         static readonly Brush HoverBg = new SolidColorBrush(Color.FromArgb(46, 255, 255, 255));
         static readonly Brush IdleBg = new SolidColorBrush(Color.FromArgb(1, 255, 255, 255));
+
+        /// <summary>事件丢失时的低频兜底；正常定位由 Shell Hook 驱动。</summary>
+        internal const int TaskbarFallbackIntervalMs = 30000;
+        /// <summary>合并窗口密集创建/销毁事件，等任务栏动画和布局稳定后只校准一次。</summary>
+        internal const int ShellLayoutDebounceMs = 350;
+        /// <summary>UIAutomation 瞬时失败时只做两次一次性重试，不恢复高频常驻轮询。</summary>
+        internal const int LayoutProbeRetryLimit = 2;
 
         public TriggerWindow(string baseDir, Settings settings)
         {
@@ -64,10 +76,16 @@ namespace Clover
             WindowStartupLocation = WindowStartupLocation.Manual;
             Reposition();
 
-            root = new Border();
-            root.CornerRadius = new CornerRadius(Ui.R.Sm);
+            root = new Button();
+            root.Template = MakeTaskbarButtonTemplate();
             root.Background = IdleBg;
+            root.BorderBrush = Brushes.Transparent;
+            root.BorderThickness = new Thickness(0);
+            root.Padding = new Thickness(0);
             root.Cursor = Cursors.Hand;
+            root.Focusable = true;
+            KeyboardNavigation.SetIsTabStop(root, true);
+            root.FocusVisualStyle = null;
 
             Image img = new Image();
             img.Source = Ui.LoadCloverIcon(Path.Combine(baseDir, "res", "clover.png"));
@@ -77,39 +95,89 @@ namespace Clover
             RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
             img.HorizontalAlignment = HorizontalAlignment.Center;
             img.VerticalAlignment = VerticalAlignment.Center;
-            root.Child = img;
 
-            root.MouseEnter += delegate { root.Background = HoverBg; };
-            root.MouseLeave += delegate { root.Background = IdleBg; };
-            // 左键单击 = 打开/收起面板（「打开面板」菜单项已移除，这里是唯一入口）
-            root.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e) { e.Handled = true; TogglePanel(); };
+            Grid iconLayer = new Grid();
+            iconLayer.Children.Add(img);
+
+            // 面板打开时只加一条克制的 2px 强调色指示，不改变任务栏按钮尺寸与图标。
+            // 颜色沿用项目令牌，圆头用 Pill，深浅主题和自定义强调色会自动同步。
+            panelIndicator = new Border();
+            panelIndicator.Width = 20;
+            panelIndicator.Height = 2;
+            panelIndicator.CornerRadius = new CornerRadius(Ui.R.Pill);
+            panelIndicator.Background = Ui.Accent;
+            panelIndicator.HorizontalAlignment = HorizontalAlignment.Center;
+            panelIndicator.VerticalAlignment = VerticalAlignment.Bottom;
+            panelIndicator.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            panelIndicator.IsHitTestVisible = false;
+            panelIndicator.Visibility = Visibility.Collapsed;
+            iconLayer.Children.Add(panelIndicator);
+            root.Content = iconLayer;
+            UpdatePanelState();
+
+            root.MouseEnter += delegate { ApplyRootVisualState(); };
+            root.MouseLeave += delegate { ApplyRootVisualState(); };
+            root.GotKeyboardFocus += delegate { ApplyRootVisualState(); };
+            root.LostKeyboardFocus += delegate { ApplyRootVisualState(); };
+            // 原生 Button.Click 同时覆盖鼠标、Enter、Space 与 UIAutomation InvokePattern。
+            root.Click += delegate { TogglePanel(); };
             root.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e) { e.Handled = true; ShowMenu(); };
 
             Content = root;
-            Closed += delegate { if (hwnd != IntPtr.Zero) Native.UnregisterHotKey(hwnd, 1); };
+            TaskbarGeometry.LayoutChanged += OnTaskbarLayoutChanged;
+            Closed += delegate
+            {
+                if (hwnd != IntPtr.Zero) Native.UnregisterHotKey(hwnd, 1);
+                TaskbarGeometry.LayoutChanged -= OnTaskbarLayoutChanged;
+            };
 
-            // 任务栏图标变化时（新开/关闭窗口）跟随到图标组末尾
+            // Shell Hook 负责及时跟随任务栏图标变化；定时器只在事件丢失时低频兜底。
             DispatcherTimer follow = new DispatcherTimer();
-            follow.Interval = TimeSpan.FromSeconds(2);
+            follow.Interval = TimeSpan.FromMilliseconds(TaskbarFallbackIntervalMs);
             follow.Tick += delegate { if (!ErrorLog.ShuttingDown) Reposition(); };
             follow.Start();
             followTimer = follow;   // 存成字段，退出时要停
 
-            // 窗口关闭时把两个常驻定时器停掉，避免关停期间继续跳
+            layoutEventTimer = new DispatcherTimer(DispatcherPriority.Background);
+            layoutEventTimer.Interval = TimeSpan.FromMilliseconds(ShellLayoutDebounceMs);
+            layoutEventTimer.Tick += delegate
+            {
+                layoutEventTimer.Stop();
+                if (ErrorLog.ShuttingDown) return;
+                lastLeft = double.NaN;
+                lastTop = double.NaN;
+                Reposition(true);
+            };
+
+            // 窗口关闭时停掉任务栏监听，避免关停期间继续碰已关闭的窗口。
             Closed += delegate
             {
                 try { if (followTimer != null) { followTimer.Stop(); followTimer = null; } } catch { }
-                try { if (topTimer != null) { topTimer.Stop(); topTimer = null; } } catch { }
+                try { if (layoutEventTimer != null) { layoutEventTimer.Stop(); layoutEventTimer = null; } } catch { }
+                try { if (panel != null) panel.IsVisibleChanged -= PanelVisibilityChanged; } catch { }
+                try { if (shellHookRegistered && hwnd != IntPtr.Zero) Native.DeregisterShellHookWindow(hwnd); } catch { }
+                try { if (hwndSource != null) hwndSource.RemoveHook(OnHook); } catch { }
+                shellHookRegistered = false;
+                hwndSource = null;
+                OverlayGate.Maintenance = null;
                 try { if (startWin != null) startWin.Close(); } catch { }
             };
         }
 
         DispatcherTimer followTimer;
-        DispatcherTimer topTimer;
+        DispatcherTimer layoutEventTimer;
 
         public void AttachPanel(PanelWindow p)
         {
+            try { if (panel != null) panel.IsVisibleChanged -= PanelVisibilityChanged; } catch { }
             panel = p;
+            try { if (panel != null) panel.IsVisibleChanged += PanelVisibilityChanged; } catch { }
+            UpdatePanelState();
+        }
+
+        void PanelVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            UpdatePanelState();
         }
 
         /// <summary>
@@ -132,7 +200,7 @@ namespace Clover
 
             startWin = new StartButtonWindow();
             OverlayGate.Register(startWin,
-                delegate { return TaskbarGeometry.StartButtonRect(); },
+                delegate { return TaskbarGeometry.StartButtonRectPx(); },
                 delegate { return hideTaskbar; },
                 delegate { return startWin != null && !startWin.GatePaused; });
             return startWin;
@@ -145,260 +213,178 @@ namespace Clover
 
         void Reposition()
         {
+            Reposition(false);
+        }
+
+        /// <summary>
+        /// 重算按钮位置。UIAutomation、任务栏矩形、显示器与 DPI 都由
+        /// TaskbarGeometry 的统一快照提供；本窗口只消费物理像素结果。
+        /// </summary>
+        void Reposition(bool forceLayoutProbe)
+        {
             try
             {
-                TaskbarGeometry.Refresh();
-                if (hideTaskbar)
-                {
-                    Rect cl = TaskbarGeometry.CloverRect();
-                    Left = cl.X;
-                    Top = cl.Y;
-                    if (startWin != null)
-                    {
-                        Rect sb = TaskbarGeometry.StartButtonRect();
-                        startWin.Left = sb.X;
-                        startWin.Top = sb.Y;
-                    }
-                    return;
-                }
-                if (TaskbarGeometry.CurrentEdge != TaskbarGeometry.Edge.Bottom)
-                {
-                    Rect cl2 = TaskbarGeometry.CloverRect();
-                    Left = cl2.X;
-                    Top = cl2.Y;
-                    return;
-                }
-                // 用上次异步探测到的布局值（没有就先用几何估算），并顺手发起下一次探测。
-                // 界面线程不等待 UIAutomation。
-                RequestTaskbarLayout();
-
-                Rect tr;
-                double right;
-                if (hasCachedLayout)
-                {
-                    tr = cachedTrayRect;
-                    right = cachedButtonRight;
-                }
-                else
-                {
-                    // 还没有探测结果：先用几何估算位置，探测回来后会自动 Reposition 校正
-                    Rect fallback = TaskbarGeometry.CloverRect();
-                    Left = fallback.X;
-                    Top = fallback.Y;
-                    return;
-                }
-
-                double scale = 1.0;
-                try
-                {
-                    uint dpi = Native.GetDpiForSystem();
-                    if (dpi > 0) scale = dpi / 96.0;
-                }
-                catch { }
-
-                double left = right / scale;
-                double top = tr.Top / scale;
-                double maxLeft = SystemParameters.PrimaryScreenWidth - Width - 8;
-                if (left > maxLeft) left = maxLeft;
-
-                if (double.IsNaN(lastLeft) || Math.Abs(left - lastLeft) > 0.5)
-                {
-                    Left = left;
-                    lastLeft = left;
-                }
-                if (double.IsNaN(lastTop) || Math.Abs(top - lastTop) > 0.5)
-                {
-                    Top = top;
-                    lastTop = top;
-                }
+                TaskbarGeometry.Refresh(forceLayoutProbe);
+                Native.RECT rect = TaskbarGeometry.CloverRectPx();
+                ApplyPhysicalRect(rect);
+                if (startWin != null) startWin.ApplyTaskbarPosition();
             }
             catch { }
         }
 
-        /// <summary>
-        /// 用 UIAutomation 取任务栏矩形与应用按钮组右边界。
-        /// **异步**：界面线程不等待（FindFirst 需要消息泵，同步等必然超时）。
-        /// 结果回来后用缓存的布局值重新定位。
-        /// </summary>
-        static bool uiLayoutProbing;
-        static DateTime lastLayoutProbe = DateTime.MinValue;
-        static Rect cachedTrayRect = Rect.Empty;
-        static double cachedButtonRight;
-        static bool hasCachedLayout;
-
-        /// <summary>
-        /// 四叶草按钮的真实右边缘（DIP），来自任务栏图标组的 UIA 探测。
-        ///
-        /// 为什么需要对外暴露：面板的 PositionPanel() 原来用
-        /// TaskbarGeometry.CloverRect() 算位置，那套基于"开始按钮格"，
-        /// 算出来 x=59；而四叶草按钮实际贴在**任务栏图标组末尾**（x=411）。
-        /// 两套定位机制不一致，导致面板和按钮错位 350px。
-        ///
-        /// 返回 false 表示探测还没完成，调用方应先用估算值。
-        /// </summary>
-        public static bool TryGetButtonRight(out double rightDip)
+        void OnTaskbarLayoutChanged()
         {
-            rightDip = 0;
-            if (!hasCachedLayout) return false;
-            if (cachedButtonRight <= 0) return false;
-            double scale = 1.0;
+            if (ErrorLog.ShuttingDown) return;
             try
             {
-                uint dpi = Native.GetDpiForSystem();
-                if (dpi > 0) scale = dpi / 96.0;
-            }
-            catch { }
-            rightDip = cachedButtonRight / scale;
-            return true;
-        }
-
-        /// <summary>探测间隔下限：任务栏布局不会频繁变化，没必要高频查 UIAutomation。</summary>
-        const int LayoutProbeIntervalMs = 5000;
-
-        void RequestTaskbarLayout()
-        {
-            if (uiLayoutProbing) return;
-            if ((DateTime.Now - lastLayoutProbe).TotalMilliseconds < LayoutProbeIntervalMs) return;
-            uiLayoutProbing = true;
-            lastLayoutProbe = DateTime.Now;
-
-            SafeCall.RunWithDeadline<bool>(delegate
-            {
-                AutomationElement tray = AutomationElement.RootElement.FindFirst(
-                    TreeScope.Children,
-                    new PropertyCondition(AutomationElement.ClassNameProperty, "Shell_TrayWnd"));
-                if (tray == null) return false;
-
-                Rect r = tray.Current.BoundingRectangle;
-                if (r.IsEmpty || r.Width <= 0) return false;
-
-                double maxRight = 0;
-                AutomationElementCollection buttons = tray.FindAll(
-                    TreeScope.Descendants,
-                    new PropertyCondition(AutomationElement.ClassNameProperty, "Taskbar.TaskListButtonAutomationPeer"));
-                foreach (AutomationElement b in buttons)
-                {
-                    Rect br = b.Current.BoundingRectangle;
-                    if (br.IsEmpty || br.Width <= 0) continue;
-                    if (br.Right > maxRight) maxRight = br.Right;
-                }
-
-                cachedTrayRect = r;
-                cachedButtonRight = maxRight > 0 ? maxRight + 4 : r.Left + 56 + 4;
-                hasCachedLayout = true;
-                return true;
-            }, SafeCall.DefaultTimeoutMs, delegate(bool ok, bool _)
-            {
-                uiLayoutProbing = false;
-                // 关键：这里只“应用位置”，绝不再调 Reposition()。
-                // 否则 Reposition -> RequestTaskbarLayout -> 回调 Reposition 会形成
-                // 持续递归，导致每 2 秒产生一轮 UIAutomation 调用和闭包分配（实测 14 MB/分钟内存泄漏）。
-                if (ok && hasCachedLayout) ApplyCachedLayout();
-            });
-        }
-
-        /// <summary>把缓存的布局应用到窗口位置，不触发新的探测。</summary>
-        /// <summary>
-        /// 把缓存的布局应用到窗口位置，不触发新的探测。
-        /// 注意：本方法由 SafeCall 的后台回调调用，必须在界面线程执行
-        /// （WPF 的 Left/Top 只能在创建窗口的线程上改）。
-        /// </summary>
-        void ApplyCachedLayout()
-        {
-            try
-            {
-                // 跨线程访问 WPF 属性会抛 InvalidOperationException，
-                // 这里统一切回界面线程执行。
                 if (!Dispatcher.CheckAccess())
                 {
-                    Dispatcher.BeginInvoke(new Action(ApplyCachedLayout));
+                    Dispatcher.BeginInvoke(new Action(OnTaskbarLayoutChanged));
                     return;
                 }
-
-                if (!hasCachedLayout) return;
-                if (hideTaskbar) return;
-                if (TaskbarGeometry.CurrentEdge != TaskbarGeometry.Edge.Bottom) return;
-
-                double scale = 1.0;
-                try
-                {
-                    uint dpi = Native.GetDpiForSystem();
-                    if (dpi > 0) scale = dpi / 96.0;
-                }
-                catch { }
-
-                double left = cachedButtonRight / scale;
-                double top = cachedTrayRect.Top / scale;
-                double maxLeft = SystemParameters.PrimaryScreenWidth - Width - 8;
-                if (left > maxLeft) left = maxLeft;
-
-                if (double.IsNaN(lastLeft) || Math.Abs(left - lastLeft) > 0.5)
-                {
-                    Left = left;
-                    lastLeft = left;
-                }
-                if (double.IsNaN(lastTop) || Math.Abs(top - lastTop) > 0.5)
-                {
-                    Top = top;
-                    lastTop = top;
-                }
+                Native.RECT rect = TaskbarGeometry.CloverRectPx();
+                ApplyPhysicalRect(rect);
+                if (startWin != null) startWin.ApplyTaskbarPosition();
             }
-            catch (Exception ex)
+            catch { }
+        }
+
+        void ApplyPhysicalRect(Native.RECT rect)
+        {
+            if (rect.Right <= rect.Left || rect.Bottom <= rect.Top) return;
+            if (!double.IsNaN(lastLeft) && !double.IsNaN(lastTop)
+                && Math.Abs(rect.Left - lastLeft) <= 0.5
+                && Math.Abs(rect.Top - lastTop) <= 0.5) return;
+
+            TaskbarGeometry.PositionWindow(this, hwnd, rect, true);
+            lastLeft = rect.Left;
+            lastTop = rect.Top;
+        }
+
+        /// <summary>兼容旧面板调用；返回值实际是四叶草左缘。</summary>
+        public static bool TryGetButtonRight(out double rightDip)
+        {
+            return TaskbarGeometry.TryGetButtonLeft(out rightDip);
+        }
+
+        public Native.RECT ActualWindowRectPx()
+        {
+            Native.RECT r = TaskbarGeometry.ActualWindowRectPx(this);
+            return r.Right > r.Left && r.Bottom > r.Top ? r : TaskbarGeometry.CloverRectPx();
+        }
+
+        /// <summary>四叶草实际窗口矩形（供现有诊断文字使用）。</summary>
+        public Rect ActualWindowRect()
+        {
+            Native.RECT r = ActualWindowRectPx();
+            double scale = TaskbarGeometry.Current.Scale;
+            return new Rect(r.Left / scale, r.Top / scale,
+                (r.Right - r.Left) / scale, (r.Bottom - r.Top) / scale);
+        }
+
+        /// <summary>当前四叶草位置所采用的数据来源，供诊断页显示。</summary>
+        public string PositionSource
+        {
+            get
             {
-                ErrorLog.Warn("应用任务栏布局失败: " + ex.Message);
+                TaskbarGeometry.Snapshot s = TaskbarGeometry.Current;
+                if (hideTaskbar) return "统一任务栏快照（隐藏模式）";
+                if (s.TaskButtonsLocated) return "统一任务栏快照（UIAutomation 应用按钮组）";
+                if (s.StartLocated) return "统一任务栏快照（UIAutomation 开始按钮）";
+                return "统一任务栏快照（" + TaskbarGeometry.SourceDisplayName(s.Source) + "）";
             }
         }
+
+        public static DateTime LastLayoutCalibrated { get { return TaskbarGeometry.LastCalibrated; } }
 
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
             hwnd = new WindowInteropHelper(this).Handle;
             Native.SetWindowLong(hwnd, -20, Native.GetWindowLong(hwnd, -20) | 0x80);
-            HwndSource.FromHwnd(hwnd).AddHook(OnHook);
+            ApplyPhysicalRect(TaskbarGeometry.CloverRectPx());
+            hwndSource = HwndSource.FromHwnd(hwnd);
+            if (hwndSource != null) hwndSource.AddHook(OnHook);
             Native.RegisterHotKey(hwnd, 1, 0x0002 | 0x0001, 0x20);
 
             // 注册 explorer 重启广播消息（任务栏重建后重新应用隐藏状态）
             try { taskbarCreatedMsg = Native.RegisterWindowMessage("TaskbarCreated"); }
             catch { taskbarCreatedMsg = 0; }
 
-            // 定期把自己抬回任务栏之上（任务栏是 topmost，用户点击它后可能压住本按钮）。
-            // 显示/隐藏（含全屏时隐藏 + 悬停显示）统一由 OverlayGate 负责。
-            DispatcherTimer top = new DispatcherTimer();
-            top.Interval = TimeSpan.FromMilliseconds(1200);
-            top.Tick += delegate
-            {
-                if (ErrorLog.ShuttingDown) return;   // 关停期间不再碰窗口
-                // 卡死恢复：看门狗曾因主进程卡死还原过任务栏（留下 guard-restored 标记）。
-                // 如果用户仍勾选"隐藏系统任务栏"，自动重新隐藏一次——配额由标记文件保证整轮仅 1 次。
-                if (hideTaskbar && WatchdogResume.TryConsumeRehidePermission())
-                {
-                    try
-                    {
-                        TaskbarVisibility.Apply(true);
-                        lastLeft = double.NaN;
-                        lastTop = double.NaN;
-                        Reposition();
-                        OverlayGate.Refresh();
-                        Ui.Log("卡死恢复：已按用户设置重新隐藏任务栏（本次运行仅此 1 次）");
-                    }
-                    catch (Exception ex)
-                    {
-                        ErrorLog.Warn("卡死恢复后重新隐藏失败: " + ex.Message);
-                    }
-                }
+            // 顶层窗口创建/销毁会改变任务栏应用按钮组。Shell Hook 负责即时通知，
+            // 350ms 防抖后才跑一次 UIA；30 秒定时器只是兜底。
+            try { shellHookMsg = Native.RegisterWindowMessage("SHELLHOOK"); }
+            catch { shellHookMsg = 0; }
+            RegisterShellHook(false);
+            QueueTaskbarLayoutRefresh();
 
-                if (Visibility != Visibility.Visible) return;
-                if (hwnd != IntPtr.Zero)
-                    Native.SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
+            // 置顶与可见性统一由 OverlayGate 的 700ms Tick 管理；这里仅复用它处理
+            // 看门狗恢复标记，不再额外创建 1.2 秒置顶定时器。
+            OverlayGate.Maintenance = delegate
+            {
+                MaintainTaskbarSafety();
             };
-            top.Start();
-            topTimer = top;
             if (hideTaskbar)
             {
+                // 先把安全网启动，再动系统任务栏；主进程异常退出时才有恢复保障。
+                Heartbeat.Start(baseDir);
+                Guard.SetRequired(baseDir, true);
                 StartButtonWindow start = EnsureStartButton();
                 if (start != null) start.Show();
             }
             ApplyTaskbarVisibility(hideTaskbar);
+        }
+
+        void RegisterShellHook(bool force)
+        {
+            try
+            {
+                if (hwnd == IntPtr.Zero || shellHookMsg == 0) return;
+                if (force && shellHookRegistered)
+                {
+                    try { Native.DeregisterShellHookWindow(hwnd); } catch { }
+                    shellHookRegistered = false;
+                }
+                if (!shellHookRegistered)
+                    shellHookRegistered = Native.RegisterShellHookWindow(hwnd);
+            }
+            catch { shellHookRegistered = false; }
+        }
+
+        /// <summary>HSHELL_WINDOWCREATED / HSHELL_WINDOWDESTROYED 会改变任务栏应用按钮组。</summary>
+        internal static bool IsTaskbarLayoutShellEvent(int code)
+        {
+            return code == 1 || code == 2;
+        }
+
+        void QueueTaskbarLayoutRefresh()
+        {
+            try
+            {
+                if (layoutEventTimer == null) return;
+                layoutEventTimer.Stop();
+                layoutEventTimer.Start();
+            }
+            catch { }
+        }
+
+        void MaintainTaskbarSafety()
+        {
+            if (ErrorLog.ShuttingDown || !hideTaskbar) return;
+            if (!WatchdogResume.TryConsumeRehidePermission()) return;
+
+            try
+            {
+                TaskbarVisibility.Apply(true);
+                lastLeft = double.NaN;
+                lastTop = double.NaN;
+                Reposition();
+                Ui.Log("卡死恢复：已按用户设置重新隐藏任务栏（本次运行仅此 1 次）");
+            }
+            catch (Exception ex)
+            {
+                ErrorLog.Warn("卡死恢复后重新隐藏失败: " + ex.Message);
+            }
         }
 
         IntPtr OnHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -408,6 +394,20 @@ namespace Clover
                 TogglePanel();
                 handled = true;
                 return IntPtr.Zero;
+            }
+
+            if (msg == shellHookMsg && shellHookMsg != 0
+                && IsTaskbarLayoutShellEvent(unchecked((int)wParam.ToInt64())))
+            {
+                QueueTaskbarLayoutRefresh();
+                return IntPtr.Zero;
+            }
+
+            // 显示器布局、DPI 或任务栏设置改变时同样重新校准。事件合并后执行，
+            // 避免系统切换缩放时一串消息触发重复 UIA。
+            if (msg == 0x007E || msg == 0x02E0 || msg == 0x001A) // WM_DISPLAYCHANGE / WM_DPICHANGED / WM_SETTINGCHANGE
+            {
+                QueueTaskbarLayoutRefresh();
             }
 
             // explorer 重启后任务栏窗口是新建的：原来隐藏的状态会丢，按钮定位也会失效。
@@ -420,11 +420,12 @@ namespace Clover
                     // 任务栏是全新的窗口，上次那条"定位正常"的日志状态已经过时。
                     // 清掉它，好让下一次 Refresh 重新报一条真实结果，
                     // 否则 explorer 重启后若定位降级，日志会一直沉默。
-                    TaskbarGeometry.ResetUiStateLog();
+                    TaskbarGeometry.Reset();
+                    RegisterShellHook(true);
                     ApplyTaskbarVisibility(hideTaskbar);
                     lastLeft = double.NaN;
                     lastTop = double.NaN;
-                    Reposition();
+                    Reposition(true);
                     OverlayGate.Refresh();
                 }
                 catch (Exception ex)
@@ -486,7 +487,7 @@ namespace Clover
             try
             {
                 PanelWindow created = panelFactory();
-                if (created != null) panel = created;
+                if (created != null) AttachPanel(created);
             }
             catch (Exception ex)
             {
@@ -509,10 +510,99 @@ namespace Clover
                 if (root == null) return;
                 root.Cursor = loading ? Cursors.Wait : Cursors.Hand;
                 root.Opacity = loading ? 0.62 : 1;
-                root.ToolTip = loading ? "正在加载主面板…" : null;
+                UpdatePanelState();
             }
             catch { }
         }
+
+        static ControlTemplate MakeTaskbarButtonTemplate()
+        {
+            FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
+            border.SetValue(Border.BackgroundProperty,
+                new TemplateBindingExtension(Control.BackgroundProperty));
+            border.SetValue(Border.BorderBrushProperty,
+                new TemplateBindingExtension(Control.BorderBrushProperty));
+            border.SetValue(Border.BorderThicknessProperty,
+                new TemplateBindingExtension(Control.BorderThicknessProperty));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(Ui.R.Sm));
+
+            FrameworkElementFactory presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.ContentProperty,
+                new TemplateBindingExtension(ContentControl.ContentProperty));
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Stretch);
+            border.AppendChild(presenter);
+
+            ControlTemplate template = new ControlTemplate(typeof(Button));
+            template.VisualTree = border;
+            return template;
+        }
+
+        /// <summary>
+        /// 键盘焦点必须清晰可见。高对比度模式使用系统 HighlightBrush；普通主题复用
+        /// Accent，不引入第二套颜色。状态仍同时写入名称和 Tooltip，不只靠颜色。
+        /// </summary>
+        void ApplyRootVisualState()
+        {
+            ApplyRootVisualState(root != null && root.IsKeyboardFocused);
+        }
+
+        void ApplyRootVisualState(bool focused)
+        {
+            if (root == null) return;
+            root.Background = focused
+                ? (SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.AccentSoft)
+                : (root.IsMouseOver ? HoverBg : IdleBg);
+            root.BorderBrush = focused
+                ? (SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Ui.Accent)
+                : Brushes.Transparent;
+            root.BorderThickness = focused ? new Thickness(2) : new Thickness(0);
+        }
+
+        /// <summary>同步任务栏按钮的打开指示、Tooltip 与辅助功能名称。</summary>
+        void UpdatePanelState()
+        {
+            try
+            {
+                if (root == null) return;
+
+                bool open = panel != null && panel.IsVisible;
+                if (panelIndicator != null)
+                    panelIndicator.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+
+                string name;
+                string tip;
+                if (panelLoading)
+                {
+                    name = "正在加载四叶草面板";
+                    tip = "正在加载主面板…";
+                }
+                else if (open)
+                {
+                    name = "收起四叶草面板";
+                    tip = "收起四叶草面板";
+                }
+                else
+                {
+                    name = "打开四叶草面板";
+                    tip = "打开四叶草面板";
+                }
+
+                AutomationProperties.SetName(root, name);
+                AutomationProperties.SetHelpText(root, "左键" + (open ? "收起" : "打开")
+                    + "主面板，右键打开菜单");
+                AutomationProperties.SetName(this, name);
+                AutomationProperties.SetHelpText(this, "左键" + (open ? "收起" : "打开")
+                    + "主面板，右键打开菜单");
+                root.ToolTip = tip;
+            }
+            catch { }
+        }
+
+        internal Border TestPanelIndicator { get { return panelIndicator; } }
+        internal Button TestRootButton { get { return root; } }
+        internal string TestAccessibleName { get { return root == null ? "" : AutomationProperties.GetName(root); } }
+        internal void TestApplyFocusVisual(bool focused) { ApplyRootVisualState(focused); }
 
         /// <summary>上次构建的菜单（仅测试用；生产代码不读它）。</summary>
         internal ContextMenu lastMenu;
@@ -661,20 +751,33 @@ namespace Clover
             try
             {
                 if (!settings.EffectiveTaskbarHiding && on) return;
-
-                hideTaskbar = on;
-                settings.HideTaskbar = on;
-                settings.Save();
-
-                TaskbarVisibility.Apply(on);
                 if (on)
                 {
+                    // 先启用心跳和看门狗，再修改系统状态。若随后隐藏任务栏时主进程出错，
+                    // 子进程已经有能力恢复，而不是留下不可见任务栏。
+                    Heartbeat.Start(baseDir);
+                    Guard.SetRequired(baseDir, true);
+                    hideTaskbar = true;
+                    settings.HideTaskbar = true;
+                    settings.Save();
+                    TaskbarVisibility.Apply(true);
+
                     StartButtonWindow start = EnsureStartButton();
                     if (start != null) start.Show();
                 }
-                else if (startWin != null)
+                else
                 {
-                    startWin.Hide();
+                    // 先恢复系统任务栏，再停安全网。顺序反过来会产生一个没有看门狗保护、
+                    // 任务栏仍不可见的窗口期。
+                    TaskbarVisibility.Apply(false);
+                    hideTaskbar = false;
+                    settings.HideTaskbar = false;
+                    settings.Save();
+                    if (startWin != null) startWin.Hide();
+
+                    Guard.SetRequired(baseDir, false);
+                    Heartbeat.Stop();
+                    Heartbeat.Cleanup(baseDir);
                 }
 
                 lastLeft = double.NaN;
@@ -783,32 +886,40 @@ namespace Clover
                     default: edgeName = "底部"; break;
                 }
 
-                string sourceName = TaskbarGeometry.LastSource;
-                if (sourceName == "workArea") sourceName = "工作区推断";
-                else if (sourceName == "trayWindow") sourceName = "任务栏窗口矩形";
-                else sourceName = "回退估算（降级）";
+                TaskbarGeometry.Snapshot snapshot = TaskbarGeometry.Current;
+                string sourceName = TaskbarGeometry.SourceDisplayName(snapshot.Source);
+                string calibration = snapshot.TaskButtonsLocated
+                    ? "应用按钮组已校准（UIAutomation）"
+                    : (snapshot.StartLocated
+                        ? "开始按钮已校准（UIAutomation）"
+                        : "未校准，使用原生几何估算");
 
                 Rect s = TaskbarGeometry.StartCell;
-                Rect c = TaskbarGeometry.CloverRect();
+                Rect c = ActualWindowRect();
+                string calibrated = LastLayoutCalibrated == DateTime.MinValue
+                    ? "尚未成功"
+                    : LastLayoutCalibrated.ToString("yyyy-MM-dd HH:mm:ss");
 
                 string msg =
                     "任务栏位置：" + edgeName + "，厚度 " + Math.Round(TaskbarGeometry.Thickness) + " px\r\n"
                     + "几何来源：" + sourceName + "\r\n"
-                    + "精确校准：" + (TaskbarGeometry.PreciseLocated ? "已校准（UIAutomation）" : "未校准，用估算值")
+                    + "精确校准：" + calibration
                     + "\r\n"
                     + "DPI 缩放：" + TaskbarGeometry.ScaleFactor().ToString("0.##") + "\r\n"
                     + "\r\n"
                     + "开始按钮格：" + Fmt(s) + "\r\n"
-                    + "四叶草按钮：" + Fmt(c) + "\r\n"
+                    + "四叶草实际窗口：" + Fmt(c) + "\r\n"
+                    + "按钮定位来源：" + PositionSource + "\r\n"
+                    + "最后按钮组校准：" + calibrated + "\r\n"
                     + "\r\n";
 
-                if (TaskbarGeometry.LastSource == "fallback")
+                if (snapshot.Source == "fallback")
                 {
                     msg += "⚠ 几何推断失败，已回退到底部 48px。\r\n"
                         + "按钮位置可能不准。常见原因：任务栏刚重建、或被第三方任务栏工具接管。\r\n"
                         + "程序会自动重试，通常几秒后恢复。";
                 }
-                else if (!TaskbarGeometry.PreciseLocated)
+                else if (!TaskbarGeometry.HasPreciseCalibration(snapshot))
                 {
                     msg += "说明：尚未取得原生开始按钮的精确矩形，当前是估算位置。\r\n"
                         + "按钮仍可正常点击，只是可能横向偏几像素。";
@@ -902,17 +1013,24 @@ namespace Clover
                 // 看门狗
                 try
                 {
-                    string hb = Path.Combine(baseDir, "config", "heartbeat");
-                    if (File.Exists(hb))
+                    if (!hideTaskbar)
                     {
-                        DateTime t = File.GetLastWriteTime(hb);
-                        double age = (DateTime.Now - t).TotalSeconds;
-                        msg += "看门狗心跳：" + t.ToString("HH:mm:ss") + "（" + Math.Round(age) + " 秒前）\r\n"
-                            + "  " + (age < 30 ? "正常" : "⚠ 心跳偏旧，看门狗可能重启过程序") + "\r\n\r\n";
+                        msg += "看门狗：按需待机（仅隐藏系统任务栏时运行）\r\n\r\n";
                     }
                     else
                     {
-                        msg += "看门狗心跳：文件不存在（看门狗可能未启用）\r\n\r\n";
+                        string hb = Path.Combine(baseDir, "config", "heartbeat");
+                        if (File.Exists(hb))
+                        {
+                            DateTime t = File.GetLastWriteTime(hb);
+                            double age = (DateTime.Now - t).TotalSeconds;
+                            msg += "看门狗心跳：" + t.ToString("HH:mm:ss") + "（" + Math.Round(age) + " 秒前）\r\n"
+                                + "  " + (age < 30 ? "正常" : "⚠ 心跳偏旧，看门狗可能重启过程序") + "\r\n\r\n";
+                        }
+                        else
+                        {
+                            msg += "看门狗心跳：尚未建立（隐藏模式应自动重试）\r\n\r\n";
+                        }
                     }
                 }
                 catch { }

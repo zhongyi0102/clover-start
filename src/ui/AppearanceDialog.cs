@@ -1100,7 +1100,7 @@ namespace Clover
                 int sy = (short)((lp >> 16) & 0xFFFF);
 
                 Native.RECT r;
-                if (!Native.GetWindowRect(hwnd, out r)) return IntPtr.Zero;
+                if (!Native.GetWindowRectPhysical(hwnd, out r)) return IntPtr.Zero;
 
                 System.Windows.Interop.HwndSource src =
                     System.Windows.Interop.HwndSource.FromHwnd(hwnd);
@@ -1268,7 +1268,7 @@ namespace Clover
 
                 Native.RECT r;
                 IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(w).Handle;
-                if (!Native.GetWindowRect(hwnd, out r)) return false;
+                if (!Native.GetWindowRectPhysical(hwnd, out r)) return false;
 
                 return p.X >= r.Left && p.X <= r.Right
                     && p.Y >= r.Top && p.Y <= r.Bottom;

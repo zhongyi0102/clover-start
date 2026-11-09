@@ -34,10 +34,11 @@ namespace Clover
         public const int WS_MAXIMIZEBOX = 0x00010000;
 
         // SetWindowPos 的 uFlags（只列本文件用到的）
-        const uint SWP_NOSIZE = 0x0001;
-        const uint SWP_NOMOVE = 0x0002;
-        const uint SWP_NOZORDER = 0x0004;
-        const uint SWP_FRAMECHANGED = 0x0020;
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOMOVE = 0x0002;
+        public const uint SWP_NOZORDER = 0x0004;
+        public const uint SWP_NOACTIVATE = 0x0010;
+        public const uint SWP_FRAMECHANGED = 0x0020;
 
         /// <summary>
         /// 去掉标题栏的最小化按钮。
@@ -208,8 +209,84 @@ namespace Clover
         [DllImport("user32.dll")]
         public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
+        /// <summary>
+        /// 临时把当前线程切到 Per-Monitor V2 坐标语义。
+        ///
+        /// 整个 WPF 进程仍保持原有 DPI 感知模式；这里只在一次 Win32 几何调用期间
+        /// 使用，避免混合 DPI 下 GetWindowRect / SetWindowPos 被系统虚拟化成主屏坐标。
+        /// </summary>
+        [DllImport("user32.dll")]
+        static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+
+        static readonly IntPtr DpiAwarenessPerMonitorV2 = new IntPtr(-4);
+
+        /// <summary>读取窗口真实物理像素矩形；旧系统不支持线程 DPI API 时安全回退。</summary>
+        public static bool GetWindowRectPhysical(IntPtr hWnd, out RECT rect)
+        {
+            rect = new RECT();
+            IntPtr previous = IntPtr.Zero;
+            try
+            {
+                try { previous = SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2); }
+                catch { previous = IntPtr.Zero; }
+                return GetWindowRect(hWnd, out rect);
+            }
+            finally
+            {
+                if (previous != IntPtr.Zero)
+                {
+                    try { SetThreadDpiAwarenessContext(previous); } catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 用真实物理像素移动窗口。只临时改变本次调用的坐标解释，不改变进程或窗口
+        /// 的 DPI 感知模式，因此不会让既有 WPF 控件树突然重排。
+        /// </summary>
+        public static bool SetWindowPosPhysical(IntPtr hWnd, IntPtr insertAfter,
+            int x, int y, int width, int height, uint flags)
+        {
+            IntPtr previous = IntPtr.Zero;
+            try
+            {
+                try { previous = SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2); }
+                catch { previous = IntPtr.Zero; }
+                return SetWindowPos(hWnd, insertAfter, x, y, width, height, flags);
+            }
+            finally
+            {
+                if (previous != IntPtr.Zero)
+                {
+                    try { SetThreadDpiAwarenessContext(previous); } catch { }
+                }
+            }
+        }
+
         [DllImport("user32.dll")]
         public static extern bool GetCursorPos(out POINT point);
+
+        [DllImport("user32.dll")]
+        public static extern bool ScreenToClient(IntPtr hWnd, ref POINT point);
+
+        /// <summary>把物理屏幕坐标转换成目标窗口客户区坐标，避免混合 DPI 虚拟化。</summary>
+        public static bool ScreenToClientPhysical(IntPtr hWnd, ref POINT point)
+        {
+            IntPtr previous = IntPtr.Zero;
+            try
+            {
+                try { previous = SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2); }
+                catch { previous = IntPtr.Zero; }
+                return ScreenToClient(hWnd, ref point);
+            }
+            finally
+            {
+                if (previous != IntPtr.Zero)
+                {
+                    try { SetThreadDpiAwarenessContext(previous); } catch { }
+                }
+            }
+        }
 
         // ---- 按键状态（拖放检测用）----
         // GetAsyncKeyState 读物理按键状态，不受窗口焦点影响。
@@ -257,6 +334,17 @@ namespace Clover
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern uint RegisterWindowMessage(string name);
 
+        /// <summary>
+        /// 让指定窗口接收 Shell Hook 通知（消息号由 RegisterWindowMessage("SHELLHOOK") 取得）。
+        /// 用它监听顶层窗口创建/销毁，比固定频率扫描任务栏按钮组更省资源。
+        /// </summary>
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool RegisterShellHookWindow(IntPtr hWnd);
+
+        /// <summary>取消 Shell Hook 通知。</summary>
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool DeregisterShellHookWindow(IntPtr hWnd);
+
         public struct POINT
         {
             public int X;
@@ -273,6 +361,74 @@ namespace Clover
             public int Top;
             public int Right;
             public int Bottom;
+        }
+
+        public const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromRect(ref RECT rect, uint flags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+        /// <summary>取窗口所在显示器的完整区与工作区（均为物理像素）。</summary>
+        public static bool TryGetMonitorInfoForWindow(IntPtr hWnd, out MONITORINFO info)
+        {
+            info = new MONITORINFO();
+            IntPtr previous = IntPtr.Zero;
+            try
+            {
+                try { previous = SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2); }
+                catch { previous = IntPtr.Zero; }
+                IntPtr monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+                if (monitor == IntPtr.Zero) return false;
+                info.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+                return GetMonitorInfo(monitor, ref info);
+            }
+            catch { return false; }
+            finally
+            {
+                if (previous != IntPtr.Zero)
+                {
+                    try { SetThreadDpiAwarenessContext(previous); } catch { }
+                }
+            }
+        }
+
+        /// <summary>取指定物理像素矩形最近的显示器信息。</summary>
+        public static bool TryGetMonitorInfoForRect(RECT rect, out MONITORINFO info)
+        {
+            info = new MONITORINFO();
+            IntPtr previous = IntPtr.Zero;
+            try
+            {
+                try { previous = SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2); }
+                catch { previous = IntPtr.Zero; }
+                IntPtr monitor = MonitorFromRect(ref rect, MONITOR_DEFAULTTONEAREST);
+                if (monitor == IntPtr.Zero) return false;
+                info.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+                return GetMonitorInfo(monitor, ref info);
+            }
+            catch { return false; }
+            finally
+            {
+                if (previous != IntPtr.Zero)
+                {
+                    try { SetThreadDpiAwarenessContext(previous); } catch { }
+                }
+            }
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -309,8 +465,14 @@ namespace Clover
         {
             edge = 3;
             rc = new RECT();
+            IntPtr previous = IntPtr.Zero;
             try
             {
+                // ABM_GETTASKBARPOS 也必须和 UIAutomation 使用同一套物理坐标；
+                // 混合 DPI 下若任由系统虚拟化，这两个来源会相差一个缩放倍率。
+                try { previous = SetThreadDpiAwarenessContext(DpiAwarenessPerMonitorV2); }
+                catch { previous = IntPtr.Zero; }
+
                 APPBARDATA d = new APPBARDATA();
                 d.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
                 IntPtr r = SHAppBarMessage(0x05, ref d); // ABM_GETTASKBARPOS
@@ -321,6 +483,13 @@ namespace Clover
                 return rc.Right > rc.Left && rc.Bottom > rc.Top;
             }
             catch { return false; }
+            finally
+            {
+                if (previous != IntPtr.Zero)
+                {
+                    try { SetThreadDpiAwarenessContext(previous); } catch { }
+                }
+            }
         }
 
         /// <summary>任务栏是否处于自动隐藏状态（ABS_AUTOHIDE = 0x1）。</summary>

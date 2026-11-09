@@ -830,7 +830,7 @@ config\manual-apps.json    只读历史数据（旧版本「手动添加应用�
   res\clover.ico, clover.png 四叶草图标
   src\core\                  纯逻辑层（零 WPF 依赖，可单独编译成 DLL）
   src\ui\                    界面层（依赖 WPF）
-  tests\                     54 个测试套件与机器可读汇总
+  tests\                     60 个测试套件与机器可读汇总
   .github\workflows\         Windows 构建、分层校验与非桌面测试
   tools\make-pinyin.ps1      生成拼音表
   build.ps1                  编译（csc.exe，无需 MSBuild）
@@ -947,6 +947,8 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `Guard.cs` | 看门狗（`--guard` 模式） |
 | `HeartbeatFile.cs` | 心跳文件读写（看门狗据此判卡死） |
 | `SafeCall.cs` | UIAutomation/COM 异步包装：纯后台执行或带截止时间执行；超时只回调一次并丢弃迟到结果 |
+| `TaskbarProbeCoordinator.cs` | 任务栏探测纯状态机：事件合并、单飞、generation、防旧结果覆盖、有限重试 |
+| `VisibleLoadTimer.cs` | 主面板可见周期计时：隐藏取消、旧 generation 失效 |
 | `FullscreenWatch.cs` | 全屏判定（含多显示器） |
 | `SystemSearch.cs` | **系统级搜索**：开始菜单 + 注册表（App Paths / Uninstall），同步返回（实测 8–15ms）|
 | `FileExtGroups.cs` | **后缀分组**（doc/xls/ppt/pdf/图片/压缩包/安装包/其他）+ `KeepEntry` 类型过滤判定（文件夹与后缀两个独立状态）|
@@ -977,13 +979,13 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 
 | 文件 | 负责 |
 |---|---|
-| `TriggerWindow.cs` | 四叶草悬浮按钮、右键菜单、开机自启、任务栏布局探测缓存 |
+| `TriggerWindow.cs` | 四叶草任务栏按钮、右键菜单、开机自启、Shell 布局事件接入与辅助功能状态 |
 | `StartButtonWindow.cs` | 任务栏隐藏时的「开始」按钮 |
 | `MiniTaskbarWindow.cs` | 左下角迷你任务栏 |
 | `GlassBackdrop.cs` | **毛玻璃背景**：固定图裁剪 + 模糊 + 染色 + 噪点 + 边缘高光；截屏模式保留备用 |
 | `SearchResultList.cs` | **搜索结果列表**：已安装应用（拼音）+ 系统 Instant，按来源分组 |
 | `OverlayGate.cs` | 悬浮按钮的全屏隐藏 / 悬停唤出统一调度 |
-| `TaskbarGeometry.cs` | 任务栏所在边/厚度、开始按钮定位 |
+| `TaskbarGeometry.cs` | 全程序唯一任务栏快照：物理像素、多显示器/DPI、开始按钮与应用按钮组统一定位 |
 | `TaskList.cs` | 枚举顶层窗口、切换/关闭 |
 | `IconCache.cs` | 图标内存 + 磁盘缓存、过期清理、**快捷方式去箭头**、**商店应用图标**（`IShellItemImageFactory`）|
 | `AppearanceDialog.cs` | **外观窗口**：预设按钮、参数滑块（拖动预览/松手写盘）、色板 + `#RRGGBB` 输入框、背景模式、恢复默认 |
@@ -1026,6 +1028,9 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\OpenFolderTest.cs` | 「打开文件所在位置」路径解析 |
 | `tests\FullscreenTest.cs` | 全屏检测（真建无边框全屏窗口） |
 | `tests\TaskbarCreatedTest.cs` | TaskbarCreated 消息注册与接收 |
+| `tests\TaskbarStabilityTest.cs` | 500 次 Shell 事件风暴、generation、有限重试、负坐标与混合 DPI 几何 |
+| `tests\TaskbarAccessibilityTest.cs` | 四叶草原生 Button、键盘、UIAutomation、焦点与冗余状态反馈 |
+| `tests\VisibleLoadTimerTest.cs` | 首屏计时隐藏取消与旧 generation 隔离 |
 | `tests\ActiveRowTest.cs` | 任务栏行高亮判定（输入回调只读缓存后的纯逻辑） |
 | `tests\VirtualDesksTest.cs` | 虚拟桌面存储：名称安全 / 坐标 / 增删改名 / 持久化 / 容错 |
 | `tests\DeskRootChangeTest.cs` | **存放目录切换**（69 条）：6 类路径校验 / 盘点 / 全有或全无 / **中途失败回滚** / `IsUnder` 前缀边界（`C:\desks2` 不算 `C:\desks` 的子目录）|
@@ -1089,7 +1094,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 
 **看门狗（`--guard` 模式）**
 
-主进程启动时会以无界面子进程方式拉起 `CloverStart.exe --guard <主进程PID> <目录>`。它做两件事：
+看门狗只在启用「隐藏系统任务栏」时按需启动；默认模式不常驻第二个进程，也不写心跳文件。开启隐藏前，主进程先拉起无界面子进程 `CloverStart.exe --guard <主进程PID> <目录> <停止事件>`；关闭隐藏时先恢复任务栏，再通过命名事件让看门狗协作退出。它做两件事：
 
 **1. 等主进程退出 → 还原**
 
@@ -1107,7 +1112,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 - 连续 **10 秒**判定无响应、且 `system-state.json` 存在未还原状态时，执行还原并写 WARN
 - **只还原任务栏，绝不杀主进程**
 - 主进程恢复响应后，如果用户仍勾选隐藏，可以再隐藏，但**同一次运行最多自动重新隐藏 1 次**，避免来回抖动
-  - 实现：看门狗还原后写 `config\guard-restored` 标记；主进程的定时器检测到该标记且用户仍勾选隐藏时，自动重新隐藏一次并**删除标记**（用完即失效）
+  - 实现：看门狗还原后写 `config\guard-restored` 标记；主进程复用悬浮窗维护 Tick 检测该标记，若用户仍勾选隐藏则自动重新隐藏一次并**删除标记**（用完即失效）
   - 启动时会清理遗留标记，保证每次运行重新计数
 
 **约束**：无界面、无常驻窗口、1 秒轮询、只读一个小文件；任何异常都不外抛。
@@ -1230,7 +1235,7 @@ CloverStart.exe --reset-all --keep-config   只撤销对系统的影响，保留
 > 注意：N 次异常退出需要 N+1 次启动才能累计——第一次启动是干净起点，不计。
 > 时钟回拨防护保留（未来时间戳不计入）。
 
-**心跳文件**：界面线程每 2 秒把 UTC ticks 写进 `config\heartbeat`，供看门狗在没有可检测窗口时判断卡死。正常退出时删除。
+**心跳文件**：仅在「隐藏系统任务栏」启用期间，界面线程每 2 秒把 UTC ticks 写进 `config\heartbeat`，供看门狗在没有可检测窗口时判断卡死。关闭隐藏或正常退出时删除。
 
 手动入口：
 
@@ -1257,9 +1262,9 @@ CloverStart.exe --restore-system   只还原系统状态然后退出
 
 | 定时器 | 间隔 | 用途 | 备注 |
 |---|---|---|---|
-| `OverlayGate` | 700ms / 150ms | 全屏检测 + 悬停唤出 | 仅全屏且开启悬停时才 150ms |
-| `TriggerWindow` 跟随 | 2s | 跟随任务栏按钮组末尾 | |
-| `TriggerWindow` 置顶 | 1.2s | 把按钮抬回任务栏之上 | 不可见时直接 return |
+| `OverlayGate` | 700ms / 150ms | 全屏检测、悬停唤出、悬浮窗置顶与安全维护 | 复用同一 Tick；仅全屏且开启悬停时才 150ms |
+| `TriggerWindow` 事件防抖 | 350ms（一次性） | Shell 窗口创建/销毁后校准任务栏按钮组末尾 | 密集事件只合并成一次 UIAutomation 探测 |
+| `TriggerWindow` 定位兜底 | 30s | 弥补 Shell 事件丢失 | UIAutomation 失败仅在 1s / 3s 各短重试一次 |
 | `PanelWindow` 任务栏列表 | 1.5s | 刷新窗口列表 | 只在面板可见时刷新 |
 | `AppWatcher` 去抖 | 2.5s | 合并文件变化事件 | 一次性，不常驻 |
 | `AppWatcher` 兜底 | 15 分钟 | 全量扫描兜底 | 已从 5 分钟放宽 |
@@ -1377,34 +1382,38 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 
 ### 任务栏几何定位与回退
 
-按钮位置按三级顺序确定，失败时逐级退让：
+`TaskbarGeometry` 是全程序唯一的任务栏布局服务。一次快照同时保存任务栏、所在显示器、工作区、DPI、方向、开始按钮格、应用按钮组末端和四叶草位置；四叶草、开始按钮、迷你任务栏与主面板都消费这份快照，不再各自探测或换算坐标。
+
+基础几何按以下顺序取得，失败时逐级退让：
 
 | 级别 | 依据 | 失败条件 |
 |---|---|---|
-| 1 | `SystemParameters.WorkArea` 与屏幕尺寸比较，判断任务栏在哪条边、多厚 | 工作区等于全屏（任务栏自动隐藏/被隐藏） |
-| 2 | 用 `Shell_TrayWnd` 窗口矩形推断边与厚度 | 找不到窗口、或矩形不合理（超出屏幕/厚度 > 80px） |
-| 3 | 回退到底部 48px 的固定估算 | —（最终兜底，不会失败） |
+| 1 | `ABM_GETTASKBARPOS`（AppBar 原生接口）取得任务栏物理矩形与贴边方向 | Explorer 正在重建或接口暂不可用 |
+| 2 | `Shell_TrayWnd` 的真实物理像素矩形，并结合最近显示器推断方向 | 找不到窗口或矩形无效 |
+| 3 | 主屏底部 48 DIP 的安全估算 | —（最终兜底，不会失败） |
 
-在此之上，用 UIAutomation 找原生「开始」按钮的真实矩形（`Name = 开始 / Start`）做精确定位；**失败时保留上面算出的估算位置**，不会让按钮消失或跑到屏幕外。每次状态变化写一条日志（不刷屏）：
+在此之上只发起**一次统一 UIAutomation 探测**，同时取得原生「开始 / Start」按钮和应用按钮组末端。探测单飞；Shell 密集事件合并到最新 generation，旧结果不能覆盖新布局；瞬时失败只在 1 秒、3 秒各重试一次。新结果成功前保留上一份精确缓存，失败时继续使用原生几何估算。预期的 `COM E_FAIL` 走静默通道，不会持续刷 WARN。
 
-- 成功：`开始按钮定位: ok/workArea`
-- 失败：`开始按钮定位失败，使用估算位置：<原因>（来源 <来源>）`
+- 精确：`任务栏布局定位: ok/uia/task-buttons，DPI <值>，代次 <n>`
+- 原生几何：`任务栏定位: ok/appbar（等待统一精确校准）`
+- 最终降级：`任务栏定位降级：找不到有效任务栏矩形，暂用主屏底部 48px`（状态变化时只记一次）
 
-`TriggerWindow` 每 2 秒跟随任务栏应用按钮组末尾重新定位；拿不到任务栏矩形时回退到上面的估算位置，不会卡在旧坐标。
+`TriggerWindow` 注册 Shell Hook，在顶层窗口创建/销毁后等待 350ms 合并密集事件，再校准到任务栏应用按钮组末尾；同时监听 `TaskbarCreated`、显示器/DPI/系统设置变化。30 秒低频轮询只作事件丢失兜底。拿不到任务栏矩形时回退到上面的估算位置，不会卡在旧坐标。
 
 ### 面板与按钮是否跟随开始按钮所在显示器
 
-**不跟随，只认主显示器。** 具体表现：
+**会跟随任务栏所在显示器，并支持负坐标与混合 DPI。** 任务栏快照保留真实物理像素，只有诊断文案和 WPF 无句柄回退才换算为 DIP：
 
-| 项目 | 依据 | 多显示器下的行为 |
+| 项目 | 依据 | 多显示器 / 混合 DPI 行为 |
 |---|---|---|
-| 面板初始位置 | `SystemParameters.WorkArea`（主屏工作区） | 出现在主屏左下 |
-| 面板还原位置 | `ClampToScreen()` 用 `PrimaryScreenWidth/Height` | 被限制在主屏范围内 |
-| 面板最大化 | `SystemParameters.WorkArea` | 铺满主屏 |
-| 四叶草按钮 / 开始按钮 / 迷你任务栏 | `TaskbarGeometry` 用 `PrimaryScreenWidth/Height` 与主屏 `WorkArea` | 定位在主屏任务栏 |
-| 全屏检测 | `MonitorFromWindow`（按窗口所在显示器） | **唯一按实际显示器判断的部分** |
+| 四叶草 / 开始 / 迷你任务栏 | 同一份 `TaskbarGeometry.Snapshot` + `SetWindowPos` 物理像素 | 跟随任务栏所在屏；支持顶部、底部、左侧、右侧与负坐标副屏 |
+| 主面板首次贴靠 | 快照中的四叶草矩形与该屏工作区 | 在任务栏所在屏贴着四叶草展开，不再假定左下角 |
+| 面板保存 / 还原 | `layout.json` 同时保存兼容 DIP 与物理矩形 | 显示器拔插后夹取到最近工作区，保留至少 120px 可见 |
+| 面板最大化 / 还原 | `MonitorFromWindow` 的 `rcWork` + 原物理矩形 | 只铺满面板当前所在屏的工作区 |
+| 悬停唤出 / 拖出边界 / 毛玻璃截取 | 物理鼠标坐标 + 物理窗口矩形 | 不受主屏缩放倍率虚拟化影响 |
+| 全屏检测 | `MonitorFromWindow`（按前台窗口所在显示器） | 副屏全屏也能正确识别 |
 
-也就是说：任务栏在主屏时一切正常；如果任务栏被移到副屏，或主副屏缩放比例不同（混合 DPI），按钮和面板会出现错位。这是已知限制，本轮未改动（需要 per-monitor DPI 支持，改动面大且必须实机验证）。
+窗口本身仍保持现有 WPF DPI 感知模式；原生几何调用在调用期间临时使用 Per-Monitor V2 坐标语义，避免改变整个控件树的布局行为。
 
 ## 测试
 
@@ -1412,9 +1421,9 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-当前脚本运行 **54 个套件**，不依赖测试框架，直接用 `csc` 编成 console exe；准确断言数和每套耗时写入 `tests\bin\test-summary.json`。
+当前脚本运行 **60 个套件**，不依赖测试框架，直接用 `csc` 编成 console exe；准确断言数和每套耗时写入 `tests\bin\test-summary.json`。
 
-最近一次本机完整运行（2026-11-06）：**54 / 54 个套件、2,825 条断言全部通过；`AcceptanceTest` 63 / 63 项通过**。
+最近一次完整运行的套件数、断言数与验收项以 `tests\bin\test-summary.json` 和 `tests\bin\acceptance-report.json` 为准；每次改动后都必须重新生成，README 不再保留容易过期的断言快照。
 
 CI 使用 `-CoreOnly` 跑 38 个不依赖交互式桌面的套件；真实创建 WPF 窗口、抢前台焦点和任务栏探测仍在本机完整测试中运行：
 
@@ -1530,7 +1539,7 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 | 10 | **一键回滚全量** | 构造 6 项脏状态 → `--reset-all` | ✅ **6/6 全部清干净**，退出码 0 |
 | 11 | **一键回滚保留配置** | 同上 → `--reset-all --keep-config` | ✅ 系统状态清干净，配置保留 |
 | 12 | **运行标记写入** | 启动后读 `crash-guard.json` | ✅ 含 `running:true` / `runStarted` / `crashRecordedThisRun` |
-| 13 | **心跳文件** | 启动后读 `config\heartbeat` | ✅ 存在且每 2 秒更新 |
+| 13 | **按需心跳文件** | 默认模式 / 开启隐藏任务栏后分别检查 `config\heartbeat` | ✅ 默认不存在；隐藏期间存在且每 2 秒更新 |
 
 **关于第 9 项，需要诚实说明**：实测在 Windows 10/11 上，即使把 `InternalBufferSize` 压到 4 KB、用 8 个线程并发写 4 万个文件，内核依然能把事件合并送达（产生约 8 万个事件、**0 次 Error**），无法稳定复现 `InternalBufferOverflowException`。
 
@@ -1990,7 +1999,7 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 - **面板打不开 / 反复崩溃** → 运行 `CloverStart.exe --safe-mode`，它会关掉所有会动系统状态的功能，只留面板和按钮。
 - **新软件没出现在面板里**：确认它确实在开始菜单里有快捷方式，或右键四叶草 → 重新扫描应用。
 - **图标不对/是旧的**：删掉 `config\iconcache\` 目录，重启程序会自动重建。
-- **按钮位置/大小不对**：看 `config\error.log` 里有没有「开始按钮定位失败」，确认任务栏在主屏；改 `src\ui\TriggerWindow.cs` 的 `Width/Height`（44×48）与 `Reposition()` 里的 `right + 4` 间距后重新编译。
+- **按钮位置/大小不对**：打开设置 → 维护，查看「任务栏定位」里的几何来源、实际窗口、DPI 与最后校准时间；同时在 `config\error.log` 搜索「任务栏定位」。按钮尺寸与间距统一在 `TaskbarGeometry.BuildCloverRect()` 中按 44×48 DIP 和 4 DIP 换算，不要只改单个窗口。
 - **想完全停用某个自动行为**：右键四叶草 → 取消对应勾选项，或直接改 `config\settings.json` 里的开关。
 - **看门狗残留**：正常退出时会自动结束。若看到多余的 `CloverStart.exe --guard` 进程，直接结束即可，它不持有任何资源。
 

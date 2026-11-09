@@ -97,6 +97,12 @@ namespace Clover
             // CrashGuard 依赖 ErrorLog/Ui，测试时链接全部源码（见 run-tests.ps1）
             RunMarkerTests();
 
+            // ---------- 9. 看门狗按需策略 ----------
+            Check(!Guard.IsRequired(false), "默认不隐藏任务栏时看门狗待机");
+            Check(Guard.IsRequired(true), "隐藏系统任务栏时才需要看门狗");
+            Guard.SetRequired(Path.GetTempPath(), false);
+            Check(!Guard.IsRunning, "关闭需求不会留下当前进程拉起的看门狗");
+
             Console.WriteLine(failed == 0 ? "ALL PASSED" : failed + " FAILED");
             Environment.Exit(failed == 0 ? 0 : 1);
         }

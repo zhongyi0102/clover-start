@@ -244,6 +244,32 @@ namespace Clover
                 return "ok（只完成应用磁贴）";
             });
 
+            Verify("★分批渲染中途收起后，下次显示完整重建", delegate
+            {
+                panel.TestSwitchCategory("");
+                int partial = panel.TestTileCount();
+                if (!panel.TestDeferredRenderPending())
+                    return "夹具未进入分批状态，当前磁贴 " + partial;
+
+                panel.HidePanel();
+                WaitForDispatcher(250);
+                int stopped = panel.TestTileCount();
+                WaitForDispatcher(150);
+                if (panel.TestTileCount() != stopped)
+                    return "隐藏后旧批次仍继续创建磁贴：" + stopped + " -> " + panel.TestTileCount();
+                if (panel.TestDeferredRenderComplete())
+                    return "隐藏后的半成品被误标记为完整内容";
+
+                panel.ShowPanel();
+                if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                    return "再次显示后未在 5 秒内完成重建";
+                int completed = panel.TestTileCount();
+                if (completed <= stopped)
+                    return "重建后磁贴没有补全：" + stopped + " -> " + completed;
+                if (!panel.TestTileMapConsistent()) return "重建后磁贴映射不一致";
+                return "ok（隐藏时停在 " + stopped + " 块，再显示完整重建为 " + completed + " 块）";
+            });
+
             Verify("★隐藏任务列表保持休眠", delegate
             {
                 return panel.TestHiddenTaskListDormant()
@@ -323,6 +349,42 @@ namespace Clover
             // 恢复面板：3c 把它收起了，后续断言需要可见的面板
             panel.ShowPanel();
             WaitForDispatcher(400);
+
+            // ---------- 3d. 任务栏四叶草反馈面板开/关状态 ----------
+            Verify("★四叶草按钮同步面板打开状态与辅助名称", delegate
+            {
+                TriggerWindow trigger = null;
+                try
+                {
+                    Settings triggerSettings = Settings.Load(root);
+                    triggerSettings.HideTaskbar = false;
+                    trigger = new TriggerWindow(root, triggerSettings);
+                    trigger.AttachPanel(panel);
+
+                    if (trigger.TestPanelIndicator == null) return "没有状态指示条";
+                    if (trigger.TestPanelIndicator.Visibility != Visibility.Visible)
+                        return "面板已打开但指示条未显示";
+                    if (trigger.TestAccessibleName != "收起四叶草面板")
+                        return "打开态辅助名称错误：" + trigger.TestAccessibleName;
+
+                    panel.Hide();
+                    WaitForDispatcher(50);
+                    if (trigger.TestPanelIndicator.Visibility != Visibility.Collapsed)
+                        return "面板收起后指示条未隐藏";
+                    if (trigger.TestAccessibleName != "打开四叶草面板")
+                        return "关闭态辅助名称错误：" + trigger.TestAccessibleName;
+
+                    panel.Show();
+                    WaitForDispatcher(50);
+                    if (trigger.TestPanelIndicator.Visibility != Visibility.Visible)
+                        return "面板再次打开后指示条未恢复";
+                    return "ok（指示条与打开/收起名称同步）";
+                }
+                finally
+                {
+                    try { if (trigger != null) trigger.Close(); } catch { }
+                }
+            });
 
             // ---------- 4. 分类栏：内部键兼容，界面使用清晰显示名 ----------
             Verify("★分类栏默认四个标签（常用/全部/文件库/桌面收纳）", delegate
@@ -1904,7 +1966,8 @@ namespace Clover
 
                     string[] need = new string[]
                     {
-                        "桌面收纳", "存放目录", "更改…", "打开目录", "恢复默认", "搬过去"
+                        "桌面收纳", "存放目录", "更改…", "打开目录", "恢复默认", "搬过去",
+                        "实际窗口", "最后校准"
                     };
                     foreach (string n in need)
                     {

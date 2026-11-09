@@ -59,9 +59,7 @@ namespace Clover
             Height = 48;
             WindowStartupLocation = WindowStartupLocation.Manual;
             TaskbarGeometry.Refresh();
-            Rect sb = TaskbarGeometry.StartButtonRect();
-            Left = sb.X;
-            Top = sb.Y;
+            ApplyTaskbarPosition();
 
             root = new Border();
             root.CornerRadius = new CornerRadius(Ui.R.Sm);
@@ -193,9 +191,9 @@ namespace Clover
             try
             {
                 TaskbarGeometry.Refresh();
-                double scl = TaskbarGeometry.ScaleFactor();
-                int cx = (int)Math.Round((TaskbarGeometry.StartCell.X + TaskbarGeometry.StartCell.Width / 2) * scl);
-                int cy = (int)Math.Round((TaskbarGeometry.StartCell.Y + TaskbarGeometry.StartCell.Height / 2) * scl);
+                Native.RECT cell = TaskbarGeometry.Current.StartCellPx;
+                int cx = cell.Left + (cell.Right - cell.Left) / 2;
+                int cy = cell.Top + (cell.Bottom - cell.Top) / 2;
 
                 IntPtr tray = Native.FindWindow("Shell_TrayWnd", null);
                 if (tray == IntPtr.Zero) return;
@@ -204,7 +202,11 @@ namespace Clover
                 IntPtr target = Native.WindowFromPoint(cx, cy);
                 if (target == IntPtr.Zero) target = tray;
 
-                IntPtr lParam = (IntPtr)((cy << 16) | (cx & 0xFFFF));
+                // WM_LBUTTON* 的 lParam 必须是目标窗口**客户区**坐标，不能直接塞屏幕坐标。
+                Native.POINT client = new Native.POINT { X = cx, Y = cy };
+                if (!Native.ScreenToClientPhysical(target, ref client))
+                    client = new Native.POINT { X = cx, Y = cy };
+                IntPtr lParam = (IntPtr)(((client.Y & 0xFFFF) << 16) | (client.X & 0xFFFF));
                 Native.PostMessage(target, 0x0201, (IntPtr)1, lParam); // WM_LBUTTONDOWN
                 Thread.Sleep(StepClick);
                 Native.PostMessage(target, 0x0202, IntPtr.Zero, lParam); // WM_LBUTTONUP
@@ -229,6 +231,17 @@ namespace Clover
             base.OnSourceInitialized(e);
             hwnd = new WindowInteropHelper(this).Handle;
             Native.SetWindowLong(hwnd, -20, Native.GetWindowLong(hwnd, -20) | 0x80);
+            ApplyTaskbarPosition();
+        }
+
+        public void ApplyTaskbarPosition()
+        {
+            try
+            {
+                Native.RECT rect = TaskbarGeometry.StartButtonRectPx();
+                TaskbarGeometry.PositionWindow(this, hwnd, rect, true);
+            }
+            catch { }
         }
     }
 }

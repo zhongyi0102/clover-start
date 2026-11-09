@@ -536,7 +536,7 @@ namespace Clover
                 if (hwnd == IntPtr.Zero) return false;
 
                 Native.RECT r;
-                if (!Native.GetWindowRect(hwnd, out r)) return false;
+                if (!Native.GetWindowRectPhysical(hwnd, out r)) return false;
 
                 return DesktopDragGesture.HasLeftWindow(
                     p.X, p.Y, r.Left, r.Top, r.Right, r.Bottom);

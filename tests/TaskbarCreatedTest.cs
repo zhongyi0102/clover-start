@@ -163,6 +163,25 @@ namespace Clover
             uint other = RegisterWindowMessage("CloverSomethingElse");
             Check(other != m1, "不同消息名得到不同消息号");
 
+            // ---------- 1b. 任务栏按钮组改为 Shell 事件驱动 ----------
+            Check(TriggerWindow.IsTaskbarLayoutShellEvent(1),
+                "HSHELL_WINDOWCREATED 会触发任务栏布局校准");
+            Check(TriggerWindow.IsTaskbarLayoutShellEvent(2),
+                "HSHELL_WINDOWDESTROYED 会触发任务栏布局校准");
+            Check(!TriggerWindow.IsTaskbarLayoutShellEvent(3),
+                "非创建/销毁 Shell 事件不会误触发校准");
+            Check(TriggerWindow.TaskbarFallbackIntervalMs >= 15000,
+                "定位兜底轮询已降为低频",
+                TriggerWindow.TaskbarFallbackIntervalMs + "ms");
+            Check(TriggerWindow.ShellLayoutDebounceMs >= 250
+                    && TriggerWindow.ShellLayoutDebounceMs <= 500,
+                "Shell 密集事件使用短防抖合并",
+                TriggerWindow.ShellLayoutDebounceMs + "ms");
+            Check(TriggerWindow.LayoutProbeRetryLimit > 0
+                    && TriggerWindow.LayoutProbeRetryLimit <= 2,
+                "UIAutomation 失败只做有限次短重试",
+                TriggerWindow.LayoutProbeRetryLimit + " 次");
+
             // ---------- 2. 子进程监听，父进程投递 ----------
             string flag = System.IO.Path.Combine(
                 System.IO.Path.GetTempPath(), "clover-taskbarcreated-" + Process.GetCurrentProcess().Id + ".flag");

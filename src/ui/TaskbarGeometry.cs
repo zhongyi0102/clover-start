@@ -1,418 +1,682 @@
 using System;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Interop;
+using System.Windows.Threading;
 
 namespace Clover
 {
     /// <summary>
-    /// 任务栏几何：从 SystemParameters.WorkArea 判断任务栏在哪条边、多厚，
-    /// 并通过 UIAutomation 自动定位原生“开始”按钮的位置（DIP 坐标）。
+    /// 全程序唯一的任务栏布局服务。
+    /// 一份快照同时保存物理像素与逻辑坐标；一次 UIAutomation 探测同时取得
+    /// 开始按钮和应用按钮组，避免多个窗口并发访问 Explorer。
     /// </summary>
     static class TaskbarGeometry
     {
         public enum Edge { Bottom, Top, Left, Right }
 
-        public static Edge CurrentEdge = Edge.Bottom;
-
-        /// <summary>
-        /// 几何值从"估算"变成"精确"时的回调。
-        ///
-        /// 面板用它重新定位：首次 PositionPanel 只能用估算的 StartCell，
-        /// 而 UIA 探测是异步的、完成时面板已经显示出来了。
-        /// 不重新定位就会差几十上百像素（实测差 99px）。
-        /// </summary>
-        public static Action GeometryRefined;
-        public static double Thickness = 48;
-        public static Rect StartCell = Rect.Empty;
-
-        /// <summary>最近一次几何来源：workArea / trayWindow / fallback。供诊断显示。</summary>
-        public static string LastSource = "";
-
-        /// <summary>
-        /// 是否已用 UIAutomation 精确校准过开始按钮位置。
-        /// false 表示 StartCell 只是估算值（按钮可能偏几个像素），供诊断显示。
-        /// </summary>
-        public static bool PreciseLocated;
-
-        public static double ScaleFactor()
+        public sealed class Snapshot
         {
-            try
-            {
-                uint dpi = Native.GetDpiForSystem();
-                if (dpi > 0) return dpi / 96.0;
-            }
-            catch { }
-            return 1.0;
+            public long Generation;
+            public Edge Edge;
+            public Native.RECT TaskbarPx;
+            public Native.RECT MonitorPx;
+            public Native.RECT WorkPx;
+            public Native.RECT StartCellPx;
+            public Native.RECT CloverPx;
+            public int Dpi = 96;
+            public bool StartLocated;
+            public bool TaskButtonsLocated;
+            public bool TaskbarVisible;
+            public bool AutoHide;
+            public string Source = "fallback";
+            public DateTime CalibratedAt = DateTime.MinValue;
+
+            public double Scale { get { return Dpi > 0 ? Dpi / 96.0 : 1.0; } }
+            public Rect TaskbarDip { get { return ToLocalDip(TaskbarPx, Scale); } }
+            public Rect MonitorDip { get { return ToLocalDip(MonitorPx, Scale); } }
+            public Rect WorkDip { get { return ToLocalDip(WorkPx, Scale); } }
+            public Rect StartCellDip { get { return ToLocalDip(StartCellPx, Scale); } }
+            public Rect CloverDip { get { return ToLocalDip(CloverPx, Scale); } }
+
+            public Snapshot Clone() { return (Snapshot)MemberwiseClone(); }
         }
 
-        public static void Refresh()
+        sealed class ProbeResult
         {
-            try
-            {
-                double sw = SystemParameters.PrimaryScreenWidth;
-                double sh = SystemParameters.PrimaryScreenHeight;
-                Rect wa = SystemParameters.WorkArea;
-
-                Edge e = Edge.Bottom;
-                double thickness = 48;
-                string source = "workArea";
-
-                if (wa.Bottom < sh - 1) { e = Edge.Bottom; thickness = sh - wa.Bottom; }
-                else if (wa.Top > 1) { e = Edge.Top; thickness = wa.Top; }
-                else if (wa.Left > 1) { e = Edge.Left; thickness = wa.Left; }
-                else if (wa.Right < sw - 1) { e = Edge.Right; thickness = sw - wa.Right; }
-                else
-                {
-                    // 工作区等于全屏（任务栏自动隐藏/被隐藏）：用任务栏窗口矩形推断
-                    source = "trayWindow";
-                    IntPtr tray = Native.FindWindow("Shell_TrayWnd", null);
-                    Native.RECT r;
-                    if (tray != IntPtr.Zero && Native.GetWindowRect(tray, out r))
-                    {
-                        double s = ScaleFactor();
-                        double top = r.Top / s;
-                        double bottom = r.Bottom / s;
-                        double left = r.Left / s;
-                        double right = r.Right / s;
-                        double w = right - left;
-                        double h = bottom - top;
-                        if (h > 0 && h <= 80 && top >= sh - 80) { e = Edge.Bottom; thickness = h; }
-                        else if (h > 0 && h <= 80 && bottom <= 80) { e = Edge.Top; thickness = h; }
-                        else if (w > 0 && w <= 80 && right <= 80) { e = Edge.Left; thickness = w; }
-                        else if (w > 0 && w <= 80 && left >= sw - 80) { e = Edge.Right; thickness = w; }
-                        else
-                        {
-                            // 矩形不合理：保持默认底部估算，并记一条，方便排查任务栏布局变化
-                            source = "fallback";
-                            Ui.Log("任务栏几何推断失败：矩形 " + r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom
-                                + " 屏幕 " + sw + "x" + sh + "，回退到底部 48");
-                        }
-                    }
-                    else
-                    {
-                        source = "fallback";
-                        Ui.Log("找不到 Shell_TrayWnd，回退到底部 48");
-                    }
-                }
-
-                if (thickness < 1) thickness = 48;
-                CurrentEdge = e;
-                Thickness = thickness;
-                LastSource = source;
-
-                switch (e)
-                {
-                    case Edge.Top:
-                        StartCell = new Rect(0, 0, 56, thickness);
-                        break;
-                    case Edge.Left:
-                        StartCell = new Rect(0, 0, thickness, 56);
-                        break;
-                    case Edge.Right:
-                        StartCell = new Rect(sw - thickness, 0, thickness, 56);
-                        break;
-                    default:
-                        StartCell = new Rect(0, sh - thickness, 56, thickness);
-                        break;
-                }
-
-                // 先用估算值（上面已经算好），再异步尝试用 UIAutomation 精确校正。
-                // 关键：界面线程绝不能同步等 UIAutomation——FindFirst 要往目标窗口发消息，
-                // 界面线程被占住会导致消息泵停转，反而必然超时。所以这里只发起，不等待。
-                ReportUiState(source);
-                StartUiProbe();
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "计算任务栏几何");
-            }
+            public Rect Tray;
+            public Rect Start;
+            public bool HasStart;
+            public double HorizontalTaskEnd = double.MinValue;
+            public double VerticalTaskEnd = double.MinValue;
+            public bool HasTaskButtons;
         }
 
-        static bool uiProbeRunning;
-        static DateTime lastProbe = DateTime.MinValue;
-        /// <summary>
-        /// 异步探测原生开始按钮的真实矩形。结果回来后在界面线程更新 StartCell。
-        /// 同一时刻只允许一个探测在跑；两次探测之间至少间隔 5 秒（任务栏布局不会频繁变）。
-        /// </summary>
-        static void StartUiProbe()
-        {
-            try
-            {
-                if (uiProbeRunning) return;
-                if ((DateTime.Now - lastProbe).TotalMilliseconds < 5000) return;
-                uiProbeRunning = true;
-                lastProbe = DateTime.Now;
-
-                SafeCall.RunWithDeadline<Rect?>(delegate
-                {
-                    AutomationElement tray = AutomationElement.RootElement.FindFirst(
-                        TreeScope.Children,
-                        new PropertyCondition(AutomationElement.ClassNameProperty, "Shell_TrayWnd"));
-                    if (tray == null) return null;
-
-                    AutomationElement btn = tray.FindFirst(
-                        TreeScope.Descendants,
-                        new PropertyCondition(AutomationElement.NameProperty, "开始"));
-                    if (btn == null)
-                    {
-                        btn = tray.FindFirst(
-                            TreeScope.Descendants,
-                            new PropertyCondition(AutomationElement.NameProperty, "Start"));
-                    }
-                    if (btn == null) return null;
-
-                    Rect r = btn.Current.BoundingRectangle;
-                    if (r.IsEmpty || r.Width <= 0 || r.Height <= 0) return null;
-                    return (Rect?)r;
-                }, SafeCall.DefaultTimeoutMs, delegate(bool ok, Rect? found)
-                {
-                    uiProbeRunning = false;
-                    try
-                    {
-                        if (!ok) return;                                   // 探测失败：保留估算值，不刷日志
-                        if (found == null || !found.HasValue) return;      // 找不到按钮：同上
-
-                        Rect r = found.Value;
-                        double s = ScaleFactor();
-                        Rect next = new Rect(r.X / s, r.Y / s, r.Width / s, r.Height / s);
-                        if (next.IsEmpty || next.Width <= 0) return;
-
-                        // 位置没明显变化就不动，避免抖动和无谓刷新
-                        bool changed = Math.Abs(next.X - StartCell.X) > 1 || Math.Abs(next.Y - StartCell.Y) > 1
-                            || Math.Abs(next.Width - StartCell.Width) > 1 || Math.Abs(next.Height - StartCell.Height) > 1;
-                        if (!changed) return;
-
-                        StartCell = next;
-                        PreciseLocated = true;
-                        // 记为“已用 uia 精确定位”，Refresh 再报 workArea 时就不会重复刷
-                        lastUiState = "ok/uia";
-                        Ui.Log("开始按钮定位: ok/uia");
-
-                        // ★ 通知外面：几何值从"估算"变成"精确"了。
-                        //
-                        // 为什么必须通知：面板的 PositionPanel() 用 CloverRect()
-                        // 算位置，而首次调用时 StartCell 还是估算值 (0, sh-48)，
-                        // 于是面板被放到 x=54（估算位置）而不是真实按钮旁边 (x=411)。
-                        // 实测：按钮在 411，面板跑到 554 —— 差 99px。
-                        try
-                        {
-                            Action cb = GeometryRefined;
-                            if (cb != null) cb();
-                        }
-                        catch { }
-                    }
-                    catch (Exception ex)
-                    {
-                        ErrorLog.Warn("应用开始按钮位置失败: " + ex.Message);
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                uiProbeRunning = false;
-                Ui.LogError(ex, "启动开始按钮探测");
-            }
-        }
-
+        public const int ProbeRetryLimit = 2;
+        public const int ProbeIntervalMs = 5000;
+        static readonly TaskbarProbeCoordinator probe =
+            new TaskbarProbeCoordinator(ProbeRetryLimit);
+        static readonly object sync = new object();
+        static Snapshot current = BuildEmergencySnapshot();
+        static DateTime lastProbeStarted = DateTime.MinValue;
+        static DispatcherTimer retryTimer;
         static string lastUiState;
 
-        /// <summary>
-        /// 只在状态变化时写一条日志，避免每 2 秒刷屏。
-        ///
-        /// 原先签名是 ReportUiState(fail, source)，但**所有调用点都传 fail=null**，
-        /// 于是 `else` 分支（写"定位失败"WARN）永远不会执行：
-        /// 退到估算位置（workArea / trayWindow / fallback）时记的是 `ok/workArea`，
-        /// 日志里看不出"其实没精确定位"。现在按来源判断：
-        /// fallback = 推断失败，trayWindow = 有任务栏但没精确校准。
-        /// </summary>
-        static void ReportUiState(string source)
+        public static event Action LayoutChanged;
+        public static Action GeometryRefined;
+
+        public static Snapshot Current
         {
-            bool degraded = string.Equals(source, "fallback", StringComparison.Ordinal);
+            get { lock (sync) return current.Clone(); }
+        }
 
-            string state = degraded ? ("degraded/" + source) : ("ok/" + source);
-            if (string.Equals(state, lastUiState, StringComparison.Ordinal)) return;
-            lastUiState = state;
-
-            if (degraded)
+        // 兼容既有调用点；所有值都来自同一快照。
+        public static Edge CurrentEdge { get { return Current.Edge; } }
+        public static Rect StartCell { get { return Current.StartCellDip; } }
+        public static string LastSource { get { return Current.Source; } }
+        public static bool PreciseLocated { get { return HasPreciseCalibration(Current); } }
+        public static DateTime LastCalibrated { get { return Current.CalibratedAt; } }
+        public static double Thickness
+        {
+            get
             {
-                ErrorLog.Warn("开始按钮定位降级：任务栏几何推断失败，回退到底部 48（来源 " + source + "）"
-                    + "。按钮位置可能不准，这通常是任务栏刚重建或第三方任务栏工具导致的，稍后会自动重试。");
-            }
-            else
-            {
-                Ui.Log("开始按钮定位: " + state + (PreciseLocated ? "" : "（尚未精确校准，用估算值）"));
+                Snapshot s = Current;
+                return (s.Edge == Edge.Left || s.Edge == Edge.Right)
+                    ? Width(s.TaskbarPx) / s.Scale : Height(s.TaskbarPx) / s.Scale;
             }
         }
 
-        /// <summary>让下一次 Refresh 重新写一条定位日志（例如任务栏重建后）。</summary>
-        public static void ResetUiStateLog()
-        {
-            lastUiState = null;
-        }
+        public static double ScaleFactor() { return Current.Scale; }
 
-        /// <summary>“开始”浮动按钮的位置（在开始按钮格子里居中，44x48）。</summary>
-        public static Rect StartButtonRect()
+        /// <summary>诊断界面使用的稳定中文名称；兼容旧版来源键。</summary>
+        public static string SourceDisplayName(string source)
         {
-            double w = 44;
-            double h = 48;
-            double x = StartCell.X + (StartCell.Width - w) / 2;
-            double y = StartCell.Y + (StartCell.Height - h) / 2;
-            return new Rect(x, y, w, h);
-        }
-
-        /// <summary>四叶草按钮：沿任务栏方向紧挨“开始”按钮。</summary>
-        public static Rect CloverRect()
-        {
-            Rect s = StartButtonRect();
-            switch (CurrentEdge)
+            switch (source ?? "")
             {
-                case Edge.Left:
-                case Edge.Right:
-                    return new Rect(StartCell.X, s.Bottom + 4, s.Width, s.Height);
-                default:
-                    return new Rect(s.Right + 4, StartCell.Y, s.Width, s.Height);
+                case "uia/task-buttons": return "UIAutomation 应用按钮组";
+                case "uia/start": return "UIAutomation 开始按钮";
+                case "appbar": return "AppBar 原生接口";
+                case "trayWindow": return "任务栏窗口矩形";
+                case "workArea": return "工作区推断（旧版）";
+                case "fallback": return "主屏底部回退估算（降级）";
+                default: return string.IsNullOrEmpty(source) ? "未知" : source;
             }
         }
 
-        /// <summary>
-        /// 迷你任务栏的贴边基准线（设备无关单位）。
-        ///
-        /// ── 为什么不能写死坐标 ──
-        ///
-        /// 之前是 `Top = 1152`（= 屏幕高 1200 − 任务栏 48），分辨率、DPI、
-        /// 任务栏位置一变就全错。这里按三种情况实时算：
-        ///
-        ///   1. **系统任务栏可见** → 迷你条底边贴任务栏上沿
-        ///      （用 SHAppBarMessage(ABM_GETTASKBARPOS) 取任务栏真实矩形）
-        ///   2. **任务栏被本程序隐藏** → 迷你条底边贴工作区最底部
-        ///      （此时 WorkArea 等于全屏，直接用屏幕底边）
-        ///   3. **任务栏自动隐藏** → 同 2，贴屏幕底部
-        ///
-        /// 返回值是该贴边方向上的「可用区下边界」：底部任务栏时是任务栏上沿，
-        /// 顶部任务栏时是任务栏下沿。
-        /// </summary>
-        /// <param name="bottomEdgeY">底部贴边的 Y 坐标（迷你条应把底边放在这里）</param>
-        /// <returns>成功算出返回 true；失败时调用方用屏幕底部兜底</returns>
-        public static bool MiniBarAnchor(out double bottomEdgeY)
+        internal static bool HasPreciseCalibration(Snapshot snapshot)
         {
-            bottomEdgeY = 0;
+            return snapshot != null && (snapshot.StartLocated || snapshot.TaskButtonsLocated);
+        }
+
+        public static void Refresh() { Refresh(false); }
+
+        /// <summary>刷新廉价原生几何，并按节流规则请求一次统一 UIA 校准。</summary>
+        public static void Refresh(bool forceProbe)
+        {
             try
             {
-                double s = ScaleFactor();
-                if (s <= 0) s = 1;
+                Snapshot previous = Current;
+                Snapshot native = BuildNativeSnapshot();
 
-                double screenH = SystemParameters.PrimaryScreenHeight;
-
-                // ---- 情况 2/3：任务栏被隐藏 或 自动隐藏 → 贴屏幕底 ----
-                bool taskbarHidden = !TaskbarVisibleForGeometry();
-                bool autoHide = Native.TaskbarAutoHide();
-
-                if (taskbarHidden || autoHide)
+                // 新一代精确结果返回前保留旧精确坐标，避免 Shell 事件风暴期间跳回估算位。
+                if ((previous.StartLocated || previous.TaskButtonsLocated)
+                    && SameMonitor(previous.MonitorPx, native.MonitorPx)
+                    && previous.Edge == native.Edge)
                 {
-                    bottomEdgeY = screenH;
-                    return true;
+                    native.StartCellPx = previous.StartCellPx;
+                    native.CloverPx = RebuildClover(previous.CloverPx, native);
+                    native.StartLocated = previous.StartLocated;
+                    native.TaskButtonsLocated = previous.TaskButtonsLocated;
+                    native.CalibratedAt = previous.CalibratedAt;
+                    if (native.Source != "fallback") native.Source = previous.Source;
                 }
 
-                // ---- 情况 1：任务栏可见 → 取它的真实矩形 ----
-                uint edge;
-                Native.RECT rc;
-                if (Native.GetTaskbarPos(out edge, out rc))
-                {
-                    double top = rc.Top / s;
-                    double bottom = rc.Bottom / s;
-                    double left = rc.Left / s;
-                    double right = rc.Right / s;
-
-                    // 只有「贴底部」的任务栏才把迷你条放它上面；
-                    // 其它边（上/左/右）由 MiniBarRect 走另一套排布
-                    if (edge == 3)
-                    {
-                        bottomEdgeY = top;   // 任务栏上沿
-                        return true;
-                    }
-
-                    if (edge == 1)
-                    {
-                        // 顶部任务栏：可用区从任务栏下沿开始
-                        bottomEdgeY = bottom;
-                        return true;
-                    }
-
-                    // 左/右任务栏：竖直方向不受影响，贴屏幕底
-                    bottomEdgeY = screenH;
-                    return true;
-                }
-
-                // ---- 兜底：用 WorkArea 推 ----
-                Rect wa = SystemParameters.WorkArea;
-                bottomEdgeY = (wa.Bottom > 0 && wa.Bottom < screenH - 1) ? wa.Bottom : screenH;
-                return true;
+                Commit(native, false);
+                ReportUiState(native);
+                RequestProbe(forceProbe);
             }
-            catch
-            {
-                try { bottomEdgeY = SystemParameters.PrimaryScreenHeight; } catch { }
-                return false;
-            }
+            catch (Exception ex) { Ui.LogError(ex, "计算任务栏几何"); }
         }
 
-        /// <summary>
-        /// 任务栏当前是否真的可见（用于几何判断）。
-        ///
-        /// 不能只看 `settings.HideTaskbar`：任务栏可能被别的程序隐藏，
-        /// 或者正在自动隐藏。这里直接问窗口本身。
-        /// </summary>
-        static bool TaskbarVisibleForGeometry()
+        public static void NotifyLayoutChanged() { Refresh(true); }
+
+        /// <summary>Explorer 重建后旧 HWND/坐标均无效，立即回到安全原生值。</summary>
+        public static void Reset()
         {
+            lock (sync)
+            {
+                probe.Reset();
+                lastProbeStarted = DateTime.MinValue;
+                current = BuildNativeSnapshot();
+            }
+            try { if (retryTimer != null) retryTimer.Stop(); } catch { }
+            lastUiState = null;
+            RaiseChanged(false);
+        }
+
+        public static void ResetUiStateLog() { lastUiState = null; }
+
+        static void RequestProbe(bool force)
+        {
+            if (!force && (DateTime.Now - lastProbeStarted).TotalMilliseconds < ProbeIntervalMs)
+                return;
+
+            lock (sync) probe.NotifyChange();
+            StartPendingProbe();
+        }
+
+        static void StartPendingProbe()
+        {
+            long generation;
+            lock (sync)
+            {
+                if (!probe.TryStart(out generation)) return;
+                lastProbeStarted = DateTime.Now;
+            }
+
+            SafeCall.RunWithDeadlineQuiet<ProbeResult>(ProbeTaskbar,
+                SafeCall.DefaultTimeoutMs, delegate(bool completed, ProbeResult found)
+            {
+                Dispatcher dispatcher = null;
+                try { dispatcher = Application.Current == null ? null : Application.Current.Dispatcher; }
+                catch { }
+
+                Action finish = delegate { CompleteProbe(generation, completed ? found : null); };
+                if (dispatcher != null && !dispatcher.CheckAccess())
+                {
+                    try { dispatcher.BeginInvoke(finish); }
+                    catch { CompleteProbe(generation, null); }
+                }
+                else finish();
+            });
+        }
+
+        static ProbeResult ProbeTaskbar()
+        {
+            AutomationElement tray = AutomationElement.RootElement.FindFirst(
+                TreeScope.Children,
+                new PropertyCondition(AutomationElement.ClassNameProperty, "Shell_TrayWnd"));
+            if (tray == null) return null;
+
+            Rect trayRect = tray.Current.BoundingRectangle;
+            if (!Valid(trayRect)) return null;
+
+            ProbeResult result = new ProbeResult();
+            result.Tray = trayRect;
+
+            AutomationElement start = tray.FindFirst(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.NameProperty, "开始"));
+            if (start == null)
+                start = tray.FindFirst(TreeScope.Descendants,
+                    new PropertyCondition(AutomationElement.NameProperty, "Start"));
+            if (start != null)
+            {
+                Rect r = start.Current.BoundingRectangle;
+                if (Valid(r)) { result.Start = r; result.HasStart = true; }
+            }
+
+            AutomationElementCollection buttons = tray.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ClassNameProperty,
+                    "Taskbar.TaskListButtonAutomationPeer"));
+            foreach (AutomationElement button in buttons)
+            {
+                try
+                {
+                    Rect r = button.Current.BoundingRectangle;
+                    if (!Valid(r)) continue;
+                    result.HorizontalTaskEnd = Math.Max(result.HorizontalTaskEnd, r.Right);
+                    result.VerticalTaskEnd = Math.Max(result.VerticalTaskEnd, r.Bottom);
+                    result.HasTaskButtons = true;
+                }
+                catch { }
+            }
+            return result;
+        }
+
+        static void CompleteProbe(long generation, ProbeResult found)
+        {
+            bool valid = found != null && Valid(found.Tray)
+                && (found.HasStart || found.HasTaskButtons);
+            TaskbarProbeCoordinator.Completion completion;
+            lock (sync) completion = probe.Complete(generation, valid);
+
+            if (completion.Apply)
+            {
+                Snapshot next = Current;
+                next.Generation = generation;
+                Native.RECT tray = FromRect(found.Tray);
+                if (Width(tray) > 0 && Height(tray) > 0) next.TaskbarPx = tray;
+                RefreshMonitorAndDpi(next);
+                next.Edge = InferEdge(next.TaskbarPx, next.MonitorPx);
+                next.WorkPx = EffectiveWorkArea(next);
+
+                if (found.HasStart) next.StartCellPx = FromRect(found.Start);
+                next.StartLocated = found.HasStart;
+                next.TaskButtonsLocated = found.HasTaskButtons;
+                next.CalibratedAt = DateTime.Now;
+                next.Source = found.HasTaskButtons ? "uia/task-buttons" : "uia/start";
+                double taskEnd = double.NaN;
+                if (found.HasTaskButtons)
+                    taskEnd = (next.Edge == Edge.Left || next.Edge == Edge.Right)
+                        ? found.VerticalTaskEnd : found.HorizontalTaskEnd;
+                next.CloverPx = BuildCloverRect(next, taskEnd);
+                Commit(next, true);
+                lastUiState = "ok/" + next.Source;
+                Ui.Log("任务栏布局定位: " + lastUiState + "，DPI " + next.Dpi
+                    + "，代次 " + generation);
+            }
+
+            if (completion.Rerun)
+            {
+                Dispatcher.CurrentDispatcher.BeginInvoke(
+                    DispatcherPriority.Background, new Action(StartPendingProbe));
+            }
+            else if (completion.Retry) ScheduleRetry(completion.RetryAttempt);
+        }
+
+        static void ScheduleRetry(int attempt)
+        {
+            if (ErrorLog.ShuttingDown || attempt <= 0 || attempt > ProbeRetryLimit) return;
+            if (retryTimer == null)
+            {
+                retryTimer = new DispatcherTimer(DispatcherPriority.Background);
+                retryTimer.Tick += delegate
+                {
+                    retryTimer.Stop();
+                    if (!ErrorLog.ShuttingDown) StartPendingProbe();
+                };
+            }
+            retryTimer.Stop();
+            retryTimer.Interval = TimeSpan.FromMilliseconds(attempt == 1 ? 1000 : 3000);
+            retryTimer.Start();
+        }
+
+        static void Commit(Snapshot next, bool refined)
+        {
+            bool changed;
+            lock (sync)
+            {
+                changed = !Equivalent(current, next);
+                current = next.Clone();
+            }
+            if (changed || refined) RaiseChanged(refined);
+        }
+
+        static bool Equivalent(Snapshot a, Snapshot b)
+        {
+            if (a == null || b == null) return false;
+            return a.Edge == b.Edge && a.Dpi == b.Dpi
+                && SameRect(a.TaskbarPx, b.TaskbarPx)
+                && SameRect(a.MonitorPx, b.MonitorPx)
+                && SameRect(a.WorkPx, b.WorkPx)
+                && SameRect(a.StartCellPx, b.StartCellPx)
+                && SameRect(a.CloverPx, b.CloverPx)
+                && a.StartLocated == b.StartLocated
+                && a.TaskButtonsLocated == b.TaskButtonsLocated
+                && a.TaskbarVisible == b.TaskbarVisible
+                && a.AutoHide == b.AutoHide
+                && string.Equals(a.Source, b.Source, StringComparison.Ordinal);
+        }
+
+        static bool SameRect(Native.RECT a, Native.RECT b)
+        {
+            return a.Left == b.Left && a.Top == b.Top
+                && a.Right == b.Right && a.Bottom == b.Bottom;
+        }
+
+        static void RaiseChanged(bool refined)
+        {
+            try { Action a = LayoutChanged; if (a != null) a(); } catch { }
+            if (!refined) return;
+            try { Action a = GeometryRefined; if (a != null) a(); } catch { }
+        }
+
+        static Snapshot BuildNativeSnapshot()
+        {
+            Snapshot s = new Snapshot();
+            IntPtr tray = Native.FindWindow("Shell_TrayWnd", null);
+            Native.RECT taskbar;
+            uint appbarEdge;
+            bool fromAppbar = Native.GetTaskbarPos(out appbarEdge, out taskbar);
+            if (!fromAppbar && tray != IntPtr.Zero)
+                Native.GetWindowRectPhysical(tray, out taskbar);
+
+            if (Width(taskbar) <= 0 || Height(taskbar) <= 0)
+                return BuildEmergencySnapshot();
+
+            s.TaskbarPx = taskbar;
+            s.TaskbarVisible = tray != IntPtr.Zero && Native.IsWindowVisible(tray);
+            s.AutoHide = Native.TaskbarAutoHide();
+            s.Source = fromAppbar ? "appbar" : "trayWindow";
+            RefreshMonitorAndDpi(s);
+            s.Edge = fromAppbar && appbarEdge <= 3
+                ? EdgeFromAppbar(appbarEdge) : InferEdge(taskbar, s.MonitorPx);
+            s.WorkPx = EffectiveWorkArea(s);
+            s.StartCellPx = EstimateStartCell(s);
+            s.CloverPx = BuildCloverRect(s, double.NaN);
+            return s;
+        }
+
+        static Snapshot BuildEmergencySnapshot()
+        {
+            Snapshot s = new Snapshot();
+            int dpi = 96;
+            try { uint d = Native.GetDpiForSystem(); if (d > 0) dpi = (int)d; } catch { }
+            double scale = dpi / 96.0;
+            int sw = Math.Max(1, (int)Math.Round(SystemParameters.PrimaryScreenWidth * scale));
+            int sh = Math.Max(1, (int)Math.Round(SystemParameters.PrimaryScreenHeight * scale));
+            int thick = Math.Max(1, (int)Math.Round(48 * scale));
+            s.Dpi = dpi;
+            s.Edge = Edge.Bottom;
+            s.MonitorPx = R(0, 0, sw, sh);
+            s.WorkPx = R(0, 0, sw, Math.Max(1, sh - thick));
+            s.TaskbarPx = R(0, Math.Max(0, sh - thick), sw, sh);
+            s.StartCellPx = EstimateStartCell(s);
+            s.CloverPx = BuildCloverRect(s, double.NaN);
+            s.Source = "fallback";
+            return s;
+        }
+
+        static void RefreshMonitorAndDpi(Snapshot s)
+        {
+            Native.MONITORINFO info;
+            if (Native.TryGetMonitorInfoForRect(s.TaskbarPx, out info))
+            {
+                s.MonitorPx = info.rcMonitor;
+                s.WorkPx = info.rcWork;
+            }
+            else { s.MonitorPx = s.TaskbarPx; s.WorkPx = s.TaskbarPx; }
+
+            int dpi = 0;
             try
             {
                 IntPtr tray = Native.FindWindow("Shell_TrayWnd", null);
-                if (tray == IntPtr.Zero) return false;
-                return Native.IsWindowVisible(tray);
+                if (tray != IntPtr.Zero) dpi = Native.GetDpiForWindow(tray);
             }
-            catch { return true; }
+            catch { }
+            if (dpi <= 0) { try { dpi = (int)Native.GetDpiForSystem(); } catch { } }
+            s.Dpi = dpi > 0 ? dpi : 96;
         }
 
-        /// <summary>
-        /// 迷你任务栏位置。**不再写死坐标**，按任务栏状态自适应。
-        ///
-        /// ── 三种排布 ──
-        ///
-        ///   · **底部任务栏**：紧挨四叶草右侧，底边贴任务栏上沿
-        ///   · **顶部任务栏**：紧挨四叶草右侧，顶边贴任务栏下沿
-        ///   · **左/右任务栏**：竖排，紧挨四叶草下方，底边贴屏幕底
-        ///
-        /// 任务栏被隐藏时（本程序隐藏或自动隐藏），一律按「贴屏幕底部」处理。
-        /// </summary>
+        static Native.RECT EffectiveWorkArea(Snapshot s)
+        {
+            if (!s.TaskbarVisible || s.AutoHide) return s.MonitorPx;
+            Native.RECT w = s.MonitorPx;
+            switch (s.Edge)
+            {
+                case Edge.Top: w.Top = Math.Max(w.Top, s.TaskbarPx.Bottom); break;
+                case Edge.Left: w.Left = Math.Max(w.Left, s.TaskbarPx.Right); break;
+                case Edge.Right: w.Right = Math.Min(w.Right, s.TaskbarPx.Left); break;
+                default: w.Bottom = Math.Min(w.Bottom, s.TaskbarPx.Top); break;
+            }
+            return w;
+        }
+
+        static Native.RECT EstimateStartCell(Snapshot s)
+        {
+            int along = Math.Max(1, Px(56, s.Scale));
+            if (s.Edge == Edge.Top || s.Edge == Edge.Bottom)
+                return R(s.TaskbarPx.Left, s.TaskbarPx.Top,
+                    Math.Min(s.TaskbarPx.Right, s.TaskbarPx.Left + along), s.TaskbarPx.Bottom);
+            return R(s.TaskbarPx.Left, s.TaskbarPx.Top, s.TaskbarPx.Right,
+                Math.Min(s.TaskbarPx.Bottom, s.TaskbarPx.Top + along));
+        }
+
+        static Native.RECT BuildCloverRect(Snapshot s, double taskEnd)
+        {
+            int w = Math.Max(1, Px(44, s.Scale));
+            int h = Math.Max(1, Px(48, s.Scale));
+            int gap = Math.Max(1, Px(4, s.Scale));
+            int x, y;
+            if (s.Edge == Edge.Left || s.Edge == Edge.Right)
+            {
+                x = s.TaskbarPx.Left + (Width(s.TaskbarPx) - w) / 2;
+                y = IsFinite(taskEnd) ? (int)Math.Round(taskEnd + gap) : s.StartCellPx.Bottom + gap;
+                y = Clamp(y, s.TaskbarPx.Top, s.TaskbarPx.Bottom - h);
+            }
+            else
+            {
+                y = s.TaskbarPx.Top + (Height(s.TaskbarPx) - h) / 2;
+                x = IsFinite(taskEnd) ? (int)Math.Round(taskEnd + gap) : s.StartCellPx.Right + gap;
+                x = Clamp(x, s.TaskbarPx.Left, s.TaskbarPx.Right - w);
+            }
+            return R(x, y, x + w, y + h);
+        }
+
+        static Native.RECT RebuildClover(Native.RECT previous, Snapshot native)
+        {
+            int w = Math.Max(1, Px(44, native.Scale));
+            int h = Math.Max(1, Px(48, native.Scale));
+            if (native.Edge == Edge.Left || native.Edge == Edge.Right)
+            {
+                int x = native.TaskbarPx.Left + (Width(native.TaskbarPx) - w) / 2;
+                int y = Clamp(previous.Top, native.TaskbarPx.Top, native.TaskbarPx.Bottom - h);
+                return R(x, y, x + w, y + h);
+            }
+            else
+            {
+                int x = Clamp(previous.Left, native.TaskbarPx.Left, native.TaskbarPx.Right - w);
+                int y = native.TaskbarPx.Top + (Height(native.TaskbarPx) - h) / 2;
+                return R(x, y, x + w, y + h);
+            }
+        }
+
+        public static Rect StartButtonRect() { Snapshot s = Current; return ToLocalDip(StartButtonRectPx(), s.Scale); }
+
+        public static Native.RECT StartButtonRectPx()
+        {
+            Snapshot s = Current;
+            int w = Px(44, s.Scale), h = Px(48, s.Scale);
+            int x = s.StartCellPx.Left + (Width(s.StartCellPx) - w) / 2;
+            int y = s.StartCellPx.Top + (Height(s.StartCellPx) - h) / 2;
+            return R(x, y, x + w, y + h);
+        }
+
+        public static Rect CloverRect() { Snapshot s = Current; return ToLocalDip(s.CloverPx, s.Scale); }
+        public static Native.RECT CloverRectPx() { return Current.CloverPx; }
+
+        public static bool TryGetButtonLeft(out double leftDip)
+        {
+            Snapshot s = Current;
+            leftDip = s.CloverPx.Left / s.Scale;
+            return s.TaskButtonsLocated;
+        }
+
+        public static bool TryGetButtonLeftPx(out int leftPx)
+        {
+            Snapshot s = Current;
+            leftPx = s.CloverPx.Left;
+            return s.TaskButtonsLocated;
+        }
+
+        public static bool MiniBarAnchor(out double edgeDip)
+        {
+            Snapshot s = Current;
+            edgeDip = (s.Edge == Edge.Top ? s.WorkPx.Top : s.WorkPx.Bottom) / s.Scale;
+            return true;
+        }
+
         public static Rect MiniBarRect(int count)
         {
-            double barH = 48;
-            double w = 44 * Math.Max(0, count);
-            Rect c = CloverRect();
+            Snapshot s = Current;
+            return ToLocalDip(BuildMiniBarRect(s, count), s.Scale);
+        }
 
-            double anchor;
-            MiniBarAnchor(out anchor);
+        public static Native.RECT MiniBarRectPx(int count) { return BuildMiniBarRect(Current, count); }
 
-            switch (CurrentEdge)
+        static Native.RECT BuildMiniBarRect(Snapshot s, int count)
+        {
+            int gap = Px(4, s.Scale), itemW = Px(44, s.Scale), itemH = Px(48, s.Scale);
+            int n = Math.Max(0, count);
+            if (s.Edge == Edge.Left || s.Edge == Edge.Right)
             {
-                case Edge.Top:
-                {
-                    // 顶部任务栏：顶边贴任务栏下沿
-                    return new Rect(c.Right + 4, anchor, w, barH);
-                }
-                case Edge.Left:
-                case Edge.Right:
-                {
-                    // 竖任务栏：迷你条在四叶草下方，底边贴可用区底部
-                    double top = anchor - barH;
-                    return new Rect(c.X, top, w, barH);
-                }
-                default:
-                {
-                    // 底部任务栏（或已隐藏）：底边贴锚点
-                    double top = anchor - barH;
-                    return new Rect(c.Right + 4, top, w, barH);
-                }
+                int height = itemH * n;
+                int x = s.CloverPx.Left;
+                int y = Clamp(s.CloverPx.Bottom + gap, s.MonitorPx.Top, s.MonitorPx.Bottom - height);
+                return R(x, y, x + itemW, y + height);
             }
+
+            int width = itemW * n;
+            int bx = Clamp(s.CloverPx.Right + gap, s.MonitorPx.Left, s.MonitorPx.Right - width);
+            int by = s.Edge == Edge.Top ? s.WorkPx.Top : s.WorkPx.Bottom - itemH;
+            return R(bx, by, bx + width, by + itemH);
+        }
+
+        /// <summary>纯几何测试入口：不读取真实任务栏、不发 UIAutomation。</summary>
+        internal static Snapshot BuildSnapshotForTest(Native.RECT taskbar, Native.RECT monitor,
+            int dpi, Edge edge, Native.RECT startCell, double taskEnd,
+            bool taskbarVisible, bool autoHide)
+        {
+            Snapshot s = new Snapshot();
+            s.TaskbarPx = taskbar;
+            s.MonitorPx = monitor;
+            s.Dpi = dpi > 0 ? dpi : 96;
+            s.Edge = edge;
+            s.TaskbarVisible = taskbarVisible;
+            s.AutoHide = autoHide;
+            s.WorkPx = EffectiveWorkArea(s);
+            s.StartCellPx = Width(startCell) > 0 && Height(startCell) > 0
+                ? startCell : EstimateStartCell(s);
+            s.CloverPx = BuildCloverRect(s, taskEnd);
+            return s;
+        }
+
+        internal static Native.RECT MiniBarRectForTest(Snapshot snapshot, int count)
+        {
+            return BuildMiniBarRect(snapshot, count);
+        }
+
+        /// <summary>按物理像素定位任务栏关联窗口，不让主屏 DPI 虚拟化坐标。</summary>
+        public static void PositionWindow(Window window, IntPtr hwnd, Native.RECT rect, bool resize)
+        {
+            if (window == null || Width(rect) <= 0 || Height(rect) <= 0) return;
+            if (hwnd != IntPtr.Zero)
+            {
+                uint flags = Native.SWP_NOZORDER | Native.SWP_NOACTIVATE;
+                if (!resize) flags |= Native.SWP_NOSIZE;
+                Native.SetWindowPosPhysical(hwnd, IntPtr.Zero, rect.Left, rect.Top,
+                    Width(rect), Height(rect), flags);
+                return;
+            }
+
+            double systemScale = SystemScale();
+            window.Left = rect.Left / systemScale;
+            window.Top = rect.Top / systemScale;
+            if (resize)
+            {
+                window.Width = Width(rect) / systemScale;
+                window.Height = Height(rect) / systemScale;
+            }
+        }
+
+        public static Native.RECT ActualWindowRectPx(Window window)
+        {
+            Native.RECT r = new Native.RECT();
+            try
+            {
+                if (window == null) return r;
+                IntPtr hwnd = new WindowInteropHelper(window).Handle;
+                if (hwnd != IntPtr.Zero) Native.GetWindowRectPhysical(hwnd, out r);
+            }
+            catch { }
+            return r;
+        }
+
+        public static double SystemScale()
+        {
+            try { uint dpi = Native.GetDpiForSystem(); if (dpi > 0) return dpi / 96.0; }
+            catch { }
+            return 1;
+        }
+
+        static void ReportUiState(Snapshot s)
+        {
+            bool degraded = s.Source == "fallback";
+            string state = degraded ? "degraded/fallback" : "ok/" + s.Source;
+            if (state == lastUiState) return;
+            lastUiState = state;
+            if (degraded)
+                ErrorLog.Warn("任务栏定位降级：找不到有效任务栏矩形，暂用主屏底部 48px；稍后自动重试。");
+            else
+                Ui.Log("任务栏定位: " + state
+                    + (s.StartLocated || s.TaskButtonsLocated ? "" : "（等待统一精确校准）"));
+        }
+
+        static Edge EdgeFromAppbar(uint edge)
+        {
+            switch (edge)
+            {
+                case 0: return Edge.Left;
+                case 1: return Edge.Top;
+                case 2: return Edge.Right;
+                default: return Edge.Bottom;
+            }
+        }
+
+        static Edge InferEdge(Native.RECT bar, Native.RECT monitor)
+        {
+            // 横向任务栏通常铺满整块屏幕宽度，因此会同时贴住左、右以及上/下
+            // 三条边。若简单在四个距离里取最小值，底部任务栏的 dl/dr/db 都是 0，
+            // 就会被分支顺序误判成 Left。先按长宽确定方向，再只比较对应的两条边。
+            if (Width(bar) >= Height(bar))
+            {
+                int dt = Math.Abs(bar.Top - monitor.Top);
+                int db = Math.Abs(bar.Bottom - monitor.Bottom);
+                return dt <= db ? Edge.Top : Edge.Bottom;
+            }
+
+            int dl = Math.Abs(bar.Left - monitor.Left);
+            int dr = Math.Abs(bar.Right - monitor.Right);
+            return dl <= dr ? Edge.Left : Edge.Right;
+        }
+
+        /// <summary>测试入口：验证铺满整边的任务栏不会因多边距离并列而误判。</summary>
+        internal static Edge InferEdgeForTest(Native.RECT bar, Native.RECT monitor)
+        {
+            return InferEdge(bar, monitor);
+        }
+
+        static bool SameMonitor(Native.RECT a, Native.RECT b)
+        {
+            return SameRect(a, b);
+        }
+
+        static bool Valid(Rect r)
+        {
+            return !r.IsEmpty && IsFinite(r.X) && IsFinite(r.Y)
+                && IsFinite(r.Width) && IsFinite(r.Height) && r.Width > 0 && r.Height > 0;
+        }
+
+        static bool IsFinite(double v)
+        {
+            return !double.IsNaN(v) && !double.IsInfinity(v) && v != double.MinValue;
+        }
+
+        static Native.RECT FromRect(Rect r)
+        {
+            return R((int)Math.Round(r.Left), (int)Math.Round(r.Top),
+                (int)Math.Round(r.Right), (int)Math.Round(r.Bottom));
+        }
+
+        static Rect ToLocalDip(Native.RECT r, double scale)
+        {
+            if (scale <= 0) scale = 1;
+            return new Rect(r.Left / scale, r.Top / scale,
+                Math.Max(0, Width(r) / scale), Math.Max(0, Height(r) / scale));
+        }
+
+        static Native.RECT R(int left, int top, int right, int bottom)
+        {
+            return new Native.RECT { Left = left, Top = top, Right = right, Bottom = bottom };
+        }
+
+        static int Width(Native.RECT r) { return r.Right - r.Left; }
+        static int Height(Native.RECT r) { return r.Bottom - r.Top; }
+        static int Px(double dip, double scale) { return (int)Math.Round(dip * (scale > 0 ? scale : 1)); }
+        static int Clamp(int value, int min, int max)
+        {
+            if (max < min) max = min;
+            return Math.Max(min, Math.Min(max, value));
         }
     }
 }

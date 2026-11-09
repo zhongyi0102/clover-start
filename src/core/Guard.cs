@@ -37,16 +37,48 @@ namespace Clover
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool IsHungAppWindow(IntPtr hWnd);
 
-        /// <summary>
-        /// 以看门狗身份运行。参数：--guard &lt;主进程PID&gt; &lt;baseDir&gt;
-        /// </summary>
-        public static void Run(int parentPid, string baseDir)
+        // 主进程侧持有的看门狗生命周期。只有启用“隐藏系统任务栏”时才需要；
+        // 默认模式不再常驻第二个进程，也不再持续写心跳文件。
+        static readonly object lifecycleLock = new object();
+        static Process childProcess;
+        static EventWaitHandle childStopEvent;
+
+        /// <summary>隐藏系统任务栏时才需要看门狗。</summary>
+        internal static bool IsRequired(bool effectiveHideTaskbar)
         {
+            return effectiveHideTaskbar;
+        }
+
+        /// <summary>当前主进程拉起的看门狗是否仍在运行。</summary>
+        public static bool IsRunning
+        {
+            get
+            {
+                lock (lifecycleLock)
+                {
+                    return ProcessAlive(childProcess);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 以看门狗身份运行。参数：--guard &lt;主进程PID&gt; &lt;baseDir&gt; &lt;停止事件名&gt;
+        /// </summary>
+        public static void Run(int parentPid, string baseDir, string stopEventName)
+        {
+            EventWaitHandle stopEvent = null;
+            bool stopRequested = false;
             try
             {
                 Log.Init(baseDir);
                 TaskbarVisibility.Init(baseDir);
                 SystemState.Init(baseDir);
+
+                if (!string.IsNullOrEmpty(stopEventName))
+                {
+                    try { stopEvent = EventWaitHandle.OpenExisting(stopEventName); }
+                    catch { stopEvent = null; }
+                }
 
                 long lastHeartbeatTicks = 0;
                 int hungSeconds = 0;
@@ -62,7 +94,20 @@ namespace Clover
                     {
                         while (!parent.HasExited)
                         {
-                            Thread.Sleep(PollMs);
+                            // 命名事件让主进程可以协作式关闭看门狗。旧版或事件打开失败时
+                            // 仍退回 Sleep，保证命令行兼容与最后一道恢复能力。
+                            if (stopEvent != null)
+                            {
+                                if (stopEvent.WaitOne(PollMs))
+                                {
+                                    stopRequested = true;
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                Thread.Sleep(PollMs);
+                            }
 
                             // ---------- 卡死检测 ----------
                             if (parent.HasExited) break;
@@ -112,21 +157,32 @@ namespace Clover
                 }
 
                 // ---------- 主进程已退出 ----------
-                SystemState leftover = SystemState.Load(baseDir);
-                if (leftover != null && leftover.Dirty)
+                // 收到停止事件表示主进程正在正常关闭看门狗：它已经先恢复了任务栏。
+                // 此时不能再碰共享状态；尤其是用户快速“关→开”时，旧看门狗若去恢复，
+                // 会误把新一轮刚隐藏的任务栏重新放出来。
+                if (!stopRequested)
                 {
-                    Log.Warn("看门狗：主进程异常退出，检测到未还原的系统状态（"
-                        + leftover.Since + "），正在还原");
-                    TaskbarVisibility.RecoverLeftover(baseDir, "看门狗");
-                }
+                    SystemState leftover = SystemState.Load(baseDir);
+                    if (leftover != null && leftover.Dirty)
+                    {
+                        Log.Warn("看门狗：主进程异常退出，检测到未还原的系统状态（"
+                            + leftover.Since + "），正在还原");
+                        TaskbarVisibility.RecoverLeftover(baseDir, "看门狗");
+                    }
 
-                // 清理心跳文件，避免下次启动误判
-                HeartbeatFile.Cleanup(baseDir);
+                    // 清理心跳文件，避免下次启动误判。协作关闭时由主进程清理，
+                    // 防止旧看门狗删掉快速重启后的新心跳。
+                    HeartbeatFile.Cleanup(baseDir);
+                }
             }
             catch (Exception ex)
             {
                 // 看门狗自己绝不能抛到外面，否则会变成错误弹窗
                 try { Log.Warn("看门狗异常: " + ex.Message); } catch { }
+            }
+            finally
+            {
+                try { if (stopEvent != null) stopEvent.Close(); } catch { }
             }
         }
 
@@ -170,23 +226,125 @@ namespace Clover
         /// </summary>
         public static void Spawn(string baseDir)
         {
-            try
+            lock (lifecycleLock)
             {
-                string exe = Path.Combine(baseDir, "app", "CloverStart.exe");
-                if (!File.Exists(exe)) return;
+                try
+                {
+                    if (ProcessAlive(childProcess)) return;
+                    DisposeLifecycleHandles();
 
-                ProcessStartInfo psi = new ProcessStartInfo(exe);
-                psi.Arguments = "--guard " + Process.GetCurrentProcess().Id + " \"" + baseDir + "\"";
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                Process.Start(psi);
-                Log.Info("看门狗已启动");
+                    string exe = Path.Combine(baseDir, "app", "CloverStart.exe");
+                    if (!File.Exists(exe)) return;
+
+                    int parentPid = Process.GetCurrentProcess().Id;
+                    string eventName = "Local\\CloverStart_GuardStop_" + parentPid + "_"
+                        + Guid.NewGuid().ToString("N");
+                    EventWaitHandle stop = new EventWaitHandle(
+                        false, EventResetMode.ManualReset, eventName);
+
+                    ProcessStartInfo psi = new ProcessStartInfo(exe);
+                    psi.Arguments = "--guard " + parentPid + " \"" + baseDir + "\" \""
+                        + eventName + "\"";
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    psi.WindowStyle = ProcessWindowStyle.Hidden;
+
+                    Process started = Process.Start(psi);
+                    if (started == null)
+                    {
+                        stop.Close();
+                        return;
+                    }
+
+                    childStopEvent = stop;
+                    childProcess = started;
+                    Log.Info("看门狗已按需启动");
+                }
+                catch (Exception ex)
+                {
+                    DisposeLifecycleHandles();
+                    Log.Warn("启动看门狗失败（不影响主功能）: " + ex.Message);
+                }
             }
-            catch (Exception ex)
+        }
+
+        /// <summary>按当前功能状态启动或停止看门狗。</summary>
+        public static void SetRequired(string baseDir, bool required)
+        {
+            if (IsRequired(required)) Spawn(baseDir);
+            else Stop();
+        }
+
+        /// <summary>
+        /// 协作式停止看门狗。先发命名事件，再在后台等待；3 秒仍不退出才强制结束。
+        /// 调用方不会因此卡住界面线程。
+        /// </summary>
+        public static void Stop()
+        {
+            Process process = null;
+            EventWaitHandle stop = null;
+
+            lock (lifecycleLock)
             {
-                Log.Warn("启动看门狗失败（不影响主功能）: " + ex.Message);
+                process = childProcess;
+                stop = childStopEvent;
+                childProcess = null;
+                childStopEvent = null;
             }
+
+            try { if (stop != null) stop.Set(); } catch { }
+
+            if (process == null)
+            {
+                try { if (stop != null) stop.Close(); } catch { }
+                return;
+            }
+
+            ThreadPool.QueueUserWorkItem(delegate(object state)
+            {
+                try
+                {
+                    bool exited = false;
+                    try { exited = process.HasExited || process.WaitForExit(3000); }
+                    catch { exited = true; }
+
+                    if (!exited)
+                    {
+                        try
+                        {
+                            process.Kill();
+                            process.WaitForExit(1000);
+                            Log.Warn("看门狗未响应停止事件，已结束子进程");
+                        }
+                        catch { }
+                    }
+                    else
+                    {
+                        Log.Info("看门狗已停止");
+                    }
+                }
+                finally
+                {
+                    try { process.Dispose(); } catch { }
+                    try { if (stop != null) stop.Close(); } catch { }
+                }
+            });
+        }
+
+        static bool ProcessAlive(Process process)
+        {
+            if (process == null) return false;
+            try { return !process.HasExited; }
+            catch { return false; }
+        }
+
+        /// <summary>仅在持有 lifecycleLock 时调用。</summary>
+        static void DisposeLifecycleHandles()
+        {
+            try { if (childProcess != null) childProcess.Dispose(); } catch { }
+            try { if (childStopEvent != null) childStopEvent.Close(); } catch { }
+            childProcess = null;
+            childStopEvent = null;
         }
     }
 

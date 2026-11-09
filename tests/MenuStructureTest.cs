@@ -56,6 +56,21 @@ namespace Clover
                 Settings cfg = Settings.Load(root);
                 cfg.HideTaskbar = false;   // 测试默认路径，不修改磁盘也不碰系统任务栏
                 TriggerWindow tw = new TriggerWindow(root, cfg);
+                Check(tw.TestPanelIndicator != null,
+                    "★四叶草按钮有面板状态指示条");
+                Check(tw.TestPanelIndicator != null
+                        && tw.TestPanelIndicator.Visibility == Visibility.Collapsed,
+                    "★面板未打开时状态指示条隐藏");
+                Check(tw.TestPanelIndicator != null
+                        && tw.TestPanelIndicator.Height == 2
+                        && tw.TestPanelIndicator.Width >= 18
+                        && tw.TestPanelIndicator.Width <= 22,
+                    "★状态指示条保持克制的 2px 尺寸");
+                Check(tw.TestPanelIndicator != null
+                        && object.ReferenceEquals(tw.TestPanelIndicator.Background, Ui.Accent),
+                    "★状态指示条复用 Ui.Accent 令牌");
+                Check(tw.TestAccessibleName == "打开四叶草面板",
+                    "★关闭态有正确的辅助功能名称", tw.TestAccessibleName);
                 int panelFactoryCalls = 0;
                 tw.AttachPanelFactory(delegate
                 {

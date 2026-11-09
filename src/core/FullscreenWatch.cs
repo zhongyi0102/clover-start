@@ -27,24 +27,6 @@ namespace Clover
         static extern int GetSystemMetrics(int index);
 
         [DllImport("user32.dll")]
-        static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
-
-        [StructLayout(LayoutKind.Sequential)]
-        struct MONITORINFO
-        {
-            public int cbSize;
-            public Native.RECT rcMonitor;
-            public Native.RECT rcWork;
-            public uint dwFlags;
-        }
-
-        const uint MONITOR_DEFAULTTONEAREST = 2;
-        const uint MONITORINFOF_PRIMARY = 1;
-
-        [DllImport("user32.dll")]
         static extern int GetClassName(IntPtr hWnd, StringBuilder name, int max);
 
         [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
@@ -86,7 +68,7 @@ namespace Clover
                 if (pid == Process.GetCurrentProcess().Id) return false;
 
                 Native.RECT r;
-                if (!Native.GetWindowRect(h, out r)) return false;
+                if (!Native.GetWindowRectPhysical(h, out r)) return false;
 
                 // 用窗口所在显示器判断，而不是主屏尺寸：
                 // 原来用 GetSystemMetrics(0/1)（主屏），副屏上全屏的窗口会被判成非全屏。
@@ -123,11 +105,8 @@ namespace Clover
             rect = new Native.RECT();
             try
             {
-                IntPtr mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-                if (mon == IntPtr.Zero) return false;
-                MONITORINFO mi = new MONITORINFO();
-                mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
-                if (!GetMonitorInfo(mon, ref mi)) return false;
+                Native.MONITORINFO mi;
+                if (!Native.TryGetMonitorInfoForWindow(hwnd, out mi)) return false;
                 rect = mi.rcMonitor;
                 return true;
             }
