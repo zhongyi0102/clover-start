@@ -46,6 +46,8 @@ namespace Clover
             Check(s1.ShowFilesTab == true, "★默认显示「文件」标签");
             Check(s1.FilesSource == "", "★默认 filesSource 为空（用第一个来源）", s1.FilesSource ?? "null");
             Check(s1.FilesSort == "modified:desc", "★默认 filesSort = modified:desc", s1.FilesSort);
+            Check(s1.CommonDismissed != null && s1.CommonDismissed.Count == 0,
+                "★默认最近常用移除快照为空");
 
             // ---------- 1c. ★安全模式只影响 Effective*，不改你的设置 ----------
             // 这是本轮的核心修复：安全模式原先在内存里把 6 个开关改成 false，
@@ -161,6 +163,14 @@ namespace Clover
 
             Settings s2b = Settings.Load(r1);
             Check(s2b.GlassMode == "screen", "glassMode 往返");
+
+            s1.CommonDismissed[@"C:\Apps\code.exe"] = 123456789L;
+            s1.Save();
+            Settings commonBack = Settings.Load(r1);
+            long dismissedAt;
+            Check(commonBack.CommonDismissed.TryGetValue(@"C:\Apps\code.exe", out dismissedAt)
+                && dismissedAt == 123456789L,
+                "★commonDismissed 路径与时间戳往返", Convert.ToString(dismissedAt));
 
             // ---------- 2c. ★旧配置缺新字段时补默认值、不报错 ----------
             //

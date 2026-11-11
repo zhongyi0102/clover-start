@@ -182,7 +182,7 @@ namespace Clover
             col.Children.Add(chkHover);
 
             chkAutostart = MakeCheck("开机自启",
-                "开机时自动启动四叶草（与右键菜单状态同步）",
+                "用户登录时立即启动；旧快捷方式会自动升级为快速登录任务",
                 AutostartEnabled(),
                 delegate(bool on)
                 {
@@ -434,10 +434,7 @@ namespace Clover
         {
             try
             {
-                string lnk = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Startup),
-                    "四叶草启动器.lnk");
-                return File.Exists(lnk);
+                return Autostart.Inspect(Autostart.ExecutablePath(baseDir)).Enabled;
             }
             catch { return false; }
         }
@@ -446,13 +443,18 @@ namespace Clover
         {
             try
             {
-                if (owner != null) owner.ToggleAutostartPublic();
+                Autostart.Result result = owner != null
+                    ? owner.ToggleAutostartPublic()
+                    : (AutostartEnabled()
+                        ? Autostart.Disable()
+                        : Autostart.Enable(Autostart.ExecutablePath(baseDir)));
                 // 菜单与窗口同步：重读真实状态
                 if (chkAutostart != null)
                 {
                     bool on = AutostartEnabled();
                     chkAutostart.IsChecked = on;
                 }
+                if (!result.Success) Ui.Log("开机自启切换失败：" + result.Message);
             }
             catch (Exception ex) { Ui.LogError(ex, "切换开机自启"); }
         }

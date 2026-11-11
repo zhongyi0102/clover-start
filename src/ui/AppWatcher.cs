@@ -91,7 +91,7 @@ namespace Clover
             debounce.Tick += OnDebounce;
 
             periodic = new DispatcherTimer();
-            periodic.Interval = TimeSpan.FromMinutes(15);
+            periodic.Interval = TimeSpan.FromHours(6);
             periodic.Tick += delegate
             {
                 // 关停期间不再触发扫描：它会往界面线程排一个刷新委托，
@@ -103,7 +103,7 @@ namespace Clover
 
             // ---------- 首次运行检测 ----------
             // apps.json 不存在或没有应用时，立即触发一次后台扫描。
-            // 不做这一步，新用户首次运行会看到空面板，要等 15 分钟兜底才有应用。
+            // 不做这一步，新用户首次运行会看到空面板，要等 6 小时兜底才有应用。
             // 后台线程跑，不阻塞面板显示；扫完自动刷新。
             if (NeedsInitialScan())
             {
@@ -252,6 +252,7 @@ namespace Clover
             if (startMenuDirty)
             {
                 startMenuDirty = false;
+                SystemSearch.Invalidate();
                 RunScan("开始菜单变化");
             }
         }
@@ -269,14 +270,17 @@ namespace Clover
         {
             try
             {
-                ScanService.RunAsync(baseDir, reason, delegate(bool ok)
+                ScanService.RunAsync(baseDir, reason, delegate(ScanResult result)
                 {
-                    if (!ok) return;
+                    if (result == null || !result.Success || !result.Changed) return;
+                    CatalogPreloader.Invalidate();
+                    SystemSearch.Invalidate();
                     PanelWindow target = panel;
                     if (target == null)
                     {
-                        Ui.Log("后台扫描完成(" + reason
+                        Log.Diagnostic("后台扫描内容有变化(" + reason
                             + ")，主面板尚未创建；首次打开时读取最新目录");
+                        CatalogPreloader.WarmAsync(baseDir);
                         return;
                     }
                     try

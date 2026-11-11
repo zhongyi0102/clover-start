@@ -15,11 +15,11 @@ namespace Clover
     /// <summary>
     /// 搜索结果列表（系统级搜索的界面部分）。
     ///
-    /// 与磁贴区分开：搜索结果可能是文件、文件夹、注册表项，
-    /// 不是 AppItem —— 磁贴的启动/拖动/右键那套完全不适用。
-    /// 所以用独立的列表，只做"点击打开"。
+    /// 与磁贴区分开：结果还可能来自开始菜单或注册表，不一定有 AppItem。
+    /// 因此使用独立列表，提供启动、打开所在位置和复制路径。
     ///
-    /// 单级加载：Instant 同步、&lt; 40ms，立刻显示。
+    /// 两级加载：目录中的应用从内存立即匹配；开始菜单与注册表从内存索引
+    /// 在后台补充。图标也异步加载，首次冷建索引不会阻塞界面线程。
     ///
     /// 取消机制：每次输入新词就取消上一次的搜索，
     /// 避免连续打字累积成多个并发搜索。
@@ -30,6 +30,15 @@ namespace Clover
 
         /// <summary>已显示的结果（用于去重与计数）。</summary>
         readonly HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int resultCount;
+        int generation;
+        bool completed;
+
+        /// <summary>结果条数或完成状态变化时通知宿主更新底栏。</summary>
+        public Action ResultsChanged;
+
+        /// <summary>结果成功打开后通知宿主记录真实启动历史。</summary>
+        public Action<string> ResultOpened;
 
         /// <summary>
         /// 当前已显示的结果条数（底部计数栏用）。
@@ -39,8 +48,10 @@ namespace Clover
         /// </summary>
         public int ShownCount
         {
-            get { return shown.Count; }
+            get { return resultCount; }
         }
+
+        public bool Completed { get { return completed; } }
 
         /// <summary>结果条数上限（界面上超过这个数也没人翻）。</summary>
         const int MaxDisplay = 60;
@@ -55,8 +66,12 @@ namespace Clover
         {
             try
             {
+                unchecked { generation++; }
                 shown.Clear();
+                resultCount = 0;
+                completed = true;
                 if (host != null) host.Children.Clear();
+                NotifyChanged();
             }
             catch { }
         }
@@ -69,6 +84,13 @@ namespace Clover
         /// 不能每次都读盘。PanelWindow 已经持有内存中的 catalog，传进来即可。
         /// </summary>
         public Func<List<AppItem>> CatalogProvider;
+
+        /// <summary>按路径查询是否手动固定，供搜索个性化排序使用。</summary>
+        public Func<string, bool> PinnedProvider;
+
+        /// <summary>系统索引结果也可读取启动历史，避免只对目录结果个性化。</summary>
+        public Func<string, int> UsageProvider;
+        public Func<string, long> LastUsedProvider;
 
         /// <summary>
         /// 在已扫描的应用清单里匹配（支持中文/英文/全拼/首字母）。
@@ -90,7 +112,7 @@ namespace Clover
                 foreach (AppItem a in apps)
                 {
                     if (a == null || string.IsNullOrEmpty(a.Path)) continue;
-                    if (!Pinyin.Matches(a.Name, query)) continue;
+                    if (!SearchRanking.Matches(a.Name, query)) continue;
 
                     SearchResult r = new SearchResult();
                     r.Name = a.Name;
@@ -98,17 +120,13 @@ namespace Clover
                     r.IsFolder = false;
                     r.Source = "已安装";
                     r.Ext = Path.GetExtension(a.Path).ToLowerInvariant();
+                    r.Usage = a.Usage;
+                    r.LastUsed = a.LastUsed;
+                    r.Pinned = PinnedProvider != null && PinnedProvider(a.Path);
                     list.Add(r);
                 }
 
-                // 名字短的排前面（搜 "chr" 时 Chrome 应该比 ChromeDriver-helper 靠前）
-                list.Sort(delegate(SearchResult x, SearchResult y)
-                {
-                    int lx = x.Name == null ? 0 : x.Name.Length;
-                    int ly = y.Name == null ? 0 : y.Name.Length;
-                    if (lx != ly) return lx.CompareTo(ly);
-                    return string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
-                });
+                SearchRanking.Sort(list, query);
             }
             catch { }
             return list;
@@ -119,17 +137,17 @@ namespace Clover
         ///
         /// 两路职责（不是"完全统一"，是主 + 补充）：
         ///   · 主：MatchCatalog —— 已扫描进面板的应用清单，**支持拼音**
-        ///     （`wx` / `weixin` → 微信），这是 Instant 做不到的
-        ///   · 补充：SystemSearch.Instant —— 现场扫开始菜单（递归 depth≤3）
-        ///     + 注册表 App Paths / Uninstall，能发现没被扫进清单的程序
+        ///     （`wx` / `weixin` → 微信），这是系统索引做不到的
+        ///   · 补充：SystemSearch.Instant —— 查询预热后的开始菜单 + 注册表
+        ///     App Paths / Uninstall 内存索引，能发现没被扫进清单的程序
         ///     （`notepad` / `7z` / `code` 这类只在注册表里的）
         ///
         /// **为什么两路都要**（实测数据）：
         ///   · 只有 MatchCatalog：`notepad` / `7z` 搜不到（0 条）
-        ///   · 只有 Instant：`wx` / `weixin` 搜不到（0 条，无拼音）
+        ///   · 只有系统索引：`wx` / `weixin` 搜不到（0 条，无拼音）
         ///
-        /// 补充结果**总是执行**（不因主搜索有结果就跳过），
-        /// 但追加在主结果之后，且受统一的 MaxDisplay 上限控制。
+        /// 补充结果**总是执行**（不因主搜索有结果就跳过）。返回后两路先
+        /// 合并去重，再按匹配质量和用户习惯统一重排，最后应用 MaxDisplay。
         /// </summary>
         public void Search(string query)
         {
@@ -138,6 +156,8 @@ namespace Clover
                 Clear();
                 if (host == null) return;
                 if (string.IsNullOrWhiteSpace(query)) return;
+                completed = false;
+                int ownGeneration = generation;
 
                 // ---- 第零级：已扫描的应用清单 ----
                 //
@@ -150,11 +170,26 @@ namespace Clover
                 //
                 // 探针实测 Pinyin.Matches("微信", "weixin") == true，
                 // 所以匹配逻辑本身没问题，是数据源漏了这一档。
-                AppendBatch(MatchCatalog(query), true);
+                List<SearchResult> ownMain = MatchCatalog(query);
+                RenderMerged(ownMain, null, query, false);
 
-                // ---- 第一级：Instant（同步，很快）----
-                List<SearchResult> instant = SystemSearch.Instant(query);
-                AppendBatch(instant, true);
+                // ---- 第一级：系统补充（后台）----
+                // 即使搜索索引尚未预热，首次递归开始菜单/读取注册表也不会占住 UI。
+                ThreadPool.QueueUserWorkItem(delegate
+                {
+                    List<SearchResult> instant = SystemSearch.Instant(query);
+                    try
+                    {
+                        host.Dispatcher.BeginInvoke(new Action(delegate
+                        {
+                            if (ownGeneration != generation) return;
+                            DecorateUsage(instant);
+                            RenderMerged(ownMain, instant, query, true);
+                        }));
+                    }
+                    catch { }
+                });
+                NotifyChanged();
 
             }
 
@@ -165,14 +200,11 @@ namespace Clover
         }
 
         /// <summary>
-        /// 追加一批结果（去重、限量），并在来源变化时插入分组标题。
-        ///
-        /// 为什么分组：实测搜 "chrome" 时三种来源混在一起 ——
-        /// 磁贴级的"Google Chrome"和开始菜单里的同名快捷方式
-        /// 看起来权重相同，用户分不清哪条是"程序"哪条是"文件"。
-        /// 按来源加小标题（开始菜单 / 注册表）后一眼可辨。
+        /// 把统一排名后的结果渲染为列表，并做最后一道防御性去重。
+        /// 来源不再切成大分组，否则一个精确注册表结果仍会被视觉上压到
+        /// 模糊目录结果之后；来源改为每行的次要说明。
         /// </summary>
-        void AppendBatch(List<SearchResult> batch, bool isInstant)
+        void AppendBatch(List<SearchResult> batch)
         {
             try
             {
@@ -181,7 +213,7 @@ namespace Clover
                 foreach (SearchResult r in batch)
                 {
                     if (r == null) continue;
-                    if (shown.Count >= MaxDisplay) return;
+                    if (resultCount >= MaxDisplay) return;
                     // ---- 去重：路径 + 归一化名字，双键 ----
                     //
                     // 为什么单靠 Path 不够（实测）：同一应用在两路里路径不同 ——
@@ -204,44 +236,47 @@ namespace Clover
                     string normName = (r.Name ?? "").Trim().ToLowerInvariant();
                     if (normName.Length > 0 && !shown.Add("N:" + normName)) continue;
 
-                    // 来源变化时插入分组标题（去重后第一次遇到该来源）
-                    string groupKey = "G:" + r.Source;
-                    if (shown.Add(groupKey))
-                    {
-                        AddGroupHeader(r.Source);
-                    }
-
                     host.Children.Add(MakeRow(r));
+                    resultCount++;
                 }
 
-                // 没有结果时先不显示"无结果"——等全部来源都返回完再判断
-                if (isInstant && shown.Count == 0) return;
+                NotifyChanged();
             }
             catch { }
         }
 
-        /// <summary>分组小标题（如「应用（开始菜单）」「应用（注册表）」）。</summary>
-        void AddGroupHeader(string source)
+        void DecorateUsage(List<SearchResult> results)
         {
-            try
+            if (results == null) return;
+            foreach (SearchResult r in results)
             {
-                string label;
-                switch (source)
-                {
-                    case "已安装": label = "应用（已安装）"; break;
-                    case "开始菜单": label = "应用（开始菜单）"; break;
-                    case "注册表": label = "应用（注册表）"; break;
-                    default: label = source; break;
-                }
-
-                Border b = new Border();
-                b.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Xs);
-                TextBlock t = Ui.T(label, 10.5, Ui.Sub);
-                t.Margin = new Thickness(Ui.S.Xs, 0, 0, 0);
-                b.Child = t;
-                host.Children.Add(b);
+                if (r == null || string.IsNullOrEmpty(r.Path)) continue;
+                try { if (UsageProvider != null) r.Usage = UsageProvider(r.Path); } catch { }
+                try { if (LastUsedProvider != null) r.LastUsed = LastUsedProvider(r.Path); } catch { }
+                try { if (PinnedProvider != null) r.Pinned = PinnedProvider(r.Path); } catch { }
             }
-            catch { }
+        }
+
+        /// <summary>
+        /// 后台来源返回后统一重排，而不是简单追加。这样精确匹配、固定项和常用项
+        /// 不会因为来自注册表就永远排在一个较差的目录子串结果后面。
+        /// </summary>
+        void RenderMerged(List<SearchResult> main, List<SearchResult> extra,
+            string query, bool final)
+        {
+            if (host == null) return;
+            shown.Clear();
+            resultCount = 0;
+            host.Children.Clear();
+
+            List<SearchResult> merged = SearchRanking.Merge(main, extra, query, MaxDisplay);
+            AppendBatch(merged);
+            if (final)
+            {
+                completed = true;
+                if (resultCount == 0) ShowEmpty(query);
+            }
+            NotifyChanged();
         }
 
         /// 一行搜索结果：图标 + 名字 + 路径。
@@ -281,7 +316,7 @@ namespace Clover
             name.TextTrimming = TextTrimming.CharacterEllipsis;
             text.Children.Add(name);
 
-            TextBlock sub = Ui.T(ShortPath(r), 10.5, Ui.Sub);
+            TextBlock sub = Ui.T(ResultDetail(r), 10.5, Ui.Sub);
             sub.TextTrimming = TextTrimming.CharacterEllipsis;
             text.Children.Add(sub);
 
@@ -327,16 +362,37 @@ namespace Clover
                 // exe / lnk：复用应用图标缓存（已有）
                 if (r.Ext == ".exe" || r.Ext == ".lnk" || r.Ext == ".url" || r.Ext == ".appref-ms")
                 {
-                    ImageSource src = AppIcons.Get(r.Path);
-                    if (src != null)
+                    ImageSource src;
+                    if (!AppIcons.TryGetCached(r.Path, out src))
                     {
-                        Image img = new Image();
-                        img.Source = src;
-                        img.Width = 18;
-                        img.Height = 18;
-                        RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
-                        return img;
+                        Grid holder = new Grid { Width = 22, Height = 22 };
+                        TextBlock wait = new TextBlock();
+                        wait.Text = "\uE7C3";
+                        wait.FontFamily = Ui.Mdl;
+                        wait.FontSize = 14;
+                        wait.Foreground = Ui.Sub;
+                        wait.Opacity = 0.55;
+                        wait.HorizontalAlignment = HorizontalAlignment.Center;
+                        wait.VerticalAlignment = VerticalAlignment.Center;
+                        holder.Children.Add(wait);
+                        int ownGeneration = generation;
+                        AppIcons.GetAsync(r.Path, delegate(ImageSource loaded)
+                        {
+                            try
+                            {
+                                host.Dispatcher.BeginInvoke(new Action(delegate
+                                {
+                                    if (ownGeneration != generation || loaded == null) return;
+                                    holder.Children.Clear();
+                                    holder.Children.Add(MakeIconImage(loaded));
+                                }));
+                            }
+                            catch { }
+                        });
+                        return holder;
                     }
+                    if (src != null)
+                        return MakeIconImage(src);
                 }
 
                 // 其他文件：按扩展名给个字形
@@ -353,6 +409,41 @@ namespace Clover
             {
                 return new Border { Width = 18, Height = 18 };
             }
+        }
+
+        static Image MakeIconImage(ImageSource src)
+        {
+            Image img = new Image();
+            img.Source = src;
+            img.Width = 18;
+            img.Height = 18;
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            return img;
+        }
+
+        void ShowEmpty(string query)
+        {
+            if (host == null || resultCount != 0) return;
+            StackPanel empty = new StackPanel();
+            empty.Margin = new Thickness(Ui.S.Xl, Ui.S.Xl + Ui.S.Sm, 0, 0);
+            TextBlock icon = Ui.T("\uE721", 22, Ui.Sub);
+            icon.FontFamily = Ui.Mdl;
+            icon.Opacity = 0.55;
+            empty.Children.Add(icon);
+            TextBlock title = Ui.T("没有找到「" + (query ?? "") + "」", 13.5, Ui.Fg,
+                FontWeights.SemiBold);
+            title.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+            empty.Children.Add(title);
+            TextBlock hint = Ui.T("换个说法试试，或者用拼音首字母（如 wx → 微信）", 12, Ui.Sub);
+            hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+            empty.Children.Add(hint);
+            host.Children.Add(empty);
+        }
+
+        void NotifyChanged()
+        {
+            try { if (ResultsChanged != null) ResultsChanged(); }
+            catch { }
         }
 
         /// <summary>路径缩写：只显示最后两级，太长会撑爆行宽。</summary>
@@ -377,6 +468,17 @@ namespace Clover
             catch { return r.Source; }
         }
 
+        static string ResultDetail(SearchResult r)
+        {
+            if (r == null) return "";
+            string path = ShortPath(r);
+            if (string.IsNullOrWhiteSpace(r.Source)) return path;
+            if (string.IsNullOrWhiteSpace(path)
+                || string.Equals(path, r.Source, StringComparison.OrdinalIgnoreCase))
+                return r.Source;
+            return r.Source + " · " + path;
+        }
+
         /// <summary>打开：文件夹用资源管理器，文件用默认程序。</summary>
         void Open(SearchResult r)
         {
@@ -387,9 +489,21 @@ namespace Clover
                 {
                     if (Directory.Exists(r.Path)) Process.Start("explorer.exe", "\"" + r.Path + "\"");
                 }
+                else if (AppPaths.IsShellPath(r.Path))
+                {
+                    ProcessStartInfo shell = new ProcessStartInfo("explorer.exe");
+                    shell.Arguments = r.Path;
+                    shell.UseShellExecute = true;
+                    Process.Start(shell);
+                    if (ResultOpened != null) ResultOpened(r.Path);
+                }
                 else
                 {
-                    if (File.Exists(r.Path)) Process.Start(new ProcessStartInfo(r.Path) { UseShellExecute = true });
+                    if (File.Exists(r.Path))
+                    {
+                        Process.Start(new ProcessStartInfo(r.Path) { UseShellExecute = true });
+                        if (ResultOpened != null) ResultOpened(r.Path);
+                    }
                 }
             }
             catch (Exception ex)

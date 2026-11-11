@@ -22,6 +22,7 @@ namespace Clover
         static string logPath;
         static string lastMessage;
         static int repeatCount;      // 上一条消息已连续出现的总次数（含第一次）
+        static bool diagnosticsEnabled;
 
         /// <summary>
         /// 正在关停。
@@ -41,7 +42,15 @@ namespace Clover
 
         public static void Init(string baseDir)
         {
-            try { logPath = Path.Combine(baseDir, "config", "error.log"); } catch { }
+            try
+            {
+                logPath = Path.Combine(baseDir, "config", "error.log");
+                diagnosticsEnabled = string.Equals(
+                    Environment.GetEnvironmentVariable("CLOVERSTART_DIAGNOSTICS"), "1",
+                    StringComparison.OrdinalIgnoreCase)
+                    || File.Exists(Path.Combine(baseDir, "config", "diagnostics.enabled"));
+            }
+            catch { }
 
             // 1) 非界面线程未处理异常：进程即将终止，必须立刻还原系统状态
             AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e)
@@ -124,6 +133,12 @@ namespace Clover
         public static void Log(string message)
         {
             Write("INFO", message);
+        }
+
+        /// <summary>可选诊断日志；默认不写盘。</summary>
+        public static void Diagnostic(string message)
+        {
+            if (diagnosticsEnabled) Write("DEBUG", message);
         }
 
         /// <summary>不致命但值得注意的问题（例如某个图标读不出来）。</summary>

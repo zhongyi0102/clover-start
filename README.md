@@ -28,7 +28,7 @@
 - 右键打开的**外观 / 整理与隐藏 / 设置**窗口不占任务栏，标题栏都只保留一个**关闭**按钮；仍可拖动并从窗口边缘调整大小
 - **顶部默认四个标签：常用 / 全部 / 文件库 / 桌面收纳**，点一下切换（`showFilesTab=false` 时隐藏“文件库”）
   - 选中的标签是**实色强调底 + 白字**，未选中的透明底
-  - 「常用」按启动次数排序（不设数量上限），右键磁贴可「添加到常用」手动固定；为空时自动切到「全部」
+  - 「常用」分为**手动固定**和**最近常用**：固定项始终在前，最近项按启动次数和最近时间排序（不设数量上限）；为空时自动切到「全部」
   - 「全部」按名称排序：中文逐字拼音、英文不区分大小写、数字排最前
   - 真商店应用显示为 `名字 ·商店`；出现在 `shell:AppsFolder` 里的传统软件（如 Chrome）不加后缀
   - **「文件库」**只浏览已添加的来源；**「桌面收纳」**会把文件放进真实目录。两者用不同名称明确风险
@@ -37,11 +37,13 @@
 - **主题**：右键四叶草 →「主题」可在**浅色 / 深色 / 跟随系统**之间切换，**默认跟随系统**（读 Windows 的「应用模式」设置）。切换立刻生效，不用重启
 - **切分类会记住各自滚到哪**：在「全部」滚到第 3 屏，切到「常用」再切回来，仍在第 3 屏（按分类分别记，不是全局一个偏移）
 - 应用图标按**使用频率**排序：从面板启动次数越多越靠前，次数相同按最近使用，没用过的按名称；数据保存在 `config\usage.json`（删掉即可重置）
-- **应用磁贴可以拖动排序**：按住一个磁贴拖动，它会**浮起来**（放大 + 阴影）跟着鼠标走，其他磁贴**平滑让位**；松手后落到新位置，顺序按分类保存到 `config\order.json`。删掉该文件恢复按使用频率排序
-- 顶部搜索框：输入即过滤，支持中文、英文，以及**拼音**——全拼（`weixin` → 微信）和首字母（`wx` → 微信）都行。**同时搜三类**：已安装应用（带拼音）、开始菜单里的快捷方式、注册表里的程序（全部同步返回，不搜磁盘文件）
+- **应用磁贴可以拖动排序**：按住磁贴后会出现轻量边框浮层和插入标记，其他磁贴在拖动中保持静止；松手后复用现有控件原地换位，不重建整页，顺序按分类保存到 `config\order.json`。删掉该文件恢复按使用频率排序
+- **滚轮使用 140ms 可中断像素滚动**：连续滚动会累加目标，反向时立即掉头；滚动停止后才维护视口图标，减少上下滚动时的卡顿
+- 顶部搜索框：输入后 **100ms 防抖**，支持中文、英文，以及**拼音**——全拼（`weixin` → 微信）和首字母（`wx` → 微信）都行。已安装应用先从内存立即匹配；开始菜单与注册表走启动后预热的内存索引并在后台补齐，旧查询结果不会覆盖新输入，图标也异步加载（不搜磁盘文件）
 - **键盘操作**：面板弹出即聚焦搜索框；`↑ ↓ ← →` 在磁贴间移动选中（选中项有绿色边框），`Home`/`End` 跳到第一个/最后一个，`Enter` 启动选中项（未选中时启动第一个），`Esc` 关闭。在搜索框里按 `←` `→` 仍是移动光标，只有 `↑` `↓` `Enter` 会接管
 - 点击应用图标直接启动；`Esc` 或点击面板外自动收起
-- 「常用」里右键应用磁贴 → **从常用移除**（清掉该应用的启动次数记录，它仍保留在原分类和「全部」里）；这个菜单项只在「常用」分类里出现
+- 应用磁贴右键可 **手动固定到常用 / 取消手动固定**；取消固定会保留真实启动历史，有历史时转入「最近常用」
+- 「最近常用」里的磁贴可右键 **从最近常用移除**：只暂时隐藏，不删除 `usage.json`；下次从四叶草真实启动后会自动回来
 - **所有分类**里右键应用磁贴 → **打开文件所在位置**：在资源管理器里打开该应用所在目录并选中它。`.lnk` 会先解析出真实目标再定位（不是定位到开始菜单里那个快捷方式）；文件已被卸载但目录还在时直接打开目录；两者都不存在时给出提示
 - ~~移到分类 / 恢复自动分类~~：**已移除**。分类标签只剩两个，手工归类没有意义了。数据层（`config\category-overrides.json`）保留，已有的覆盖记录仍然生效，只是界面不再提供修改入口
 - **所有分类**里右键应用磁贴 → **从面板隐藏**：把用不到的条目藏起来。藏起来的**不在「全部」里显示**，但**搜索时仍能找到**。清单存在 `config\hidden-apps.json`。恢复方式：右键四叶草 →「隐藏用不到的 ▸」→「查看隐藏的项目」弹窗逐个恢复，或「取消隐藏全部」
@@ -59,7 +61,7 @@
 | 路径 | 数据源 | 能力 | 耗时 |
 |---|---|---|---|
 | **主**：`MatchCatalog` | 已扫描进面板的 `Catalog.Apps`（175 条：开始菜单 123 + 商店 34 + 注册表 11 + AppsFolder 7）| **拼音匹配**（`wx` / `weixin` → 微信）、全拼、首字母 | < 1ms（内存遍历）|
-| **补充**：`SystemSearch.Instant` | 现场扫开始菜单（递归 depth≤3）+ 注册表 App Paths / Uninstall | 能发现**没被扫进清单**的程序（`notepad` / `7z` / `code` 这类只在注册表里的）| 8–15ms |
+| **补充**：`SystemSearch.Instant` | 启动后预热的开始菜单 + 注册表 App Paths / Uninstall 内存索引 | 能发现**没被扫进清单**的程序（`notepad` / `7z` / `code` 这类只在注册表里的）| 热查询通常为毫秒级；冷建索引在后台执行 |
 
 **为什么两路都要**（实测数据）：
 
@@ -70,18 +72,23 @@
 
 **合并规则**：
 
-1. 主搜索结果先全部追加，**顺序不变**（名字长度 → 字母序）
-2. 补充结果**总是执行**（不因主搜索有结果就跳过），追加在主结果之后
+1. 已安装应用先立即显示；补充结果**总是执行**，不因已有结果就跳过
+2. 补充结果返回后，两路先合并，再按以下规则统一排名：
+   - 原名精确匹配 → 原名前缀 → 词首 → 普通子串 → 拼音首字母 → 完整拼音
+   - 匹配质量相同时：手动固定 → 启动次数 → 最近启动时间
 3. 去重用**双键**：
    - 路径键：`Path`（大小写不敏感）
    - 名字键：`Name.Trim().ToLowerInvariant()`
    - 为什么要名字键：同一应用在两路里路径不同 —— 微信 `...\微信.lnk` vs `...\Weixin.exe`、Steam `...\Steam.lnk` vs `...\uninstall.exe`、QQ `...\QQ.lnk` vs `...\QQ.exe`，但 **Name 完全相同**。只靠路径会显示 2 次
    - 为什么不用 `NameMatch.Normalize`：它丢所有非字母数字，会把 `Notepad++` 折成 `notepad` 与 `Notepad` 撞车。保守键 `Trim+小写` 能覆盖实测全部重复场景且不误伤
-4. 统一上限 **60 条**（`MaxDisplay`），主结果优先占位
+
+4. 统一排名后再截到 **60 条**（`MaxDisplay`），因此索引末尾的精确结果也不会被提前丢掉
+
+输入采用 100ms 防抖。主结果先显示，补充查询和图标获取都不占用界面线程；每轮查询带 generation，迟到的旧结果会被丢弃。底栏明确区分「搜索中…」「没有结果」和「找到 N 条结果」。开始菜单发生变化或完整扫描产出新内容时，内存索引会失效并在需要时重建。
 
 **只搜可启动的程序，不搜磁盘文件。** 找文件用资源管理器更合适。
 
-- 结果按来源分组（「应用（已安装）」/「应用（开始菜单）」/「应用（注册表）」）
+- 来源以每行的次要文字显示，不再用大分组打断相关性排序
 - 点结果直接打开；右键可打开所在位置 / 复制路径
 
 ### 外观（毛玻璃）
@@ -179,7 +186,7 @@ outerLayer（圆角裁剪）
 | **隐藏用不到的** | 子菜单：一键隐藏整类（如「系统工具」「工具/命令行」共 60+ 个从没用过的条目）、整理与隐藏…（标签二）、取消隐藏全部。见下方「减少噪音」 |
 | **设置 ▸ 外观…** | 打开外观窗口：毛玻璃预设、浓度/模糊/染色/亮度滑块、颜色选择、背景模式。见下方「外观（毛玻璃）」 |
 | 设置 ▸ 主题 | 浅色 / 深色 / 跟随系统 |
-| 开机自启 | 勾选项 |
+| 开机自启 | 勾选项；使用当前用户登录计划任务立即启动，旧启动文件夹快捷方式会安全迁移 |
 | 退出 | 退出前会自动还原系统状态并清除运行标记 |
 
 ### 减少噪音：隐藏用不到的应用
@@ -211,12 +218,13 @@ outerLayer（圆角裁剪）
 | `navCollapsed` | `false` | 侧栏是否收起 |
 | `theme` | `"system"` | 主题：`light` / `dark` / `system` |
 | `glassOpacity` | `0` | 毛玻璃浓度 0-100（0 = 关闭） |
-| `glassMode` | `"fixed"` | 背景模式：`fixed` / `screen` |
+| `glassMode` | `"screen"` | 背景模式：`fixed` / `screen` |
 | `glassPreset` | `"custom"` | 预设名：`custom` / `classic` / `frosted` / `dark` / `light` / `liquid` |
 | `glassBlur` | `10.0` | 模糊半径 0-30 |
 | `glassTint` | `""` | 染色色 `#RRGGBB`（空 = 用强调色） |
 | `glassTintStrength` | `10` | 染色强度 0-100 |
 | `glassBrightness` | `0` | 亮度 -50 ~ +50 |
+| `glassDarkness` | `0` | 背景暗度遮罩 0-60 |
 | `glassAccent` | `""` | 强调色 `#RRGGBB`（空 = 主题默认） |
 | `textContrastGuard` | `true` | **文字清晰保底**：背景太亮/太暗时自动在文字区域叠极淡的压暗/提亮，让对比度达到 WCAG。只影响渲染，不写配置 |
 | `showFilesTab` | `true` | 是否显示第三个标签「文件」。关掉后只有「常用」「全部」 |
@@ -225,6 +233,9 @@ outerLayer（圆角裁剪）
 | `filesSort` | `"modified:desc"` | 排序，格式 `列:方向`（`modified`/`name`/`size` + `asc`/`desc`）。兼容旧值 |
 | `lowValueMarked` | `[]` | **手动标记为低价值**的应用路径（右键「标记为低价值」）|
 | `lowValueUnmarked` | `[]` | **手动取消低价值标记**的应用路径（优先级最高）|
+| `collapseLowValue` | `false` | 「全部」页低价值段是否收起 |
+| `pinnedCommon` | `[]` | 「常用」页的手动固定路径，保留用户顺序 |
+| `commonDismissed` | `{}` | 最近常用移除时的 `LastUsed` 快照；不删除启动历史 |
 | `desktopCleanEnabled` | `false` | 桌面保持无快捷方式总开关 |
 | `desktopCleanExisting` | `true` | 开启时是否同时清理现有的快捷方式 |
 | `desktopEnabledAt` | `""` | 开关被打开的时刻（补扫时间下限之一）|
@@ -233,17 +244,16 @@ outerLayer（圆角裁剪）
 | `desktopRemoved` | `[]` | 已移除记录（最多 200 条）|
 | `desktopPendingAdmin` | `[]` | 待处理（公共桌面被拒，需管理员权限）|
 
-> **共 30 个键**，按用途分六组：
+> `settings.json` 还包含 Wallpaper Engine 引用等运行配置；上表列出常用且与当前界面直接相关的键。未知字段保存时会原样保留。
 >
 > | 分组 | 键 | 数量 |
 > |---|---|---|
 > | **功能开关** | `taskbarHiding` / `miniTaskbar` / `hoverReveal` / `fullscreenDetect` / `safeMode` | 5 |
 > | **状态与标记** | `hideTaskbar` | 1 |
-> | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassAccent` / `textContrastGuard` | 11 |
+> | **外观与界面** | `theme` / `navCollapsed` / `glassOpacity` / `glassMode` / `glassPreset` / `glassBlur` / `glassTint` / `glassTintStrength` / `glassBrightness` / `glassDarkness` / `glassAccent` / `textContrastGuard` | 12 |
 > | **文件标签** | `showFilesTab` / `filesSources` / `filesSource` / `filesSort` | 4 |
-> | **低价值标记** | `lowValueMarked` / `lowValueUnmarked` | 2 |
+> | **应用列表** | `lowValueMarked` / `lowValueUnmarked` / `collapseLowValue` / `pinnedCommon` / `commonDismissed` | 5 |
 > | **桌面清理** | `desktopCleanEnabled` / `desktopCleanExisting` / `desktopEnabledAt` / `desktopLastScan` / `desktopKeepTargets` / `desktopRemoved` / `desktopPendingAdmin` | 7 |
-> | **数据** | （无） | 0 |
 >
 > **界面入口**：
 > - **右键四叶草**：`taskbarHiding` / `theme`（经「设置…」/「外观…」窗口）
@@ -365,9 +375,10 @@ outerLayer（圆角裁剪）
 
 ## 自动特性
 
-- **新软件自动加入**：监听开始菜单（用户 + 公共）里的 `.lnk`，安装软件后约 2.5 秒内重新扫描并刷新面板（多次文件事件会合并成一次）；另外每 15 分钟兜底刷新一次。
-- **启动时先读缓存、再后台刷新**：面板打开时直接用 `config\apps.json` 渲染（秒开，不等待扫描）；**启动过程本身不触发扫描**，只有开始菜单发生变化或 15 分钟兜底到点时才在后台扫描，扫完自动刷新界面。
-- **扫描在后台线程跑**：开始菜单遍历和便携软件目录递归都不占界面线程；同一时刻只会有一个扫描在跑。
+- **新软件自动加入**：监听开始菜单（用户 + 公共）里的 `.lnk`，安装软件后约 2.5 秒内重新扫描（多次文件事件会合并成一次）；另外每 **6 小时**做一次低频兜底扫描。
+- **首帧后预热目录**：四叶草按钮先完成首帧，再在后台预读纯数据 `Catalog`；首次打开主面板优先领取这份快照，不提前创建任何 WPF 面板对象。输入文件变化时快照自动失效并安全回退同步加载。
+- **扫描在后台线程跑**：开始菜单遍历和便携软件目录递归都不占界面线程；同一时刻只会有一个扫描在跑。全新安装缺少 `apps.json` 时会立即后台首扫，其余启动不做无意义全量扫描。
+- **无变化不刷新、不写盘**：`apps.json`、`registry-apps.json`、`store-apps.json` 的稳定内容相同时保留原文件和修改时间；扫描结果会分别报告“成功”和“内容变化”，只有内容真的变化才刷新面板、重建磁贴和失效预热缓存。
 - **图标磁盘缓存**：提取过的图标存进 `config\iconcache\`（PNG），缓存键 = **算法版本号** + 路径 + 文件修改时间 + 大小，下次启动直接读盘；程序升级或换图标后缓存自动失效。超过 90 天未用或数量超过 800 个时自动清理旧的。详见 [图标提取](#图标提取)。
 - **绿色/便携软件也能识别**：除开始菜单快捷方式外，还扫描各磁盘的软件目录（`Software` / `Portable` / `Programs` / `Apps` / `Tools` / `绿色软件` / `软件` / `应用`，最多 5 层），把解压即用的软件也收进面板（名字优先取 exe 的"文件说明"）。安装包、卸载器、更新器、日志/缓存目录自动排除。想额外扫描别的目录，新建 `config\portable-roots.json`：`{ "roots": ["D:\\Software\\Portable", "E:\\Tools"] }`（写这个文件后就不再自动推断目录）。
 - **不动桌面**：程序**从不**移动、删除或重命名桌面上的任何文件（旧版本的「自动移走桌面快捷方式」已下线）
@@ -587,9 +598,15 @@ outerLayer（圆角裁剪）
 - 迁移只处理**已登记**的桌面（`virtual-desks.json` 里的 + `nav-tabs.json` 里的标签），
   目录里用户自己丢进来的无关文件夹**不统计也不搬**
 - 旧目录不会被删除：里面可能还有用户自己放的东西，删了没法还原
-- 桌面收纳页只保留「收纳桌面 / 放回桌面」两个操作，不提供撤销历史；两者执行前都会明确确认
+- 桌面收纳页保留「收纳桌面 / 放回桌面」，并增加「智能整理… / 整理规则…」；不提供撤销历史，所有批量操作都先确认或逐项预览
 - 旧版本留下的 `config\desk-undo.json` 不再读取，可以手动删除，也可以原样保留
 - 收纳会**整包移走文件夹**（不递归进子目录改坐标）
+
+### 智能整理规则
+
+「整理规则…」可按顺序维护规则；桌面顶层项目可以按**文件名通配符、扩展名、大小范围、修改日期**匹配，并执行**移动、复制或忽略**。多条规则命中时，预览会列出全部命中项，但只采用顺序最前的一条。
+
+「智能整理…」执行前会逐项显示：是否执行、来源、命中规则、动作、最终位置及跳过原因。移动/复制复用 `VerifiedFileMove`：同名目标提前改成 `名称 (1)`，绝不覆盖；预览后源文件发生变化或目标被占用时，该项停止并要求重新预览。只扫描桌面直接子项，不进入文件夹内部；不自动监控目录，也不提供删除、覆盖、外部命令、上传或加密动作。
 
 ## 「整理与隐藏」窗口
 
@@ -815,6 +832,7 @@ clover-start\
   config\apps.json           扫描生成的软件清单（含分类）
 config\manual-apps.json    只读历史数据（旧版本「手动添加应用」留下的；要隐藏某条请用「从面板隐藏」）
   config\settings.json       开关与隐藏分类
+  config\desktop-organize-rules.json  智能整理规则（顺序即优先级）
   config\usage.json          启动次数与最近使用时间
   config\order.json          手动拖拽排序
   config\layout.json         面板位置与尺寸
@@ -830,12 +848,12 @@ config\manual-apps.json    只读历史数据（旧版本「手动添加应用�
   res\clover.ico, clover.png 四叶草图标
   src\core\                  纯逻辑层（零 WPF 依赖，可单独编译成 DLL）
   src\ui\                    界面层（依赖 WPF）
-  tests\                     60 个测试套件与机器可读汇总
+  tests\                     66 个测试套件与机器可读汇总
   .github\workflows\         Windows 构建、分层校验与非桌面测试
   tools\make-pinyin.ps1      生成拼音表
   build.ps1                  编译（csc.exe，无需 MSBuild）
   dev-run.ps1                改完即跑：停进程 → 编译 → 重启 → 弹面板
-  install.ps1                创建开机自启并启动
+  install.ps1                注册登录快速自启并启动
 desktop-backup\            旧版本移走的桌面快捷方式（程序不再读写它，可手动取回或删除）
 ```
 
@@ -860,7 +878,7 @@ desktop-backup\            旧版本移走的桌面快捷方式（程序不再�
 >
 > 另一个坑：编译前必须先关掉正在运行的 `CloverStart.exe`，否则 `CS0016: 无法写入输出文件`（被进程占用）。
 
-`install.ps1` 会先请求旧实例通过 `--exit` 正常退出，只有超时无响应时才强制结束，避免升级安装被记成异常退出。
+`install.ps1` 会先请求旧实例通过 `--exit` 正常退出，只有超时无响应时才强制结束，避免升级安装被记成异常退出。随后注册当前用户的登录计划任务：零延迟、普通权限、电池供电也可启动；若系统策略禁止计划任务，则自动保留启动文件夹快捷方式作为兼容兜底。
 
 ## 改完源码立刻看效果
 
@@ -918,7 +936,8 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 |---|---|
 | `Native.cs` | P/Invoke 声明与 Win32 结构体 |
 | `Log.cs` | 日志抽象（core 只调它，实现由 ui 注入） |
-| `JsonIO.cs` | 严格校验 JSON 后读取，主文件损坏自动回退 `.bak`；结构化写入结果 + 原子写 + 每日备份 |
+| `Autostart.cs` | 开机自启统一入口：当前用户登录计划任务、旧快捷方式迁移、回读校验与兼容回退 |
+| `JsonIO.cs` | 严格校验 JSON 后读取，主文件损坏自动回退 `.bak`；结构化写入结果 + 原子写 + 内容相同不触盘 + 每日备份 |
 | `Settings.cs` | `settings.json` 统一读写（保留未知字段） |
 | `AppearancePresets.cs` | **毛玻璃预设集中定义**（6 款 × 7 参数）、`Apply` / `Find` / `MarkCustom` / `RestoreDefaults` / `DetectKey` |
 | `Catalog.cs` | 软件清单模型、分类规则、排序 |
@@ -937,7 +956,9 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `AppScan.cs` | 扫描流程编排（开始菜单 → 死链清理 → 便携软件 → 注册表 → 商店）|
 | `NativeScanner.cs` | 遍历开始菜单目录、猜分类、清理死链接 |
 | `PortableScanner.cs` | 便携软件识别（目录递归、主程序挑选、重名去重） |
-| `ScanService.cs` | 后台扫描调度（single-flight；运行中触发合并为一次补跑，回调不丢） |
+| `ScanService.cs` | 后台扫描调度（single-flight；运行中触发合并为一次补跑；分别报告成功/内容变化/耗时） |
+| `CatalogPreloader.cs` | 四叶草首帧后后台预热纯数据目录；按输入文件签名校验并单次领取 |
+| `ResourceSnapshot.cs` | 进程资源快照与收敛判定：工作集、私有内存、托管堆、句柄、线程、GDI、USER |
 | `Pinyin.cs` | 拼音匹配（全拼 / 首字母） |
 | `PinyinData.cs` | 汉字拼音表（自动生成，勿手改） |
 | `SystemState.cs` | `system-state.json` 的读写（崩溃后能靠它还原） |
@@ -950,7 +971,8 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `TaskbarProbeCoordinator.cs` | 任务栏探测纯状态机：事件合并、单飞、generation、防旧结果覆盖、有限重试 |
 | `VisibleLoadTimer.cs` | 主面板可见周期计时：隐藏取消、旧 generation 失效 |
 | `FullscreenWatch.cs` | 全屏判定（含多显示器） |
-| `SystemSearch.cs` | **系统级搜索**：开始菜单 + 注册表（App Paths / Uninstall），同步返回（实测 8–15ms）|
+| `SystemSearch.cs` | **系统级搜索**：开始菜单 + 注册表（App Paths / Uninstall）内存索引；启动后预热、变化失效、热查询毫秒级 |
+| `SearchRanking.cs` | 搜索匹配分级、两路保守去重与个性化排序；统一排名后再截断 |
 | `FileExtGroups.cs` | **后缀分组**（doc/xls/ppt/pdf/图片/压缩包/安装包/其他）+ `KeepEntry` 类型过滤判定（文件夹与后缀两个独立状态）|
 | `Elevation.cs` | **按需提权**：`IsAccessDenied` / `IsUserCancelled`（UAC 1223）/ `RunAs` / `OpenAs` / `DeleteAsAdmin` / `QuoteCmdArg`（cmd 转义）|
 | `FileFolders.cs` | **「文件」来源清单**（`config\file-folders.json`）：添加/移除/重命名、路径归一化、网络路径拒绝、上限 10 个、失效保留 |
@@ -971,7 +993,11 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 |---|---|
 | `PanelWindow.cs` | 窗口生命周期、显示/隐藏、拖拽改尺寸、窗口布局存取、启动应用、面板定位 |
 | `PanelWindow.Ui.cs` | 界面骨架 `BuildUi` 与通用小控件（图标按钮、字形）、顶部胶囊分类栏、插入标记 Canvas |
-| `PanelWindow.Nav.cs` | 顶部分类栏、搜索过滤、应用磁贴渲染、**拖拽浮层 + 平滑让位**、键盘选中导航、右键菜单 |
+| `PanelWindow.Nav.cs` | 顶部分类栏、内容层切换、键盘选中导航与页面协调 |
+| `PanelWindow.Search.cs` | 100ms 搜索防抖、搜索状态与底栏反馈 |
+| `PanelWindow.Tiles.cs` | 应用磁贴渲染、视口图标、常用排序与右键菜单 |
+| `PanelWindow.TileDrag.cs` | 磁贴轻量拖拽浮层、静态插入预览与原地排序提交 |
+| `PanelWindow.Desks.cs` | **桌面收纳完整功能**：自定义桌面、收纳/放回、存放目录、桌面快捷方式 |
 | `PanelWindow.Tasks.cs` | 任务栏区域（当前窗口列表、右键菜单、定时刷新） |
 | `PanelWindow.Data.cs` | 目录/配置加载保存、刷新、对外接口、设置应用 |
 
@@ -983,7 +1009,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `StartButtonWindow.cs` | 任务栏隐藏时的「开始」按钮 |
 | `MiniTaskbarWindow.cs` | 左下角迷你任务栏 |
 | `GlassBackdrop.cs` | **毛玻璃背景**：固定图裁剪 + 模糊 + 染色 + 噪点 + 边缘高光；截屏模式保留备用 |
-| `SearchResultList.cs` | **搜索结果列表**：已安装应用（拼音）+ 系统 Instant，按来源分组 |
+| `SearchResultList.cs` | **搜索结果列表**：已安装应用立即显示 + 系统索引后台补齐；generation 取消、异步图标、来源行内说明 |
 | `OverlayGate.cs` | 悬浮按钮的全屏隐藏 / 悬停唤出统一调度 |
 | `TaskbarGeometry.cs` | 全程序唯一任务栏快照：物理像素、多显示器/DPI、开始按钮与应用按钮组统一定位 |
 | `TaskList.cs` | 枚举顶层窗口、切换/关闭 |
@@ -1007,10 +1033,10 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 
 | 文件 | 负责 |
 |---|---|
-| `Program.cs` | 入口、单实例、命令行（`--rescan`/`--show`/`--safe-mode`/`--restore-system`/`--reset-all`/`--guard`）、异常钩子接线、稳定计时、**Log 接线** |
-| `ErrorLog.cs` | error.log（分级、去重、1MB 轮转）、三层未处理异常钩子 |
+| `Program.cs` | 入口、单实例、命令行（含 `--enable-autostart` / `--disable-autostart`）、异常钩子接线、稳定计时、**Log 接线** |
+| `ErrorLog.cs` | error.log（分级、去重、1MB 轮转）、可选 DEBUG 诊断、三层未处理异常钩子 |
 | `AppWatcher.cs` | 监听开始菜单/桌面变化、去抖、定时兜底、桌面清理 |
-| `ResourceWatch.cs` | 内存/句柄自检与缓存清理 |
+| `ResourceWatch.cs` | 工作集/私有内存/托管堆/句柄/线程/GDI/USER 自检与缓存清理 |
 
 **测试**
 
@@ -1023,6 +1049,7 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\CategoryOverrideTest.cs` | 分类覆盖表：优先级 / 重扫保持 / 损坏回退 |
 | `tests\PinyinTest.cs` | 拼音匹配 |
 | `tests\SettingsTest.cs` | 设置读写与开关联动 |
+| `tests\AutostartTest.cs` | 登录计划任务策略、旧快捷方式安全迁移、失败回退、关闭双清理与幂等性 |
 | `tests\CrashGuardTest.cs` | 崩溃计数与安全模式判定 |
 | `tests\WatcherTest.cs` | 文件监听溢出兜底 / Dispose 泄漏 |
 | `tests\OpenFolderTest.cs` | 「打开文件所在位置」路径解析 |
@@ -1039,6 +1066,9 @@ src\ui\      界面层：窗口、控件、图标、日志实现
 | `tests\DeskImporterTest.cs` | 拖入导入：过滤 exe/lnk / 移动 / 冲突改名 / 文件夹 / 占用 |
 | `tests\VerifiedFileMoveTest.cs` | 用户文件安全移动：临时副本核对 / 原子发布 / 失败保留源 |
 | `tests\DeskCollectorTest.cs` | 收纳桌面 / 放回桌面：核对式移动、同名不覆盖、路径审计记录 |
+| `tests\DesktopOrganizeRulesTest.cs` | 智能整理规则：独立持久化、校验、损坏主文件回退 `.bak` |
+| `tests\DesktopOrganizePlannerTest.cs` | 通配符/扩展名/大小/日期匹配、优先级、多规则命中、冲突改名与顶层扫描 |
+| `tests\DesktopOrganizeExecutorTest.cs` | 移动/复制/忽略混合执行、取消勾选、目标竞争不覆盖、源变化保护 |
 | `tests\DropTargetTest.cs` | 拖出落点判定：类名 → 桌面/资源管理器/其他 → 是否移动源 |
 | `tests\DesktopDragGestureTest.cs` | 拖动手势：画布内自由摆放 / 边缘无缝切系统拖放 |
 | `tests\AcceptanceTest.cs` | **验收测试**：真建面板 + JSON 证据报告 + 拒绝真实目录（含 5 条存放目录验收断言）|
@@ -1157,7 +1187,7 @@ CloverStart.exe --reset-all --keep-config   只撤销对系统的影响，保留
 1. 恢复系统任务栏（可见性 + 撤掉 `WS_EX_LAYERED`）
 2. 清除 `system-state.json`
 3. 校验任务栏自动隐藏状态（只记录不改动，避免误改用户原有设置）
-4. 移除开机自启快捷方式
+4. 移除开机自启（登录计划任务 + 兼容快捷方式）
 5. 停止看门狗进程（**排除自身 PID**，只杀无窗口的 guard 进程）
 6. 清除 `crash-guard.json`（注意顺序：先 `ClearSafeMode()` 再删文件，否则会被写回来）
 7. 清理图标缓存（`--keep-config` 时跳过）
@@ -1255,7 +1285,7 @@ CloverStart.exe --restore-system   只还原系统状态然后退出
 | 无长期订阅 | 没有使用会长期订阅的 `AutomationEvent`，无需 `RemoveAllEventHandlers` |
 | FileSystemWatcher | 处理 `Error` 事件（缓冲区溢出）→ 合并成一次全量扫描；扫描期间的新触发汇总为一次补跑；回调只投递消息不干活；退出时 `Dispose` |
 | 扫描限流 | 便携软件递归：深度 ≤ 5、目录 ≤ 8000、**文件 ≤ 20 万**、**单次超时 60 秒**（超限中止并写日志，已扫到的保留） |
-| 资源自检 | 每 10 分钟记录内存/句柄（含峰值）；超过 **400 MB / 3000 句柄**写 WARN，并清理应用图标缓存 + 窗口图标缓存 + 强制 GC |
+| 资源自检 | 每 10 分钟采样工作集、私有内存、托管堆、句柄、线程、GDI、USER；超过 **400 MB / 3000 句柄**写 WARN，并清理应用图标缓存 + 窗口图标缓存 + 强制 GC |
 | 图标/GDI | 图标统一走 `IconCache`（内存 + 磁盘），`DestroyIcon` 在 `finally` 里保证执行；窗口列表图标按句柄缓存，进程变化自动失效 |
 
 **定时器清单**：
@@ -1267,7 +1297,7 @@ CloverStart.exe --restore-system   只还原系统状态然后退出
 | `TriggerWindow` 定位兜底 | 30s | 弥补 Shell 事件丢失 | UIAutomation 失败仅在 1s / 3s 各短重试一次 |
 | `PanelWindow` 任务栏列表 | 1.5s | 刷新窗口列表 | 只在面板可见时刷新 |
 | `AppWatcher` 去抖 | 2.5s | 合并文件变化事件 | 一次性，不常驻 |
-| `AppWatcher` 兜底 | 15 分钟 | 全量扫描兜底 | 已从 5 分钟放宽 |
+| `AppWatcher` 兜底 | 6 小时 | 全量扫描兜底 | 开始菜单变化仍在约 2.5 秒内事件驱动扫描 |
 | `ResourceWatch` | 10 分钟 | 内存/句柄自检 | |
 | 稳定计时 | 5 分钟 | 清除崩溃计数 | 一次性 |
 
@@ -1285,6 +1315,7 @@ CloverStart.exe --restore-system   只还原系统状态然后退出
 | 操作 | 走什么 | 保证 |
 |---|---|---|
 | 收纳桌面 / 放回桌面 | 操作前确认 + `VerifiedFileMove` | 临时副本 → 核对大小与目录清单 → 原子发布 → 再核对源未变 → 才删源；同名自动改名，不覆盖 |
+| 智能整理 | 逐项预览 + `VerifiedFileMove` | 只执行勾选项；移动/复制/忽略；实际目标必须与预览一致，源变化或目标竞争则停止该项 |
 | 改标签名 | `VerifiedFileMove` | 文件夹跟着改名，失败保留旧目录与记录 |
 | 删除标签（放回桌面）| `VerifiedFileMove` + 自动改名 | 同名不覆盖，改成 `名称 (1)` |
 | 换存放目录 | `VerifiedFileMove` + 全有或全无 | 预检不过一个都不搬；中途失败把已搬的搬回原处 |
@@ -1372,7 +1403,7 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 - **单实例**：重复双击 / 开机自启后再手动打开，只会通知已运行的实例弹出面板，不会出现第二个进程或第二个四叶草图标
 - **配置防损坏**：所有 JSON 写入都是"临时文件 + 原子替换"，并保留 `.bak`；读取失败自动回退 `.bak`，再失败则用默认值
 - **每日配置备份**：每天第一次写某个配置时，把当前内容存一份到 `config\backup\yyyyMMdd\`，同一天多次写只留最早那份；只保留最近 7 天
-- **日志**：`config\error.log` 每条独立一行，带时间与级别（INFO/WARN/ERROR）；连续重复的内容合并成"共 N 次"；超过 1 MB 自动轮转成 `error.log.1`
+- **日志**：`config\error.log` 每条独立一行，带时间与级别（INFO/WARN/ERROR）；连续重复的内容合并成"共 N 次"；超过 1 MB 自动轮转成 `error.log.1`。索引预热、无变化扫描、资源基线等明细默认不落盘；排障时设置环境变量 `CLOVERSTART_DIAGNOSTICS=1`，或创建空文件 `config\diagnostics.enabled`，即可写入 `DEBUG` 诊断记录
 - **自动刷新 + 死链接清理**：装/卸载软件后自动更新；扫描时剔除目标已不存在的死链接
 - 诊断用命令行：`CloverStart.exe --rescan` 手动触发一次扫描；`--show` 直接打开面板；`--restore-system` 只还原系统状态；`--safe-mode` 强制安全模式
 
@@ -1421,37 +1452,48 @@ WPF 的 `WrapPanel` **不虚拟化**，磁贴是用 `tilePanel.Children.Add()` �
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 ```
 
-当前脚本运行 **60 个套件**，不依赖测试框架，直接用 `csc` 编成 console exe；准确断言数和每套耗时写入 `tests\bin\test-summary.json`。
+当前脚本运行 **66 个套件**，不依赖测试框架，直接用 `csc` 编成 console exe。生产源码先编成一个共享 `.netmodule`，各 UI 套件通过 `/addmodule` 链入，不再重复编译整套源码；准确断言数和每套耗时写入 `tests\bin\test-summary.json`。
 
 最近一次完整运行的套件数、断言数与验收项以 `tests\bin\test-summary.json` 和 `tests\bin\acceptance-report.json` 为准；每次改动后都必须重新生成，README 不再保留容易过期的断言快照。
 
-CI 使用 `-CoreOnly` 跑 38 个不依赖交互式桌面的套件；真实创建 WPF 窗口、抢前台焦点和任务栏探测仍在本机完整测试中运行：
+本次优化后的本机基线（2026-11-11）：**66 / 66 个套件、3,242 条断言、验收 78 / 78 项全部通过**。
+
+CI 使用 `-CoreOnly` 跑不依赖交互式桌面的套件；真实创建 WPF 窗口、抢前台焦点和任务栏探测仍在本机完整测试中运行：
 
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1 -CoreOnly
+```
+
+资源压力模式会反复打开/收起真实主面板，并把每轮工作集、私有内存、托管堆、句柄、线程、GDI、USER 写入 `tests\bin\resource-stress.json`；默认测试不运行这段长流程：
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1 -Stress -StressCycles 100
 ```
 
 **单元测试**（不需要桌面会话）：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `CatalogTest` | 80 | 分类规则、大小写、优先级、`ContainsName/Path`、`JsonIO` 往返、损坏主文件回退 `.bak`、结构化写失败、每日备份与裁剪 |
+| `CatalogTest` | 82 | 分类规则、大小写、优先级、`ContainsName/Path`、`JsonIO` 往返、损坏主文件回退 `.bak`、结构化写失败、**相同内容不触盘**、每日备份与裁剪 |
 | `CategoryOverrideTest` | 30 | 分类覆盖表：优先级、重新加载后保持、路径大小写不敏感、文件损坏回退 |
 | `CategoryRulesTest` | 61 | 外置规则表：三层优先级、四种匹配模式、全角折叠、中文子串、热加载 |
 | `PinyinTest` | 37 | 单字拼音、首字母、全拼、中英混合、边界值、真实应用名覆盖率、性能 |
-| `SettingsTest` | 72 | 设置默认值与往返、安全模式不固化受抑制值、老配置显式值不被覆盖、未知字段保留、损坏 JSON 回退、已删键原样保留、`filesSort` 非法值回退 |
+| `SettingsTest` | 74 | 设置默认值与往返、安全模式不固化受抑制值、老配置显式值不被覆盖、未知字段保留、损坏 JSON 回退、已删键原样保留、`filesSort` 非法值回退 |
+| `AutostartTest` | 45 | 用户登录计划任务策略、任务 XML 回读、旧快捷方式安全迁移、注册失败兼容回退、关闭双清理与重复启用幂等性 |
 | `WatcherTest` | 5 | 事件风暴下监听链路、Error 处理器已挂、`Dispose` 后无泄漏回调 |
 | `SafeCallTest` | 8 | 后台执行、截止时间内返回、超时及时降级、迟到结果丢弃且只回调一次 |
-| `ScanServiceTest` | 14 | single-flight、忙时请求合并为一次补跑、严格串行、所有触发方回调不丢 |
+| `ScanServiceTest` | 16 | single-flight、忙时请求合并为一次补跑、严格串行、所有触发方回调不丢、成功与内容变化分开报告 |
+| `CatalogPreloaderTest` | 10 | 后台预热、稳定快照命中、单次领取、输入变化自动失效、同步安全回退，以及新旧 generation 并发时旧 worker 不清理或覆盖新状态 |
+| `ResourceSnapshotTest` | 7 | 七类进程资源采样、预热后收敛与持续增长判定，以及句柄/GDI/USER 每轮线性增长的反例 |
 
 **应用来源测试**：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `DedupTest` | 79 | 去重：路径合并、名称+发布者、同名不同程序不合并、**shell:AppsFolder 分两类**（真商店/传统软件）、lnk 解析、**卸载入口判定**、**安装包路径排除**、**同来源多入口不合并** |
+| `DedupTest` | 84 | 去重：路径合并、名称+发布者、同名不同程序不合并、**shell:AppsFolder 分两类**（真商店/传统软件）、lnk 解析、**卸载入口判定**、**安装包路径排除**、**同来源多入口不合并** |
 | `MigrationTest` | 77 | 分类隐藏 → 逐条隐藏的一次性迁移：幂等、不覆盖、读不出时不写标记、标记写入策略 |
-| `IconTest` | 21 | 图标：普通 exe、**lnk 左下角无箭头**、透明通道、缓存键版本化、商店应用图标 |
-| `GlassBackdropTest` | 24 | 毛玻璃：`glassMode` 映射、`FollowWallpaper` 开关、截屏路径不抛异常、Wallpaper Engine 场景缓存切换、设置项默认值与往返 |
+| `IconTest` | 32 | 图标：普通 exe、**lnk 左下角无箭头**、透明通道、缓存键版本化、商店应用图标 |
+| `GlassBackdropTest` | 30 | 毛玻璃：`glassMode` 映射、`FollowWallpaper` 开关、截屏路径不抛异常、Wallpaper Engine 场景缓存切换、设置项默认值与往返 |
 
 **「文件库」测试**（内部兼容键仍为“文件”）：
 
@@ -1460,7 +1502,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1 -CoreOnl
 | `FileFoldersTest` | 81 | 来源清单：添加合法目录、拒绝不存在/文件/UNC/网络盘、路径归一化（反斜杠/尾斜杠/盘符根/空格/引号）、去重（大小写/尾斜杠/正斜杠）、上限 10 个、重命名与重名加 (2)(3)、移除不碰磁盘、**失效路径记录保留**、**损坏 JSON 回退**、**主文件损坏从 `.bak` 恢复**、原子写无 `.tmp` 残留 |
 | `FilesTabTest` | 133 | 目录列举：**不递归**、过滤规则 12 项（`.lnk`/`desktop.ini`/`~$`/`.tmp`/`.crdownload`/`.part`/`.download` 不显示，`.url`/`.exe`/`.msi` 显示）、隐藏与系统属性、四种排序、拼音过滤、**500 返回上限**、**5000 枚举上限**、错误处理不抛异常、**只读验证**、**后缀分组**（固定组命中/大小写归一化/「其他」判定含无扩展名/自定义后缀移出「其他」/`Passes` 筛选）|
 | `FileOpsTest` | 250 | 修改操作（**假文件系统，不碰真实回收站**）：名称校验、重命名成功与拒绝、**仅大小写变化走两步中转**、来源根不可改、**删除走回收站**（`HardDeleteCalls==0`）、**可移动盘/网络盘拒绝**、受保护目录、剪切不移动、**粘贴不覆盖**、**禁止粘贴到自身子目录**、同卷/跨卷移动、新建文件夹重名加序号、**失败不重试且不删原文件**、日志裁剪与提权工具 |
-| `LowValueTest` | 59 | 低价值识别：卸载/帮助/许可/语言/修复关键词、6 种扩展名、失效快捷方式、大小写不敏感、`ExeNameOf`、不误伤普通应用 |
+| `LowValueTest` | 69 | 低价值识别：卸载/帮助/许可/语言/修复关键词、6 种扩展名、失效快捷方式、大小写不敏感、`ExeNameOf`、不误伤普通应用 |
 | `DesktopKeepTest` | 47 | 保留名单：路径规范化（大小写/分隔符/尾斜杠/盘符根）、`NameKey`、扩展名过滤（只 `.lnk`/`.url`）、名单增删去重、**自动失效 Prune**、公共桌面判定 |
 
 **「桌面收纳」测试**（内部兼容键与默认目录仍为“桌面文件”）：
@@ -1474,6 +1516,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1 -CoreOnl
 | `DeskImporterTest` | 73 | 拖入：允许普通文件、文件夹与快捷方式，拒绝应用类文件；按来源选择复制/移动，冲突改名，占用失败保留源 |
 | `VerifiedFileMoveTest` | 43 | 安全复制/移动：临时副本核对、原子发布、**目标已存在不覆盖**、失败不留半成品、源文件与嵌套目录完整性 |
 | `DeskCollectorTest` | 18 | 收纳 / 放回：核对式移动、同名不覆盖、原路径与新路径审计记录 |
+| `DesktopOrganizeRulesTest` | 24 | 规则默认值与表单校验、独立 JSON 往返、唯一 ID、损坏主文件回退 `.bak`、双损坏安全回退为空 |
+| `DesktopOrganizePlannerTest` | 22 | 通配符（含带空格文件名）、扩展名、大小、日期、文件夹条件、顺序优先级、全部命中提示、同名预分配、混合状态、只扫顶层 |
+| `DesktopOrganizeExecutorTest` | 12 | 移动/复制/忽略、取消勾选、预览后目标竞争不覆盖、源变化时保留源并拒绝发布 |
 | `DeskMigrationNoticeTest` | 4 | 旧标签迁移冲突只提示一次、重启后仍记得 |
 | `DropTargetTest` | 18 | 落点判定：类名 → 桌面 / 资源管理器 / 其他 → 是否移动源 |
 | `DesktopDragGestureTest` | 30 | 手势：画布内自由摆放、边缘无缝切系统拖放、**用按下时的原始格子而非跟随指针的图标位置** |
@@ -1489,20 +1534,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1 -CoreOnl
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `CrashGuardTest` | 45 | 崩溃计数、2 分钟窗口边界、安全模式阈值、时钟回拨防护；运行标记法；重新隐藏配额 |
+| `CrashGuardTest` | 48 | 崩溃计数、2 分钟窗口边界、安全模式阈值、时钟回拨防护；运行标记法；重新隐藏配额 |
 | `OpenFolderTest` | 33 | 「打开文件所在位置」：`/select`、退回目录、`.lnk` 解析、**商店应用专门提示**、**搜索结果右键菜单对商店应用的处理** |
 | `HiddenAppsTest` | 47 | 隐藏应用：存储 / 目录过滤 / 与隐藏分类并存 |
 | `ScanChainTest` | 15 | 扫描链：便携条目不被抹掉、**商店应用不被死链清理误删** |
 | `RunningAppsTest` | 24 | 运行状态：精确路径匹配、缓存不解析 lnk、**商店应用不显示圆点** |
 | `ActiveRowTest` | 14 | 任务栏行高亮：只有一行亮、前台句柄为 0 时不高亮、切换后翻转 |
 | `FullscreenTest` | 5 | 子进程建**真正的无边框全屏窗口** → 断言 `IsFullscreen()` |
-| `TaskbarCreatedTest` | 6 | 消息号注册唯一性、子进程监听 → 父进程投递 → 确认收到 |
+| `TaskbarCreatedTest` | 12 | 消息号注册唯一性、子进程监听 → 父进程投递 → 确认收到 |
 
 **验收测试**（真实创建窗口，验证"界面确实画出来了"）：
 
 | 套件 | 断言数 | 覆盖 |
 |---|---|---|
-| `AcceptanceTest` | 63 | **真实创建 `PanelWindow`** → 主面板最小化/最大化/收起及隐藏行为、外观/整理与隐藏/设置窗口仅关闭、文件库/桌面收纳显示名、只保留收纳/放回两个操作、窄窗口换行、页面提示、reduced-motion 接线、主题切换、磁贴、搜索与存放目录完整验收 |
+| `AcceptanceTest` | 75 | **真实创建 `PanelWindow`** → 主面板最小化/最大化/收起及隐藏行为、外观/整理与隐藏/设置/智能整理窗口仅关闭、文件库/桌面收纳显示名、四个桌面操作入口的原生按钮与键盘路径、规则预览内容、640px 窄窗口无溢出、搜索精确结果排首位并输出 PNG 证据、页面提示、reduced-motion 接线、主题切换、磁贴与存放目录完整验收 |
 
 `AcceptanceTest` 借鉴了两个做法（**只借鉴形态，不复制代码** —— 参考项目用的是与 MIT 不兼容的非商业许可）：
 
@@ -1572,7 +1617,7 @@ tests\bin\AcceptanceTest.exe --data-dir <真实程序目录>
 - **改版本号**：编辑根目录 `VERSION`（形如 `1.0.0`），再重新编译。程序内版本、exe 文件属性、发布包名、git tag 都从它取，保证一致。
 - **打包发布**：`powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1`（生成 `dist\CloverStart-v<版本>.zip` 和 `.sha256` 校验文件）
 - **改开关默认值**：编辑 `src\core\Settings.cs` 的字段初始值。
-- **取消开机自启**：删掉 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\四叶草启动器.lnk`，或右键四叶草把“开机自启”取消勾选。
+- **取消开机自启**：右键四叶草取消勾选“开机自启”，或运行 `CloverStart.exe --disable-autostart`；程序会同时删除登录计划任务与兼容快捷方式。
 - **取回旧备份的快捷方式**：见下方「取回 desktop-backup 里的快捷方式」
 
 ## 已知限制

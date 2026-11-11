@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Input;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace Clover
@@ -126,6 +127,12 @@ namespace Clover
 
         static void RunAcceptance(string root, string reportPath)
         {
+            // 正式启动流程会在创建任何窗口前应用主题（Program.cs）。验收进程也必须
+            // 建立同样的前置条件；否则 Ui 的全局刷子仍是默认透明色，窗口行为断言
+            // 虽能通过，但 RenderTargetBitmap 生成的视觉证据会只剩透明背景。
+            // 固定浅色可让 PNG 在不同机器的 Windows 主题下保持可重复。
+            Ui.ApplyTheme(Ui.ThemeMode.Light);
+
             // ---------- 1. 在临时目录里造最小数据 ----------
             string exeA = Path.Combine(root, "alpha.exe");
             string exeB = Path.Combine(root, "beta.exe");
@@ -519,27 +526,114 @@ namespace Clover
                 }
             });
 
-            Verify("★桌面收纳只保留收纳/放回，不显示撤销", delegate
+            Verify("★桌面收纳保留旧操作并增加智能整理入口，不显示撤销", delegate
             {
                 try
                 {
                     panel.TestSwitchCategory("桌面文件");
                     WaitForDispatcher(200);
                     List<string> labels = panel.TestDeskToolLabels();
+                    List<Button> buttons = panel.TestDeskToolButtons();
                     panel.TestSwitchCategory("常用");
 
-                    if (labels.Count != 2)
-                        return "应有 2 个操作，实际 " + labels.Count + "：" + string.Join(" / ", labels.ToArray());
-                    if (labels[0] != "收纳桌面" || labels[1] != "放回桌面")
+                    if (labels.Count != 4)
+                        return "应有 4 个操作，实际 " + labels.Count + "：" + string.Join(" / ", labels.ToArray());
+                    if (buttons.Count != labels.Count)
+                        return "桌面操作没有全部使用原生按钮：" + buttons.Count + " / " + labels.Count;
+                    if (labels[0] != "收纳桌面" || labels[1] != "放回桌面"
+                        || labels[2] != "智能整理…" || labels[3] != "整理规则…")
                         return "操作顺序或文字不对：" + string.Join(" / ", labels.ToArray());
-                    foreach (string label in labels)
+                    for (int i = 0; i < labels.Count; i++)
+                    {
+                        string label = labels[i];
                         if (label.IndexOf("撤销", StringComparison.Ordinal) >= 0)
                             return "仍出现撤销操作：" + label;
-                    return "ok（旧历史存在时仍只有收纳桌面 / 放回桌面）";
+                        if (!buttons[i].Focusable || !buttons[i].IsTabStop)
+                            return label + " 不能通过 Tab 聚焦";
+                        if (AutomationProperties.GetName(buttons[i]) != label)
+                            return label + " 的辅助名称不完整";
+                    }
+                    return "ok（旧操作保留；四个入口均为原生按钮，可键盘操作）";
                 }
                 catch (Exception ex)
                 {
                     return ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+
+            Verify("★智能整理规则与预览窗口使用仅关闭标题栏", delegate
+            {
+                Window rulesWindow = null;
+                Window previewWindow = null;
+                try
+                {
+                    Dictionary<string, string> targets = new Dictionary<string, string>(
+                        StringComparer.OrdinalIgnoreCase);
+                    string targetDir = Path.Combine(root, "desks", "桌面文件");
+                    Directory.CreateDirectory(targetDir);
+                    targets["桌面文件"] = targetDir;
+
+                    DesktopOrganizeRulesDialog rules = new DesktopOrganizeRulesDialog(
+                        null, root, targets);
+                    rulesWindow = rules.WindowForTest;
+
+                    DesktopOrganizePlan plan = new DesktopOrganizePlan();
+                    DesktopOrganizePlanItem item = new DesktopOrganizePlanItem();
+                    item.Name = "示例.txt";
+                    item.Source = Path.Combine(root, "desktop", "示例.txt");
+                    item.SourceLabel = "用户桌面";
+                    item.State = DesktopPlanState.Ready;
+                    item.Action = DesktopRuleAction.Move;
+                    item.RuleName = "文档归档";
+                    item.MatchedRules.Add("文档归档");
+                    item.TargetPath = Path.Combine(targetDir, "示例.txt");
+                    item.Selected = true;
+                    plan.Items.Add(item);
+
+                    DesktopOrganizePreviewDialog preview = new DesktopOrganizePreviewDialog(
+                        null, plan, 0);
+                    previewWindow = preview.WindowForTest;
+
+                    foreach (Window window in new Window[] { rulesWindow, previewWindow })
+                    {
+                        if (window == null) return "窗口构造返回 null";
+                        if (window.ShowInTaskbar) return window.Title + " 不应占任务栏";
+                        if (window.WindowStyle != WindowStyle.None)
+                            return window.Title + " 仍使用系统标题栏";
+                        List<string> actions = CollectDialogCaptionActions(window);
+                        if (actions.Count != 1 || actions[0] != "关闭窗口")
+                            return window.Title + " 标题栏动作不正确："
+                                + string.Join(" / ", actions.ToArray());
+
+                        // ScrollViewer 的 ContentPresenter 要到窗口真正显示后才进入可视树。
+                        // 这里必须走一次真实 Show + 布局，不能只检查未加载的对象树。
+                        window.Show();
+                        window.Dispatcher.Invoke(new Action(delegate { }), DispatcherPriority.Loaded);
+                        window.UpdateLayout();
+                        Pump(100);
+                    }
+
+                    List<string> previewTexts = new List<string>();
+                    CollectTexts(previewWindow.Content as DependencyObject, previewTexts);
+                    string joined = string.Join(" | ", previewTexts.ToArray());
+                    if (joined.IndexOf("示例.txt", StringComparison.Ordinal) < 0)
+                        return "预览未显示源项目";
+                    if (joined.IndexOf("文档归档", StringComparison.Ordinal) < 0)
+                        return "预览未显示命中规则";
+                    if (joined.IndexOf(targetDir, StringComparison.OrdinalIgnoreCase) < 0)
+                        return "预览未显示最终位置";
+                    if (joined.IndexOf("绝不覆盖", StringComparison.Ordinal) < 0)
+                        return "预览未写明不覆盖保证";
+                    return "ok（两窗口仅关闭，预览含源/规则/动作/最终位置/安全说明）";
+                }
+                catch (Exception ex)
+                {
+                    return ex.GetType().Name + ": " + ex.Message;
+                }
+                finally
+                {
+                    try { if (previewWindow != null) previewWindow.Close(); } catch { }
+                    try { if (rulesWindow != null) rulesWindow.Close(); } catch { }
                 }
             });
 
@@ -1020,6 +1114,57 @@ namespace Clover
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
             });
 
+            Verify("★拖动换位复用原磁贴且不整页刷新", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                        return "磁贴没有在 5 秒内完成渲染";
+
+                    List<Border> before = panel.TestRenderedTileSnapshot();
+                    if (before.Count < 4) return "可测试磁贴不足: " + before.Count;
+                    Border moved = before[0];
+
+                    // target=3 是移除前的插入位；源在前方，所以最终下标为 2。
+                    panel.TestCommitDrag(0, 3);
+                    List<Border> after = panel.TestRenderedTileSnapshot();
+                    if (after.Count != before.Count) return "换位后磁贴数量变化";
+                    if (!object.ReferenceEquals(after[2], moved))
+                        return "被拖磁贴被重建，或没有落到预期位置";
+                    foreach (Border tile in before)
+                        if (!after.Contains(tile)) return "换位后出现新磁贴对象";
+                    if (!panel.TestTileMapConsistent()) return "原地换位后映射不一致";
+
+                    // 还原夹具顺序，后续验收不继承本项的人工排序。
+                    panel.TestCommitDrag(2, 0);
+                    List<Border> restored = panel.TestRenderedTileSnapshot();
+                    if (!object.ReferenceEquals(restored[0], moved))
+                        return "还原排序时磁贴被重建";
+                    if (!panel.TestTileMapConsistent()) return "还原后映射不一致";
+                    return "ok（磁贴对象全部复用；无 RenderApps 整页刷新）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            Verify("★拖动预览只移动插入线且磁贴保持静止", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                        return "磁贴没有在 5 秒内完成渲染";
+                    List<Border> tiles = panel.TestRenderedTileSnapshot();
+                    if (tiles.Count < 12) return "可测试磁贴不足: " + tiles.Count;
+
+                    // 从首项跨到下一行，覆盖旧实现最卡的“整行让位动画”路径。
+                    if (!panel.TestDragPreviewKeepsTilesStationary(0, 10))
+                        return "跨行预览改变了磁贴位移，或插入位置不正确";
+                    return "ok（跨行时仅更新插入线；周围磁贴无位移/动画）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
             Verify("★磁贴图标只挂载视口附近并随滚动切换", delegate
             {
                 double oldWidth = panel.Width;
@@ -1156,6 +1301,158 @@ namespace Clover
                 string after = box.Text;
                 box.Text = "";
                 return after == "alp" ? "ok" : "输入未生效: " + after;
+            });
+
+            Verify("★搜索防抖与异步补充可完成", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("常用");
+                    panel.TestSetSearchText("notepad");
+                    WaitForDispatcher(50);
+                    // 100ms 以内仍处于防抖窗口，输入本身必须保持流畅且文字不丢。
+                    if (panel.TestSearchText() != "notepad") return "防抖期间搜索词丢失";
+                    WaitForDispatcher(1200);
+                    if (!panel.TestSearchResultVisible()) return "防抖后没有进入搜索结果层";
+                    if (!panel.TestSearchCompleted()) return "系统补充搜索在 1.2 秒内未完成";
+                    panel.TestSetSearchText("");
+                    WaitForDispatcher(150);
+                    return "ok（结果 " + panel.TestSearchResultCount() + " 条）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
+            // ---------- 6b. 最窄窗口下的常用分组 + 搜索排名视觉证据 ----------
+            // 使用独立子目录，既不改本验收窗口的数据，也不接触用户真实配置。
+            Verify("★最窄窗口常用分组与搜索首项视觉证据", delegate
+            {
+                PanelWindow visual = null;
+                try
+                {
+                    string visualRoot = Path.Combine(root, "visual-common-search");
+                    Directory.CreateDirectory(Path.Combine(visualRoot, "config"));
+                    Directory.CreateDirectory(Path.Combine(visualRoot, "res"));
+
+                    string fill0 = Path.Combine(root, "fill0.exe");
+                    string fill1 = Path.Combine(root, "fill1.exe");
+                    string fill2 = Path.Combine(root, "fill2.exe");
+                    WriteManualApps(visualRoot, new string[][]
+                    {
+                        new string[] { "Code", exeA, "开发" },
+                        new string[] { "Visual Studio Code", exeB, "开发" },
+                        new string[] { "Code Helper", exeC, "开发" },
+                        new string[] { "Alpha Notes", fill0, "办公" },
+                        new string[] { "微信", fill1, "网络通讯" },
+                        new string[] { "微信读书", fill2, "办公" },
+                    });
+
+                    Settings visualSettings = Settings.Load(visualRoot);
+                    visualSettings.Theme = "light";
+                    visualSettings.GlassOpacity = 0;
+                    visualSettings.ShowFilesTab = true;
+                    visualSettings.PinnedCommon.Add(exeB);
+                    visualSettings.PinnedCommon.Add(exeA);
+                    visualSettings.Save();
+
+                    UsageStore visualUsage = UsageStore.Load(visualRoot);
+                    for (int i = 0; i < 12; i++) visualUsage.Record(exeC);
+                    for (int i = 0; i < 8; i++) visualUsage.Record(fill0);
+                    for (int i = 0; i < 5; i++) visualUsage.Record(fill1);
+                    for (int i = 0; i < 2; i++) visualUsage.Record(fill2);
+
+                    visual = new PanelWindow(visualRoot, null, Settings.Load(visualRoot));
+                    visual.Width = visual.MinWidth;
+                    visual.Height = 520;
+                    visual.Show();
+                    visual.TestSwitchCategory("常用");
+                    if (!WaitUntilDeferredRenderComplete(visual, 5000))
+                        return "常用分组未在 5 秒内完成渲染";
+                    visual.UpdateLayout();
+
+                    List<Border> borders = FindAll<Border>(visual);
+                    Border pinnedHeader = null;
+                    Border recentHeader = null;
+                    foreach (Border b in borders)
+                    {
+                        string n = AutomationProperties.GetName(b) ?? "";
+                        if (n.StartsWith("手动固定，", StringComparison.Ordinal)) pinnedHeader = b;
+                        if (n.StartsWith("最近常用，", StringComparison.Ordinal)) recentHeader = b;
+                    }
+                    if (pinnedHeader == null) return "最窄窗口缺少“手动固定”分组标题";
+                    if (recentHeader == null) return "最窄窗口缺少“最近常用”分组标题";
+                    if (pinnedHeader.ActualWidth > visual.ActualWidth + 0.5
+                        || recentHeader.ActualWidth > visual.ActualWidth + 0.5)
+                        return "常用分组标题横向溢出主面板";
+
+                    bool pinnedHintTrims = false;
+                    bool recentHintTrims = false;
+                    foreach (TextBlock t in FindAll<TextBlock>(visual))
+                    {
+                        if (t.Text == "固定项始终保留，可拖动调整组内顺序")
+                            pinnedHintTrims = t.TextTrimming == TextTrimming.CharacterEllipsis;
+                        if (t.Text == "按使用频率与最近启动时间排列")
+                            recentHintTrims = t.TextTrimming == TextTrimming.CharacterEllipsis;
+                    }
+                    if (!pinnedHintTrims || !recentHintTrims)
+                        return "分组说明未启用窄窗口省略策略";
+
+                    string evidenceDir = string.IsNullOrEmpty(reportPath)
+                        ? Path.Combine(root, "evidence")
+                        : Path.GetDirectoryName(Path.GetFullPath(reportPath));
+                    string commonPng = Path.Combine(evidenceDir, "acceptance-common-narrow.png");
+                    RenderVisualPng(visual, commonPng);
+
+                    visual.TestSetSearchText("code");
+                    int waited = 0;
+                    // 输入刚发生时，SearchResultList 仍保留上一轮 Clear 后的
+                    // Completed=true；必须等 100ms 防抖真正启动本轮搜索，不能只看
+                    // Completed，否则会在结果层出现前把旧状态误认成“已经完成”。
+                    while ((!visual.TestSearchResultVisible()
+                        || !visual.TestSearchCompleted()
+                        || visual.TestSearchResultCount() == 0) && waited < 5000)
+                    {
+                        WaitForDispatcher(50);
+                        waited += 50;
+                    }
+                    visual.UpdateLayout();
+                    if (!visual.TestSearchResultVisible()) return "搜索结果层未在 5 秒内显示";
+                    if (!visual.TestSearchCompleted()) return "搜索未在 5 秒内完成";
+
+                    List<string> resultNames = new List<string>();
+                    foreach (Border b in FindAll<Border>(visual))
+                    {
+                        SearchResult r = b.Tag as SearchResult;
+                        if (r != null) resultNames.Add(r.Name ?? "");
+                    }
+                    if (resultNames.Count == 0) return "搜索结果列表为空";
+                    if (resultNames[0] != "Code")
+                        return "精确结果未排首位，实际首项：" + resultNames[0];
+
+                    bool hasInlineSource = false;
+                    foreach (TextBlock t in FindAll<TextBlock>(visual))
+                    {
+                        if ((t.Text ?? "").StartsWith("已安装 · ", StringComparison.Ordinal))
+                        {
+                            hasInlineSource = true;
+                            break;
+                        }
+                    }
+                    if (!hasInlineSource) return "搜索行没有显示来源次要信息";
+
+                    string searchPng = Path.Combine(evidenceDir, "acceptance-search-ranked.png");
+                    RenderVisualPng(visual, searchPng);
+                    if (!File.Exists(commonPng) || new FileInfo(commonPng).Length < 1000)
+                        return "常用分组 PNG 证据未生成";
+                    if (!File.Exists(searchPng) || new FileInfo(searchPng).Length < 1000)
+                        return "搜索排名 PNG 证据未生成";
+
+                    return "ok（640px 最窄宽度无溢出；Code 精确结果第 1；PNG 证据已生成）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+                finally
+                {
+                    try { if (visual != null) visual.Close(); } catch { }
+                }
             });
 
             // ---------- 7. 分类覆盖数据仍然生效（界面入口已移除）----------
@@ -1602,6 +1899,53 @@ namespace Clover
                 return string.Format("ok（{0:N0} -> 切走 -> 切回 {1:N0}）", atA, back);
             });
 
+            Verify("★滚轮使用可中断像素滚动且最终准确落位", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                        return "磁贴没有在 5 秒内完成渲染";
+                    panel.ScrollToForTest(0);
+                    double before = panel.CurrentScrollOffset();
+                    double target = panel.TestSmoothWheel(-120); // 向下一个标准刻度
+                    if (target <= before) return "滚轮目标没有向下移动：" + target;
+
+                    if (!Ui.ReducedMotion)
+                    {
+                        WaitForDispatcher(45);
+                        double middle = panel.CurrentScrollOffset();
+                        if (middle <= before || middle >= target)
+                            return "中间帧不是连续过渡：" + middle + " / " + target;
+                        if (!panel.TestSmoothScrollActive()) return "滚动在中间帧提前结束";
+                    }
+
+                    WaitForDispatcher(220);
+                    double ended = panel.CurrentScrollOffset();
+                    if (Math.Abs(ended - target) > 1.0)
+                        return "最终偏移不准确：" + ended + " / " + target;
+                    if (panel.TestSmoothScrollActive()) return "滚动结束后仍订阅渲染帧";
+
+                    // 连续滚动中反向必须立刻掉头，不能仍朝旧目标移动。
+                    panel.ScrollToForTest(200);
+                    double downTarget = panel.TestSmoothWheel(-120);
+                    double reverseTarget = panel.TestSmoothWheel(120);
+                    if (downTarget <= 200) return "向下目标不正确：" + downTarget;
+                    if (reverseTarget >= downTarget)
+                        return "反向滚轮仍追逐旧目标：" + reverseTarget;
+                    if (!Ui.ReducedMotion && reverseTarget >= 200)
+                        return "动画中的反向没有以当前画面为起点：" + reverseTarget;
+                    WaitForDispatcher(220);
+                    if (Math.Abs(panel.CurrentScrollOffset() - reverseTarget) > 1.0)
+                        return "反向后没有准确落位";
+
+                    return Ui.ReducedMotion
+                        ? "ok（系统关闭动画：即时滚动并准确落位；反向正确）"
+                        : "ok（中间帧连续；140ms 内准确落位；可立即反向；结束后解除帧订阅）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+            });
+
             // ---------- 14b. ★「全部」按名称排序（逐字拼音）----------
             //
             // 本阶段新增：原先「全部」按使用次数排（RenderCompare），
@@ -2040,6 +2384,27 @@ namespace Clover
             t.Tick += delegate { t.Stop(); frame.Continue = false; };
             t.Start();
             System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+
+
+        /// <summary>把真实 WPF 内容树渲染成 PNG，作为可重复检查的视觉证据。</summary>
+        static void RenderVisualPng(Window window, string path)
+        {
+            if (window == null || string.IsNullOrEmpty(path))
+                throw new ArgumentException("窗口或输出路径为空");
+            FrameworkElement visual = window.Content as FrameworkElement;
+            if (visual == null) throw new InvalidOperationException("窗口内容不是 FrameworkElement");
+            visual.UpdateLayout();
+            int width = Math.Max(1, (int)Math.Ceiling(visual.ActualWidth));
+            int height = Math.Max(1, (int)Math.Ceiling(visual.ActualHeight));
+            RenderTargetBitmap bitmap = new RenderTargetBitmap(
+                width, height, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            PngBitmapEncoder encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            string dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            using (FileStream stream = File.Create(path)) encoder.Save(stream);
         }
 
         /// <summary>等待生产代码报告磁贴批次已收尾，不用固定毫秒数猜机器速度。</summary>

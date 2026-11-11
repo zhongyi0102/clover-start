@@ -171,6 +171,14 @@ namespace Clover
                 string back = JsonIO.Read(p);
                 Check(back == json, "JsonIO 写入后可原样读回", back ?? "null");
 
+                DateTime unchangedStamp = File.GetLastWriteTimeUtc(p);
+                System.Threading.Thread.Sleep(20);
+                JsonIO.WriteResult unchangedWrite = JsonIO.WriteAtomicIfChanged(p, json);
+                Check(unchangedWrite.Success && unchangedWrite.Unchanged,
+                    "★相同内容不重复写盘", unchangedWrite.ErrorMessage);
+                Check(File.GetLastWriteTimeUtc(p) == unchangedStamp,
+                    "★相同内容保留原修改时间");
+
                 // 文件被写坏时回退 .bak
                 JsonIO.WriteAtomic(p, json); // 第二次，生成 .bak
                 File.WriteAllText(p, "");

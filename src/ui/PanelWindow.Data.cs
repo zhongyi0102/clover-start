@@ -104,9 +104,11 @@ namespace Clover
             {
                 // 手动重新扫描也走后台，避免界面卡住；完成后自动刷新
                 Ui.Log("手动重新扫描");
-                ScanService.RunAsync(baseDir, "手动", delegate(bool ok)
+                ScanService.RunAsync(baseDir, "手动", delegate(ScanResult result)
                 {
-                    if (!ok) return;
+                    if (result == null || !result.Success || !result.Changed) return;
+                    CatalogPreloader.Invalidate();
+                    SystemSearch.Invalidate();
                     try
                     {
                         Dispatcher.BeginInvoke(new Action(delegate
@@ -132,7 +134,7 @@ namespace Clover
         }
         void ReloadCatalog()
         {
-            catalog = Catalog.Load(baseDir);
+            catalog = CatalogPreloader.TakeOrLoad(baseDir);
             if (usage != null) catalog.ApplyUsage(usage);
             hiddenCats = new List<string>();   // 分类系统已下线，不再从 settings 读
             catalog.HideCategories(hiddenCats);
@@ -152,15 +154,6 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "刷新自定义背景"); }
         }
 
-        /// <summary>
-        /// 按设置挂上/卸下视频背景。
-        ///
-        /// 条件：`GlassMode == "custom"` **且** `config\background\custom-video.*` 存在。
-        /// 不满足就卸下（回退到静态图 / 固定图）。
-        ///
-        /// 视频播放失败时 `OnFailed` 会被调 → 这里改成走静态图，
-        /// 用户至少还能看到一张图，而不是黑屏。
-        /// </summary>
         /// <summary>
         /// 应用 WE 壁纸背景（`GlassMode == "we"`）。
         ///
@@ -443,27 +436,6 @@ namespace Clover
         }
 
         /// <summary>
-        /// 切换「毛玻璃背景」后调用。
-        ///
-        /// 关闭时要**主动移除**已挂上的背景层并把底色改回不透明 ——
-        /// 只改设置不管界面的话，用户会看到"勾掉了但还在"。
-        /// </summary>
-        /// <summary>
-        /// 把 settings 里的外观参数注入 GlassBackdrop。
-        ///
-        /// **为什么必须抽成独立方法**：这三条路径都要注入，
-        /// 否则参数只在其中一条生效（第 1 个提交的真实 bug）：
-        ///   · ApplyGlassSetting  —— 用户点「毛玻璃背景」菜单开关
-        ///   · RefreshGlassSoon   —— 启动 / 显示面板 / 窗口尺寸变化
-        ///   · ApplyTheme         —— 切主题
-        ///
-        /// 之前只有 ApplyGlassSetting 注入，所以改 settings.json 后重启
-        /// 只有 glassOpacity 生效、blur/tint/brightness 全是默认值。
-        ///
-        /// 这些参数只影响 Attach 阶段的合成，**不需要重新截屏**。
-        /// 数值越界由 Settings 读取时已回退默认，这里直接赋值。
-        /// </summary>
-        /// <summary>
         /// 外观窗口拖动滑块时的**轻量预览**。
         ///
         /// 与 ApplyGlassSetting 的区别：
@@ -513,6 +485,10 @@ namespace Clover
             }
         }
 
+        /// <summary>
+        /// 把 settings 里的外观参数注入 GlassBackdrop。启动、显示、切主题与
+        /// 设置预览都走这里，参数只影响合成，不需要重新截屏。
+        /// </summary>
         void InjectGlassParams()
         {
             try
@@ -539,6 +515,7 @@ namespace Clover
             catch { }
         }
 
+        /// <summary>切换毛玻璃设置后立即应用；关闭时主动卸下背景层。</summary>
         public void ApplyGlassSetting()
         {
             try
@@ -662,12 +639,30 @@ namespace Clover
             try
             {
                 if (contentScroll == null) return;
+                StopSmoothScroll(false);
                 contentScroll.UpdateLayout();
                 contentScroll.ScrollToVerticalOffset(offset);
                 contentScroll.UpdateLayout();
                 scrollOffsets[current] = contentScroll.VerticalOffset;
             }
             catch { }
+        }
+
+        /// <summary>验收用：走与真实滚轮相同的平滑滚动入口并返回目标偏移。</summary>
+        internal double TestSmoothWheel(int delta)
+        {
+            try
+            {
+                if (contentScroll == null) return -1;
+                StartSmoothWheelScroll(delta);
+                return smoothScrollTarget;
+            }
+            catch { return -1; }
+        }
+
+        internal bool TestSmoothScrollActive()
+        {
+            return smoothScrollActive;
         }
 
         /// <summary>
@@ -693,7 +688,6 @@ namespace Clover
             }
         }
 
-        /// <summary>
         /// <summary>
         /// 一键隐藏一整类（如「系统工具」45 个）。
         ///
@@ -799,7 +793,6 @@ namespace Clover
             }
         }
 
-        /// <summary>
         // ========== 「已隐藏的应用」页面需要的接口 ==========
 
         /// <summary>隐藏应用快照（供弹窗显示）。</summary>

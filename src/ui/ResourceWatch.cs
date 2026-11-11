@@ -45,10 +45,10 @@ namespace Clover
         {
             try
             {
-                using (Process p = Process.GetCurrentProcess())
+                ResourceSnapshot snapshot = ResourceSnapshot.Capture();
                 {
-                    long mem = p.WorkingSet64;
-                    int handles = p.HandleCount;
+                    long mem = snapshot.WorkingSetBytes;
+                    int handles = snapshot.Handles;
                     double memMb = mem / 1024.0 / 1024.0;
 
                     if (mem > peakBytes) peakBytes = mem;
@@ -63,6 +63,7 @@ namespace Clover
                         {
                             warned = true;
                             ErrorLog.Warn("资源占用偏高：内存 " + memMb.ToString("0.0") + " MB，句柄 " + handles
+                                + " 个，GDI " + snapshot.GdiObjects + "，USER " + snapshot.UserObjects
                                 + " 个（阈值 " + (MemoryWarnBytes / 1024 / 1024) + " MB / " + HandleWarn + " 个）");
                         }
                         // 逐级释放可丢弃的缓存
@@ -70,13 +71,16 @@ namespace Clover
                         try { TaskList.ClearIconCache(); } catch { }
                         // 主动回收一次，给 WPF 归还渲染表面的机会
                         try { GC.Collect(2, GCCollectionMode.Forced, false, false); } catch { }
-                        Ui.Log("资源自检：已清理图标缓存并强制回收");
+                        Log.Diagnostic("资源自检：已清理图标缓存并强制回收");
                     }
                     else
                     {
                         warned = false;
-                        Ui.Log("资源自检：内存 " + memMb.ToString("0.0") + " MB（峰值 "
-                            + (peakBytes / 1024.0 / 1024.0).ToString("0.0") + " MB），句柄 " + handles + " 个");
+                        Log.Diagnostic("资源自检：内存 " + memMb.ToString("0.0") + " MB（峰值 "
+                            + (peakBytes / 1024.0 / 1024.0).ToString("0.0") + " MB），私有 "
+                            + (snapshot.PrivateBytes / 1024.0 / 1024.0).ToString("0.0")
+                            + " MB，句柄 " + handles + "，线程 " + snapshot.Threads
+                            + "，GDI " + snapshot.GdiObjects + "，USER " + snapshot.UserObjects);
                     }
                 }
             }

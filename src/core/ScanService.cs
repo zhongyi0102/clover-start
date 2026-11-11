@@ -4,6 +4,21 @@ using System.Threading;
 
 namespace Clover
 {
+    /// <summary>一次完整扫描的结果；Success 与内容是否变化分开表达。</summary>
+    sealed class ScanResult
+    {
+        public readonly bool Success;
+        public readonly bool Changed;
+        public readonly int DurationMs;
+
+        public ScanResult(bool success, bool changed, int durationMs)
+        {
+            Success = success;
+            Changed = changed;
+            DurationMs = durationMs < 0 ? 0 : durationMs;
+        }
+    }
+
     /// <summary>
     /// 扫描调度器：把耗时的扫描（开始菜单遍历 + 便携软件目录递归）放到后台线程，
     /// 界面线程只负责在扫描完成后刷新界面。
@@ -16,7 +31,7 @@ namespace Clover
         {
             public string BaseDir;
             public string Reason;
-            public readonly List<Action<bool>> Callbacks = new List<Action<bool>>();
+            public readonly List<Action<ScanResult>> Callbacks = new List<Action<ScanResult>>();
         }
 
         static int running;
@@ -25,7 +40,7 @@ namespace Clover
         static Batch pending;
 
         // 通过字段隔离真实扫描，方便并发回归测试注入可控工作；生产默认永远走 AppScan。
-        static Func<string, bool> scanRunner = delegate(string dir) { return AppScan.Run(dir); };
+        static Func<string, ScanResult> scanRunner = delegate(string dir) { return AppScan.RunDetailed(dir); };
 
         /// <summary>是否有扫描正在进行。</summary>
         public static bool Busy
@@ -43,7 +58,7 @@ namespace Clover
         /// 后台扫描。onDone 会在扫描结束（成功或失败）后于后台线程调用，
         /// 调用方需要自己用 Dispatcher 回到界面线程。
         /// </summary>
-        public static bool RunAsync(string baseDir, string reason, Action<bool> onDone)
+        public static bool RunAsync(string baseDir, string reason, Action<ScanResult> onDone)
         {
             if (string.IsNullOrEmpty(baseDir)) return false;
 
@@ -75,7 +90,7 @@ namespace Clover
 
             if (queuedBehindCurrent)
             {
-                Log.Info("扫描已在运行，已合并为完成后的补跑: " + (reason ?? "未注明"));
+                Log.Diagnostic("扫描已在运行，已合并为完成后的补跑: " + (reason ?? "未注明"));
                 return true;
             }
 
@@ -86,7 +101,7 @@ namespace Clover
             return true;
         }
 
-        static Batch NewBatch(string baseDir, string reason, Action<bool> onDone)
+        static Batch NewBatch(string baseDir, string reason, Action<ScanResult> onDone)
         {
             Batch b = new Batch();
             b.BaseDir = baseDir;
@@ -108,13 +123,19 @@ namespace Clover
         {
             while (batch != null)
             {
-                bool ok = false;
+                ScanResult result = new ScanResult(false, false, 0);
                 try
                 {
                     DateTime started = DateTime.Now;
-                    ok = scanRunner(batch.BaseDir);
-                    double ms = (DateTime.Now - started).TotalMilliseconds;
-                    Log.Info("后台扫描完成(" + batch.Reason + ") ok=" + ok + " 用时 " + (int)ms + "ms");
+                    result = scanRunner(batch.BaseDir) ?? result;
+                    int measured = (int)(DateTime.Now - started).TotalMilliseconds;
+                    if (result.DurationMs == 0)
+                        result = new ScanResult(result.Success, result.Changed, measured);
+                    string report = "后台扫描完成(" + batch.Reason + ") ok=" + result.Success
+                        + " changed=" + result.Changed + " 用时 " + result.DurationMs + "ms";
+                    if (!result.Success || result.DurationMs >= 5000) Log.Warn(report);
+                    else if (result.Changed) Log.Info(report);
+                    else Log.Diagnostic(report);
                     lock (gate) { lastDone = DateTime.Now; }
                 }
                 catch (Exception ex)
@@ -122,10 +143,10 @@ namespace Clover
                     Log.Hook(ex, "后台扫描(" + batch.Reason + ")");
                 }
 
-                foreach (Action<bool> callback in batch.Callbacks.ToArray())
+                foreach (Action<ScanResult> callback in batch.Callbacks.ToArray())
                 {
                     if (callback == null) continue;
-                    try { callback(ok); }
+                    try { callback(result); }
                     catch (Exception ex) { Log.Hook(ex, "扫描完成回调"); }
                 }
 
@@ -140,12 +161,12 @@ namespace Clover
 
         // ---------- 测试接缝（与测试编进同一程序集，不进入公开 API） ----------
 
-        internal static void SetRunnerForTest(Func<string, bool> runner)
+        internal static void SetRunnerForTest(Func<string, ScanResult> runner)
         {
             lock (gate)
             {
                 if (running != 0) throw new InvalidOperationException("扫描运行中，不能替换 runner");
-                scanRunner = runner ?? delegate(string dir) { return AppScan.Run(dir); };
+                scanRunner = runner ?? delegate(string dir) { return AppScan.RunDetailed(dir); };
                 pending = null;
                 lastDone = DateTime.MinValue;
             }

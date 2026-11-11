@@ -1,4 +1,4 @@
-﻿# 创建开机自启快捷方式并启动四叶草启动面板
+﻿# 注册当前用户登录快速自启并启动四叶草启动面板
 $ErrorActionPreference = 'Stop'
 $exe = Join-Path $PSScriptRoot 'app\CloverStart.exe'
 if (-not (Test-Path $exe)) { throw "找不到 $exe，请先运行 build.ps1" }
@@ -24,17 +24,17 @@ if ($running) {
     }
 }
 
-$startup = [Environment]::GetFolderPath('Startup')
-$lnk = Join-Path $startup '四叶草启动器.lnk'
-$ws = New-Object -ComObject WScript.Shell
-$sc = $ws.CreateShortcut($lnk)
-$sc.TargetPath = $exe
-$sc.WorkingDirectory = (Split-Path $exe)
-$sc.IconLocation = "$exe,0"
-$sc.Description = '四叶草启动面板'
-$sc.Save()
+# 让程序自己的统一自启管理器完成注册与复核：
+#   1. 优先创建“当前用户登录、零延迟、普通权限”的计划任务；
+#   2. 任务注册成功并回读校验后，才删除旧启动文件夹快捷方式；
+#   3. 若计划任务被系统策略拦截，自动保留兼容快捷方式，避免下次不启动。
+$auto = Start-Process -FilePath $exe -ArgumentList '--enable-autostart' `
+    -Wait -PassThru -WindowStyle Hidden
+if ($auto.ExitCode -ne 0) {
+    throw "设置开机自启失败（退出码 $($auto.ExitCode)），请查看 config\error.log"
+}
 
 Start-Process $exe
 
-"已创建开机自启: $lnk"
+"已设置开机自启: 用户登录时立即启动（计划任务不可用时自动兼容）"
 "已启动: $exe"

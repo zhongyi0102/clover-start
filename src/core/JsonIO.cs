@@ -31,6 +31,8 @@ namespace Clover
         public sealed class WriteResult
         {
             public bool Success;
+            /// <summary>目标内容与现有文件相同，因此没有触碰磁盘。</summary>
+            public bool Unchanged;
             public string Path;
             public bool UsedCopyFallback;
             public Exception Error;
@@ -105,6 +107,36 @@ namespace Clover
                 try { Warn("保存 JSON 失败: " + path + " -> " + result.ErrorMessage); } catch { }
             }
             return result;
+        }
+
+        /// <summary>
+        /// 内容完全相同时不重写文件，避免后台扫描只更新 updated 字段也触发
+        /// FileSystemWatcher、每日备份和后续界面重建。比较的是调用方提供的
+        /// 稳定内容；需要忽略时间戳时，应在序列化前移除时间字段。
+        /// </summary>
+        public static WriteResult WriteAtomicIfChanged(string path, string text)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                {
+                    string current = File.ReadAllText(path, Encoding.UTF8);
+                    if (string.Equals(current, text ?? "", StringComparison.Ordinal))
+                    {
+                        return new WriteResult
+                        {
+                            Success = true,
+                            Unchanged = true,
+                            Path = path,
+                        };
+                    }
+                }
+            }
+            catch
+            {
+                // 比较失败不影响原有的原子写保护；交给 WriteAtomic 处理并报告。
+            }
+            return WriteAtomic(path, text);
         }
 
         /// <summary>

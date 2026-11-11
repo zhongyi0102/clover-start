@@ -25,7 +25,6 @@ namespace Clover
         bool panelLoading;
         string baseDir;
         string exePath;
-        string startupLnk;
         Button root;
         Border panelIndicator;
         IntPtr hwnd;
@@ -56,8 +55,7 @@ namespace Clover
         {
             this.baseDir = baseDir;
             this.settings = settings ?? Settings.Load(baseDir);
-            this.exePath = Path.Combine(baseDir, "app", "CloverStart.exe");
-            this.startupLnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "四叶草启动器.lnk");
+            this.exePath = Autostart.ExecutablePath(baseDir);
             this.settingsPath = Path.Combine(baseDir, "config", "settings.json");
             // 功能被关掉时强制视为“不隐藏”，避免配置文件里留着旧的 true 却无法取消。
             // 用 EffectiveHideTaskbar：安全模式下自动为 false。
@@ -684,7 +682,7 @@ namespace Clover
             MenuItem auto = new MenuItem();
             auto.Header = "开机自启";
             auto.IsCheckable = true;
-            auto.IsChecked = File.Exists(startupLnk);
+            auto.IsChecked = Autostart.Inspect(exePath).Enabled;
             auto.Click += delegate { ToggleAutostart(); };
             cm.Items.Add(auto);
 
@@ -740,9 +738,9 @@ namespace Clover
         // 把底层逻辑集中在这里，两边都调同一份实现，避免两处各写一遍。
 
         /// <summary>切换开机自启（供设置窗口调用）。</summary>
-        public void ToggleAutostartPublic()
+        public Autostart.Result ToggleAutostartPublic()
         {
-            ToggleAutostart();
+            return ToggleAutostart();
         }
 
         /// <summary>设置「隐藏系统任务栏」（供设置窗口调用）。</summary>
@@ -824,7 +822,7 @@ namespace Clover
                     "一键回滚",
                     "将撤销本程序对系统做过的所有改动：\r\n"
                     + "  · 恢复系统任务栏（可见性与透明样式）\r\n"
-                    + "  · 移除开机自启快捷方式\r\n"
+                    + "  · 移除开机自启（登录任务与兼容快捷方式）\r\n"
                     + "  · 停止看门狗进程\r\n"
                     + "  · 清除崩溃保护状态（退出安全模式）\r\n\r\n"
                     + "你的设置、应用清单、使用记录、快捷键备份都会**保留**。\r\n\r\n"
@@ -1130,28 +1128,42 @@ namespace Clover
             // （Windows 自己的任务栏悬停高亮也是浅色浮层）。
         }
 
-        void ToggleAutostart()
+        Autostart.Result ToggleAutostart()
         {
             try
             {
-                if (File.Exists(startupLnk))
+                Autostart.State state = Autostart.Inspect(exePath);
+                Autostart.Result result = state.Enabled
+                    ? Autostart.Disable()
+                    : Autostart.Enable(exePath);
+
+                if (!result.Success)
                 {
-                    File.Delete(startupLnk);
-                    return;
+                    MessageBox.Show(result.Message, "四叶草 · 开机自启",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                object shell = Activator.CreateInstance(shellType);
-                object sc = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { startupLnk });
-                Type scType = sc.GetType();
-                scType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, sc, new object[] { exePath });
-                scType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, sc, new object[] { Path.GetDirectoryName(exePath) });
-                scType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, sc, new object[] { exePath + ",0" });
-                scType.InvokeMember("Description", BindingFlags.SetProperty, null, sc, new object[] { "四叶草启动面板" });
-                scType.InvokeMember("Save", BindingFlags.InvokeMethod, null, sc, null);
+                else if (result.UsingLegacyFallback)
+                {
+                    ErrorLog.Warn(result.Message);
+                    MessageBox.Show(result.Message,
+                        "四叶草 · 已启用兼容自启",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    ErrorLog.Log(result.Message);
+                }
+                return result;
             }
             catch (Exception ex)
             {
-                MessageBox.Show("设置开机自启失败: " + ex.Message, "四叶草");
+                Autostart.Result failed = new Autostart.Result
+                {
+                    Success = false,
+                    Message = "设置开机自启失败：" + ex.Message
+                };
+                MessageBox.Show(failed.Message, "四叶草 · 开机自启");
+                return failed;
             }
         }
     }

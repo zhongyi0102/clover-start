@@ -13,17 +13,26 @@ namespace Clover
         public string Path;
         public bool IsFolder;
 
-        /// <summary>来源：开始菜单 / 注册表。用于排序与图标选择。</summary>
+        /// <summary>来源：已安装 / 开始菜单 / 注册表。作为行内说明与最终同分项。</summary>
         public string Source;
 
         /// <summary>扩展名（小写，含点）。文件才有。</summary>
         public string Ext;
+
+        /// <summary>真实启动次数；系统补充结果由界面按路径补齐。</summary>
+        public int Usage;
+
+        /// <summary>最近一次真实启动的 UTC ticks。</summary>
+        public long LastUsed;
+
+        /// <summary>是否被用户手动固定到「常用」。</summary>
+        public bool Pinned;
     }
 
     /// <summary>
     /// 系统级搜索：开始菜单快捷方式 + 注册表（App Paths / Uninstall）。
     ///
-    /// 目标 < 20 ms（实测这台机器约 8-15 ms）。
+    /// 热索引查询目标 &lt; 20 ms；首次索引构建由启动预热或后台搜索线程承担。
     ///
     /// 只搜「可启动的程序」：用户打开启动面板通常是想启动程序，不是找文件。
     /// </summary>
@@ -32,17 +41,12 @@ namespace Clover
         /// <summary>Instant 阶段的结果上限（开始菜单 + 注册表）。</summary>
         const int MaxInstant = 150;
 
-        /// <summary>
-        /// 优先展示的扩展名。
-        ///
-        /// 排序依据：用户搜东西时，"能启动的程序"和"能打开的文档"
-        /// 远比"随便一个文件"有用。所以同分情况下这些排在前面。
-        /// </summary>
-        static readonly HashSet<string> PriorityExt = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ".exe", ".lnk", ".url", ".appref-ms", ".msi", ".bat", ".cmd",
-            ".zip", ".rar", ".7z", ".pdf", ".docx", ".xlsx", ".pptx", ".txt"
-        };
+        static readonly object indexGate = new object();
+        static List<SearchResult> index;
+        static int indexGeneration;
+        static bool indexBuilding;
+        static int buildingGeneration;
+        static Func<List<SearchResult>> indexBuilder = delegate { return BuildIndex(); };
 
         /// <summary>搜索词按空格拆成多个词，全部命中才算匹配（AND 语义）。</summary>
         static string[] SplitWords(string query)
@@ -116,6 +120,14 @@ namespace Clover
         /// </summary>
         public static List<SearchResult> Instant(string query)
         {
+            return SearchIndex(query, GetOrBuildIndex());
+        }
+
+        /// <summary>
+        /// 在内存索引中匹配。索引首次构建后，后续每次按键不再递归开始菜单或遍历注册表。
+        /// </summary>
+        static List<SearchResult> SearchIndex(string query, List<SearchResult> source)
+        {
             List<SearchResult> list = new List<SearchResult>();
             try
             {
@@ -124,21 +136,18 @@ namespace Clover
 
                 Dictionary<string, bool> seen = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
-                // 1) 开始菜单
-                foreach (string dir in StartMenuDirs())
+                if (source != null)
                 {
-                    CollectShortcuts(dir, words, list, seen, 0);
+                    foreach (SearchResult r in source)
+                    {
+                        if (r == null) continue;
+                        TryAdd(list, seen, r.Name, r.Path, r.IsFolder, words, r.Source);
+                    }
                 }
 
-                // 2) 注册表 App Paths
-                try { CollectAppPaths(Registry.LocalMachine, words, list, seen); } catch { }
-                try { CollectAppPaths(Registry.CurrentUser, words, list, seen); } catch { }
-
-                // 3) 注册表 Uninstall（只取能解析出 exe 的）
-                try { CollectUninstall(Registry.LocalMachine, words, list, seen); } catch { }
-                try { CollectUninstall(Registry.CurrentUser, words, list, seen); } catch { }
-
-                SortResults(list);
+                SearchRanking.Sort(list, query);
+                if (list.Count > MaxInstant)
+                    list.RemoveRange(MaxInstant, list.Count - MaxInstant);
             }
             catch (Exception ex)
             {
@@ -147,37 +156,184 @@ namespace Clover
             return list;
         }
 
+        static List<SearchResult> GetOrBuildIndex()
+        {
+            while (true)
+            {
+                int ownGeneration;
+                lock (indexGate)
+                {
+                    if (index != null) return index;
+                    if (indexBuilding)
+                    {
+                        // 等待当前单飞构建。超时宁可本次返回空补充结果，也不并发
+                        // 遍历开始菜单/注册表；下一次输入仍可继续命中正在构建的任务。
+                        if (!Monitor.Wait(indexGate, 5000)) return new List<SearchResult>();
+                        continue;
+                    }
+                    indexBuilding = true;
+                    buildingGeneration = indexGeneration;
+                    ownGeneration = buildingGeneration;
+                }
+
+                List<SearchResult> built = null;
+                bool succeeded = false;
+                try
+                {
+                    Func<List<SearchResult>> builder;
+                    lock (indexGate) { builder = indexBuilder; }
+                    built = builder == null ? BuildIndex() : builder();
+                    if (built == null) built = new List<SearchResult>();
+                    succeeded = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("系统搜索索引构建失败: " + ex.Message);
+                }
+
+                bool invalidated;
+                lock (indexGate)
+                {
+                    // 只有自己认领的 generation 能收尾。旧 worker 绝不能清掉
+                    // 失效后由别的调用者启动的新构建状态。
+                    if (indexBuilding && buildingGeneration == ownGeneration)
+                    {
+                        if (succeeded && ownGeneration == indexGeneration && index == null)
+                            index = built;
+                        invalidated = ownGeneration != indexGeneration;
+                        indexBuilding = false;
+                        Monitor.PulseAll(indexGate);
+                    }
+                    else
+                    {
+                        invalidated = false;
+                    }
+                    if (index != null) return index;
+                }
+
+                // 构建期间输入失效：当前查询继续认领最新 generation；真正失败则
+                // 返回空结果，避免异常环境下无休止重试。
+                if (!invalidated || !succeeded) return new List<SearchResult>();
+            }
+        }
+
+        static List<SearchResult> BuildIndex()
+        {
+            List<SearchResult> list = new List<SearchResult>();
+            Dictionary<string, bool> seen = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+            foreach (string dir in StartMenuDirs()) CollectShortcuts(dir, list, seen, 0);
+            try { CollectAppPaths(Registry.LocalMachine, list, seen); } catch { }
+            try { CollectAppPaths(Registry.CurrentUser, list, seen); } catch { }
+            try { CollectUninstall(Registry.LocalMachine, list, seen); } catch { }
+            try { CollectUninstall(Registry.CurrentUser, list, seen); } catch { }
+            return list;
+        }
+
+        /// <summary>启动后后台预热搜索索引，不阻塞四叶草首帧。</summary>
+        public static void WarmAsync()
+        {
+            int ownGeneration;
+            lock (indexGate)
+            {
+                if (index != null || indexBuilding) return;
+                indexBuilding = true;
+                buildingGeneration = indexGeneration;
+                ownGeneration = buildingGeneration;
+            }
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                List<SearchResult> built = null;
+                bool succeeded = false;
+                try
+                {
+                    Func<List<SearchResult>> builder;
+                    lock (indexGate) { builder = indexBuilder; }
+                    built = builder == null ? BuildIndex() : builder();
+                    if (built == null) built = new List<SearchResult>();
+                    succeeded = true;
+                }
+                catch (Exception ex) { Log.Warn("系统搜索索引预热失败: " + ex.Message); }
+                finally
+                {
+                    bool retryLatest = false;
+                    lock (indexGate)
+                    {
+                        if (indexBuilding && buildingGeneration == ownGeneration)
+                        {
+                            if (succeeded && ownGeneration == indexGeneration && index == null)
+                                index = built;
+                            retryLatest = ownGeneration != indexGeneration;
+                            indexBuilding = false;
+                            Monitor.PulseAll(indexGate);
+                        }
+                    }
+                    // 预热期间开始菜单变化时，旧结果丢弃后自动为最新一代补跑；
+                    // 若已有查询线程先认领，WarmAsync 会看到 single-flight 并直接返回。
+                    if (retryLatest) WarmAsync();
+                }
+                if (succeeded)
+                    Log.Diagnostic("系统搜索索引已预热：" + built.Count + " 条");
+            });
+        }
+
+        /// <summary>开始菜单或完整扫描变化后失效；下一次搜索/预热会重建。</summary>
+        public static void Invalidate()
+        {
+            lock (indexGate)
+            {
+                index = null;
+                unchecked { indexGeneration++; }
+            }
+        }
+
+        internal static int IndexedCount
+        {
+            get { lock (indexGate) { return index == null ? 0 : index.Count; } }
+        }
+
+        /// <summary>测试接缝：注入可阻塞构建器，覆盖失效与 single-flight 竞态。</summary>
+        internal static void SetIndexBuilderForTest(Func<List<SearchResult>> builder)
+        {
+            lock (indexGate)
+            {
+                if (indexBuilding) throw new InvalidOperationException("索引正在构建");
+                indexBuilder = builder ?? delegate { return BuildIndex(); };
+                index = null;
+                unchecked { indexGeneration++; }
+            }
+        }
+
         static IEnumerable<string> StartMenuDirs()
         {
             yield return Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu);
             yield return Environment.GetFolderPath(Environment.SpecialFolder.StartMenu);
         }
 
-        static void CollectShortcuts(string dir, string[] words, List<SearchResult> list,
+        static void CollectShortcuts(string dir, List<SearchResult> list,
                                      Dictionary<string, bool> seen, int depth)
         {
-            if (depth > 3 || list.Count >= MaxInstant) return;
+            if (depth > 3) return;
             if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
             try
             {
                 foreach (string file in Directory.EnumerateFiles(dir))
                 {
-                    if (list.Count >= MaxInstant) return;
                     string ext = Path.GetExtension(file).ToLowerInvariant();
                     if (ext == ".lnk" || ext == ".url" || ext == ".appref-ms")
                     {
-                        TryAdd(list, seen, Path.GetFileNameWithoutExtension(file), file, false, words, "开始菜单");
+                        AddIndexed(list, seen, Path.GetFileNameWithoutExtension(file), file,
+                            false, "开始菜单");
                     }
                 }
                 foreach (string sub in Directory.EnumerateDirectories(dir))
                 {
-                    CollectShortcuts(sub, words, list, seen, depth + 1);
+                    CollectShortcuts(sub, list, seen, depth + 1);
                 }
             }
             catch { }
         }
 
-        static void CollectAppPaths(RegistryKey root, string[] words, List<SearchResult> list,
+        static void CollectAppPaths(RegistryKey root, List<SearchResult> list,
                                     Dictionary<string, bool> seen)
         {
             try
@@ -187,7 +343,6 @@ namespace Clover
                     if (key == null) return;
                     foreach (string name in key.GetSubKeyNames())
                     {
-                        if (list.Count >= MaxInstant) return;
                         if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
                         try
                         {
@@ -199,7 +354,8 @@ namespace Clover
                                 {
                                     // App Paths 的值可能带引号
                                     path = path.Trim('"').Trim();
-                                    TryAdd(list, seen, Path.GetFileNameWithoutExtension(name), path, false, words, "注册表");
+                                    AddIndexed(list, seen, Path.GetFileNameWithoutExtension(name), path,
+                                        false, "注册表");
                                 }
                             }
                         }
@@ -210,7 +366,7 @@ namespace Clover
             catch { }
         }
 
-        static void CollectUninstall(RegistryKey root, string[] words, List<SearchResult> list,
+        static void CollectUninstall(RegistryKey root, List<SearchResult> list,
                                      Dictionary<string, bool> seen)
         {
             string[] paths = new string[]
@@ -228,7 +384,6 @@ namespace Clover
                         if (key == null) continue;
                         foreach (string name in key.GetSubKeyNames())
                         {
-                            if (list.Count >= MaxInstant) return;
                             try
                             {
                                 using (RegistryKey sub = key.OpenSubKey(name))
@@ -236,8 +391,6 @@ namespace Clover
                                     if (sub == null) continue;
                                     string display = sub.GetValue("DisplayName") as string;
                                     if (string.IsNullOrWhiteSpace(display)) continue;
-                                    if (!Matches(display, display, words)) continue;
-
                                     // 找可执行路径：优先 DisplayIcon（通常是 exe 或 ico）
                                     string exe = null;
                                     string icon = sub.GetValue("DisplayIcon") as string;
@@ -264,7 +417,7 @@ namespace Clover
                                         }
                                     }
                                     if (exe != null)
-                                        TryAdd(list, seen, display, exe, false, words, "注册表");
+                                        AddIndexed(list, seen, display, exe, false, "注册表");
                                 }
                             }
                             catch { }
@@ -275,51 +428,25 @@ namespace Clover
             }
         }
 
-        // ════════════════════════════════════════════════════════════
-        // ════════════════════════════════════════════════════════════
-
-
-        //  排序
-        // ════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// 排序：来源优先 → 优先扩展名 → 名字长度 → 字母序。
-        ///
-        /// 为什么按"名字长度"：搜 "chr" 时，用户多半想要 "Chrome" 而不是
-        /// "ChromeDriver-manager-config-tool"。短名字通常更接近用户意图。
-        /// </summary>
-        static void SortResults(List<SearchResult> list)
+        static void AddIndexed(List<SearchResult> list, Dictionary<string, bool> seen,
+            string name, string path, bool isFolder, string source)
         {
             try
             {
-                list.Sort(delegate(SearchResult a, SearchResult b)
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(path)) return;
+                if (seen.ContainsKey(path)) return;
+                seen[path] = true;
+                list.Add(new SearchResult
                 {
-                    int sa = SourceRank(a), sb = SourceRank(b);
-                    if (sa != sb) return sa.CompareTo(sb);
-
-                    int ea = PriorityExt.Contains(a.Ext) ? 0 : 1;
-                    int eb = PriorityExt.Contains(b.Ext) ? 0 : 1;
-                    if (ea != eb) return ea.CompareTo(eb);
-
-                    int la = a.Name == null ? 0 : a.Name.Length;
-                    int lb = b.Name == null ? 0 : b.Name.Length;
-                    if (la != lb) return la.CompareTo(lb);
-
-                    return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+                    Name = name,
+                    Path = path,
+                    IsFolder = isFolder,
+                    Source = source,
+                    Ext = isFolder ? "" : Path.GetExtension(path).ToLowerInvariant(),
                 });
             }
             catch { }
         }
 
-        static int SourceRank(SearchResult r)
-        {
-            if (r == null) return 9;
-            switch (r.Source)
-            {
-                case "开始菜单": return 0;
-                case "注册表": return 1;
-                default: return 2;
-            }
-        }
     }
 }

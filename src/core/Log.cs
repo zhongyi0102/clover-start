@@ -20,6 +20,12 @@ namespace Clover
         /// <summary>普通信息（走 ErrorLog，写 error.log，级别 INFO）。</summary>
         public static Action<string> Info = delegate { };
 
+        /// <summary>
+        /// 仅供排障的详细信息。普通用户默认不写盘；由 UI 层按
+        /// CLOVERSTART_DIAGNOSTICS=1 或 config\diagnostics.enabled 接线。
+        /// </summary>
+        public static Action<string> Diagnostic = delegate { };
+
         /// <summary>警告（写 error.log，级别 WARN）。</summary>
         public static Action<string> Warn = delegate { };
 
@@ -44,9 +50,11 @@ namespace Clover
         /// 重复调用安全（覆盖同一批委托）。
         /// </summary>
         public static void Wire(Action<string> info, Action<string> warn,
-            Action<Exception, string> hook, Action<string> init)
+            Action<Exception, string> hook, Action<string> init,
+            Action<string> diagnostic = null)
         {
             Info = info ?? delegate { };
+            Diagnostic = diagnostic ?? delegate { };
             Warn = warn ?? delegate { };
             Hook = hook ?? delegate { };
             InitHook = init ?? delegate { };

@@ -17,7 +17,11 @@ namespace Clover
     /// 主面板。为便于排查，按职责拆成 partial 文件：
     ///   PanelWindow.cs         窗口生命周期、显示/隐藏、布局存取、启动应用
     ///   PanelWindow.Ui.cs      控件搭建（BuildUi 及通用小控件）
-    ///   PanelWindow.Nav.cs     左侧分类、搜索、应用磁贴渲染与拖拽排序
+    ///   PanelWindow.Nav.cs     分类切换、键盘导航与内容层协调
+    ///   PanelWindow.Search.cs  搜索防抖与搜索状态
+    ///   PanelWindow.Tiles.cs   应用磁贴渲染、图标与右键菜单
+    ///   PanelWindow.TileDrag.cs 磁贴拖拽排序与动画
+    ///   PanelWindow.Desks.cs   桌面收纳与自定义桌面
     ///   PanelWindow.Tasks.cs   左侧“任务栏”列表（当前打开的窗口）
     ///   PanelWindow.Data.cs    目录/配置加载、刷新、对外接口
     /// </summary>
@@ -38,6 +42,10 @@ namespace Clover
         DateTime suppressDeactivate = DateTime.MinValue;
         /// <summary>程序内部清空搜索框时置 true，避免触发一次多余的全量重渲染。</summary>
         bool searchSuppress;
+        /// <summary>应用/文件搜索 100ms 防抖；桌面画布仍就地即时过滤。</summary>
+        DispatcherTimer searchDebounce;
+        int searchGeneration;
+        int searchDebounceGeneration;
         /// <summary>面板是否至少被真正激活过一次；从未激活时不要自动收起。</summary>
         bool everActivated;
         string layoutPath;
@@ -119,7 +127,7 @@ namespace Clover
         VirtualDesks virtualDesks;
         DesktopView deskView;
         WrapPanel tilePanel;
-        StackPanel deskToolRow;        // 「桌面文件」页顶部按钮行
+        WrapPanel deskToolRow;         // 「桌面文件」页顶部按钮行（窄窗口自动换行）
         TextBlock deskNotice;          // 该页的提示行
         Grid deskPanel;                // 该页整体容器（按钮 + 提示 + 画布）
 
@@ -177,6 +185,18 @@ namespace Clover
         ScrollViewer contentScroll;
 
         /// <summary>
+        /// 滚轮平滑滚动状态。只在滚动期间订阅渲染帧；新的滚轮输入会从
+        /// 当前画面继续并累加目标位置，不创建常驻高频计时器。
+        /// </summary>
+        bool smoothScrollActive;
+        double smoothScrollFrom;
+        double smoothScrollTarget;
+        long smoothScrollStartedAt;
+
+        /// <summary>滚动停止后再维护视口图标，避免滚动帧里遍历/替换磁贴控件。</summary>
+        DispatcherTimer viewportIconIdleTimer;
+
+        /// <summary>
         /// 内容层宿主。应用磁贴随骨架一起创建；文件库与桌面收纳的完整控件树
         /// 直到第一次进入对应页面才挂进来。
         /// </summary>
@@ -208,7 +228,6 @@ namespace Clover
         bool suppressScrollRecord;
 
         /// <summary>
-        /// <summary>
         /// 毛玻璃背景（截桌面 → 缩 1/8 → 模糊 → 垫底）。
         /// 由 BuildUi 创建；软件渲染时内部自动禁用。
         /// </summary>
@@ -222,7 +241,7 @@ namespace Clover
 
         /// <summary>搜索结果列表容器（与 tilePanel 互斥显示）。</summary>
         StackPanel searchResultPanel;
-        /// <summary>搜索结果的逻辑控制（Instant + Deep 两级）。</summary>
+        /// <summary>搜索结果的逻辑控制（目录内存匹配 + 系统索引后台补充）。</summary>
         SearchResultList searchResults;
 
         /// <summary>
@@ -298,7 +317,7 @@ namespace Clover
         ///
         /// 做法：拖动开始时把磁贴的样子复制一份到 Canvas 上（绝对定位），
         /// 每帧跟着鼠标移动；原磁贴保持半透明当"占位幽灵"。
-        /// 松手后浮层平滑飞到目标格，然后隐藏、重建列表。
+        /// 松手后浮层平滑飞到目标格，然后隐藏，并复用现有磁贴原地换位。
         /// </summary>
         Border dragGhost;
         /// <summary>浮层里的图标（缩放用）。</summary>
@@ -315,7 +334,8 @@ namespace Clover
             this.settings = settings ?? Settings.Load(baseDir);
             this.overrides = CategoryOverrides.Load(baseDir);
             this.hiddenApps = HiddenApps.Load(baseDir);
-            catalog = Catalog.Load(baseDir);            usage = UsageStore.Load(baseDir);
+            catalog = CatalogPreloader.TakeOrLoad(baseDir);
+            usage = UsageStore.Load(baseDir);
             // 分类系统已下线：settings 里不再有 hiddenCategories，
             // 逐条隐藏走 hiddenApps（HiddenApps.Load 已在上面加载）。
             // HideCategories 仍保留（通用 API + 有测试），但传空列表 = 不过滤。
@@ -380,12 +400,18 @@ namespace Clover
             Loaded += delegate { SchedulePanelContentLoad(); };
             IsVisibleChanged += delegate
             {
-                if (!IsVisible) CancelVisibleContentLoad();
+                if (!IsVisible)
+                {
+                    CancelVisibleContentLoad();
+                    StopSmoothScroll(false);
+                }
             };
             Closed += delegate
             {
                 panelClosed = true;
                 CancelVisibleContentLoad();
+                StopSmoothScroll(false);
+                try { if (viewportIconIdleTimer != null) viewportIconIdleTimer.Stop(); } catch { }
                 try { if (runningStateTimer != null) runningStateTimer.Stop(); } catch { }
             };
 
@@ -1937,9 +1963,7 @@ namespace Clover
                     spsi.UseShellExecute = true;
                     Process.Start(spsi);
 
-                    if (usage != null) usage.Record(a.Path);
-                    a.Usage++;
-                    a.LastUsed = DateTime.UtcNow.Ticks;
+                    RecordAppUsage(a.Path);
                     HidePanel();
                     return;
                 }
@@ -1947,9 +1971,7 @@ namespace Clover
                 ProcessStartInfo psi = new ProcessStartInfo(a.Path);
                 psi.UseShellExecute = true;
                 Process.Start(psi);
-                if (usage != null) usage.Record(a.Path);
-                a.Usage++;
-                a.LastUsed = DateTime.UtcNow.Ticks;
+                RecordAppUsage(a.Path);
                 HidePanel();
             }
             catch (Exception ex)
@@ -1957,6 +1979,36 @@ namespace Clover
                 Ui.Log("Launch error: " + ex.Message);
                 MessageBox.Show("无法启动 " + a.Name + "\r\n" + ex.Message, "四叶草面板");
             }
+        }
+
+
+        /// <summary>
+        /// 所有应用启动入口共用的记录路径。除写 usage.json 外，还会清除
+        /// 「最近常用」的移除标记，让用户下一次真实启动后自然看到它回来。
+        /// </summary>
+        void RecordAppUsage(string appPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(appPath)) return;
+                if (usage != null) usage.Record(appPath);
+
+                AppItem app = FindAppByPath(appPath);
+                if (app != null && usage != null)
+                {
+                    app.Usage = usage.GetCount(appPath);
+                    app.LastUsed = usage.GetLast(appPath);
+                }
+
+                bool settingsChanged = false;
+                if (settings != null && settings.CommonDismissed != null)
+                    settingsChanged = settings.CommonDismissed.Remove(appPath);
+                if (settingsChanged) settings.Save();
+
+                unchecked { usageRevision++; }
+                renderedSig = "";
+            }
+            catch (Exception ex) { Ui.LogError(ex, "记录应用启动"); }
         }
     }
 }

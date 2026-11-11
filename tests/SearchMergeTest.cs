@@ -6,15 +6,12 @@ using System.Text;
 namespace Clover
 {
     /// <summary>
-    /// 搜索合并测试：主搜索（MatchCatalog）+ 补充搜索（Instant）的
-    /// 去重、排序、上限、拼音保留。
+    /// 搜索合并测试：目录搜索（MatchCatalog）+ 系统索引（Instant）的
+    /// 去重、统一智能排序、上限、拼音保留。
     ///
     /// **为什么不用真实 Catalog**：不同机器装的软件不同，断言具体应用会失败。
-    /// 这里直接构造 SearchResult 列表，验证 AppendBatch 的合并逻辑。
-    ///
-    /// **但 SearchResultList 依赖 WPF（StackPanel）**，所以本测试用
-    /// 「复刻合并逻辑」的方式 —— 与 SearchResultList.AppendBatch 保持同步。
-    /// 一旦实现改动，这里也要跟着改（源码级断言会提醒）。
+    /// 这里直接构造 SearchResult 列表，调用 core 的 SearchRanking.Merge；
+    /// SearchResultList 的行内来源说明与异步接线另用源码级断言保护。
     /// </summary>
     static class SearchMergeTest
     {
@@ -39,15 +36,85 @@ namespace Clover
             TestDedupSamePath();
             TestDedupSameNameDiffPath();
             TestDedupEmptyName();
-            TestOrderPreserved();
+            TestUnifiedOrdering();
             TestCap();
-            TestSourceHeader();
+            TestInlineSourceDetail();
             TestRealQueries();
+            TestSmartRanking();
             TestSourceLevelSync();
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             Environment.Exit(failed == 0 ? 0 : 1);
+        }
+
+        // ---------- 8. 智能排序（直接测生产逻辑） ----------
+        static void TestSmartRanking()
+        {
+            Console.WriteLine("--- 8. 智能排序（匹配质量 + 用户习惯）---");
+
+            List<SearchResult> list = new List<SearchResult> {
+                Make("Visual Studio Code", @"C:\Apps\vscode.exe", "已安装"),
+                Make("Code", @"C:\Apps\code.exe", "注册表"),
+            };
+            list[0].Usage = 999;
+            SearchRanking.Sort(list, "code");
+            Check(list[0].Name == "Code",
+                "★原名精确匹配优先于高频子串命中", list[0].Name);
+
+            list = new List<SearchResult> {
+                Make("Alpha One", @"C:\Apps\a1.exe", "已安装"),
+                Make("Alpha Two", @"C:\Apps\a2.exe", "已安装"),
+            };
+            list[1].Pinned = true;
+            SearchRanking.Sort(list, "alpha");
+            Check(list[0].Name == "Alpha Two", "★同质量时手动固定优先", list[0].Name);
+
+            list[0].Pinned = false;
+            list[0].Usage = 1;
+            list[1].Usage = 20;
+            SearchRanking.Sort(list, "alpha");
+            Check(list[0].Usage == 20, "★同质量时使用次数高的优先",
+                Convert.ToString(list[0].Usage));
+
+            list[0].Usage = list[1].Usage = 3;
+            list[0].LastUsed = 10;
+            list[1].LastUsed = 99;
+            SearchRanking.Sort(list, "alpha");
+            Check(list[0].LastUsed == 99, "★次数相同时最近启动的优先",
+                Convert.ToString(list[0].LastUsed));
+
+            List<SearchResult> pinyin = new List<SearchResult> {
+                Make("微信读书", @"C:\Apps\weread.exe", "已安装"),
+                Make("微信", @"C:\Apps\wechat.exe", "已安装"),
+            };
+            SearchRanking.Sort(pinyin, "wx");
+            Check(pinyin[0].Name == "微信", "★拼音首字母精确命中优先", pinyin[0].Name);
+
+            Check(SearchRanking.Matches("Visual Studio Code", "visual code"),
+                "★多词查询使用 AND 语义");
+            Check(!SearchRanking.Matches("Visual Studio", "visual code"),
+                "★缺少任一查询词不命中");
+
+            List<SearchResult> many = new List<SearchResult>();
+            for (int i = 0; i < 80; i++)
+                many.Add(Make("Tool code helper " + i, @"C:\Apps\h" + i + ".exe", "注册表"));
+            many.Add(Make("Code", @"C:\Apps\exact.exe", "注册表"));
+            List<SearchResult> ranked = SearchRanking.Merge(
+                new List<SearchResult>(), many, "code", 10);
+            Check(ranked.Count == 10 && ranked[0].Name == "Code",
+                "★先全量排名再截断，索引末尾的精确结果不会丢", ranked[0].Name);
+
+            List<SearchResult> main = new List<SearchResult> {
+                Make("Chrome", @"C:\Start\Chrome.lnk", "已安装")
+            };
+            List<SearchResult> extra = new List<SearchResult> {
+                Make("Chrome", @"D:\Chrome\chrome.exe", "注册表")
+            };
+            ranked = SearchRanking.Merge(main, extra, "chrome", 60);
+            Check(ranked.Count == 1 && ranked[0].Source == "已安装",
+                "★统一排名仍保留目录主结果做同名去重");
+            Console.WriteLine();
         }
 
         // ---------- 1. 同路径去重 ----------
@@ -139,29 +206,27 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 4. 排序：主结果在前 ----------
-        static void TestOrderPreserved()
+        // ---------- 4. 两路统一排序 ----------
+        static void TestUnifiedOrdering()
         {
-            Console.WriteLine("--- 4. 补充结果追加在主结果之后 ---");
+            Console.WriteLine("--- 4. 两路合并后按相关性统一排序 ---");
 
             List<SearchResult> main = new List<SearchResult> {
-                Make("A-Main", @"C:\m1.exe", "已安装"),
-                Make("B-Main", @"C:\m2.exe", "已安装"),
+                Make("Visual Studio Code", @"C:\m1.exe", "已安装"),
+                Make("Code Helper", @"C:\m2.exe", "已安装"),
             };
+            main[0].Usage = 999;
             List<SearchResult> extra = new List<SearchResult> {
-                Make("C-Extra", @"C:\e1.exe", "注册表"),
-                Make("D-Extra", @"C:\e2.exe", "注册表"),
+                Make("Code", @"C:\e1.exe", "注册表"),
+                Make("Encode Tool", @"C:\e2.exe", "注册表"),
             };
 
-            List<SearchResult> merged = Merge(main, extra, 60);
+            List<SearchResult> merged = Merge(main, extra, "code", 60);
             Check(merged.Count == 4, "共 4 条", Convert.ToString(merged.Count));
-            Check(merged[0].Name == "A-Main" && merged[1].Name == "B-Main",
-                "★主结果占据前两位", merged[0].Name + "," + merged[1].Name);
-            Check(merged[2].Name == "C-Extra" && merged[3].Name == "D-Extra",
-                "★补充结果追加在后", merged[2].Name + "," + merged[3].Name);
-
-            // 主结果内部顺序不变
-            Check(merged[0].Name == "A-Main", "主结果内部顺序未被重排", merged[0].Name);
+            Check(merged[0].Name == "Code" && merged[0].Source == "注册表",
+                "★注册表精确结果可排在高频目录子串前", merged[0].Name);
+            Check(merged[merged.Count - 1].Name == "Encode Tool",
+                "普通内部子串低于前缀与词首命中", merged[merged.Count - 1].Name);
             Console.WriteLine();
         }
 
@@ -171,71 +236,57 @@ namespace Clover
             Console.WriteLine("--- 5. 结果上限 ---");
 
             List<SearchResult> main = new List<SearchResult>();
-            for (int i = 0; i < 50; i++) main.Add(Make("Main" + i, @"C:\m" + i + ".exe", "已安装"));
+            for (int i = 0; i < 50; i++)
+            {
+                SearchResult r = Make("Tool Main " + i, @"C:\m" + i + ".exe", "已安装");
+                r.Usage = i;
+                main.Add(r);
+            }
 
             List<SearchResult> extra = new List<SearchResult>();
-            for (int i = 0; i < 50; i++) extra.Add(Make("Extra" + i, @"C:\e" + i + ".exe", "注册表"));
+            for (int i = 0; i < 50; i++)
+            {
+                SearchResult r = Make("Tool Extra " + i, @"C:\e" + i + ".exe", "注册表");
+                r.Usage = 100 + i;
+                extra.Add(r);
+            }
 
-            List<SearchResult> merged = Merge(main, extra, 60);
+            List<SearchResult> merged = Merge(main, extra, "tool", 60);
             Check(merged.Count == 60, "★总条数 = 60（MaxDisplay）", Convert.ToString(merged.Count));
+            Check(merged[0].Name == "Tool Extra 49",
+                "★先统一排名再截断", merged[0].Name);
 
-            // 主结果优先：前 50 条应全是 Main
-            int mainCount = 0;
-            foreach (SearchResult r in merged) if (r.Name.StartsWith("Main")) mainCount++;
-            Check(mainCount == 50, "★主结果 50 条全部保留", Convert.ToString(mainCount));
-
-            // 补充只取前 10
             int extraCount = 0;
-            foreach (SearchResult r in merged) if (r.Name.StartsWith("Extra")) extraCount++;
-            Check(extraCount == 10, "★补充结果被截到 10 条", Convert.ToString(extraCount));
+            foreach (SearchResult r in merged) if (r.Name.StartsWith("Tool Extra")) extraCount++;
+            Check(extraCount == 50, "★高相关补充结果不会被主来源预留名额挤掉",
+                Convert.ToString(extraCount));
 
             // 上限小于主结果数
-            merged = Merge(main, extra, 30);
+            merged = Merge(main, extra, "tool", 30);
             Check(merged.Count == 30, "上限 30 时只取 30 条", Convert.ToString(merged.Count));
             Console.WriteLine();
         }
 
-        // ---------- 6. 分组标题 ----------
-        static void TestSourceHeader()
+        // ---------- 6. 来源改为行内次要信息 ----------
+        static void TestInlineSourceDetail()
         {
-            Console.WriteLine("--- 6. 来源分组标题 ---");
-
-            // 同一来源只插一次标题
-            HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            List<string> headers = new List<string>();
-            List<SearchResult> batch = new List<SearchResult> {
-                Make("A", @"C:\a.exe", "已安装"),
-                Make("B", @"C:\b.exe", "已安装"),
-                Make("C", @"C:\c.exe", "已安装"),
-            };
-            foreach (SearchResult r in batch)
+            Console.WriteLine("--- 6. 来源作为行内次要信息 ---");
+            string root = FindRepoRoot();
+            if (root == null)
             {
-                if (!shown.Add(r.Path)) continue;
-                string nn = NameMatch.Normalize(r.Name ?? "");
-                if (nn.Length > 0 && !shown.Add("N:" + nn)) continue;
-                string gk = "G:" + r.Source;
-                if (shown.Add(gk)) headers.Add(r.Source);
+                Console.WriteLine("      跳过：找不到仓库根");
+                Console.WriteLine();
+                return;
             }
-            Check(headers.Count == 1, "★同来源只插一次标题", Convert.ToString(headers.Count));
-            Check(headers.Count > 0 && headers[0] == "已安装", "标题内容正确");
 
-            // 不同来源各插一次
-            shown.Clear();
-            headers.Clear();
-            batch = new List<SearchResult> {
-                Make("A", @"C:\a.exe", "已安装"),
-                Make("B", @"C:\b.exe", "开始菜单"),
-                Make("C", @"C:\c.exe", "注册表"),
-            };
-            foreach (SearchResult r in batch)
-            {
-                if (!shown.Add(r.Path)) continue;
-                string nn = NameMatch.Normalize(r.Name ?? "");
-                if (nn.Length > 0 && !shown.Add("N:" + nn)) continue;
-                string gk = "G:" + r.Source;
-                if (shown.Add(gk)) headers.Add(r.Source);
-            }
-            Check(headers.Count == 3, "★三个来源各插一次标题", Convert.ToString(headers.Count));
+            string text = File.ReadAllText(Path.Combine(root, "src", "ui", "SearchResultList.cs"),
+                Encoding.UTF8);
+            Check(text.IndexOf("ResultDetail(r)", StringComparison.Ordinal) >= 0,
+                "★每一行渲染来源详情");
+            Check(text.IndexOf("r.Source + \" · \" + path", StringComparison.Ordinal) >= 0,
+                "★来源与路径在次要文字中组合显示");
+            Check(text.IndexOf("MakeSourceHeader", StringComparison.Ordinal) < 0,
+                "★不再用来源大标题切断统一排名");
             Console.WriteLine();
         }
 
@@ -286,7 +337,7 @@ namespace Clover
             {
                 List<SearchResult> main = MatchCatalogSim(cat, q);
                 List<SearchResult> extra = SystemSearch.Instant(q);
-                List<SearchResult> merged = Merge(main, extra, 60);
+                List<SearchResult> merged = Merge(main, extra, q, 60);
 
                 // 同名重复检查
                 Dictionary<string, int> cnt = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -316,10 +367,10 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 8. 源码级同步断言 ----------
+        // ---------- 9. 源码级同步断言 ----------
         static void TestSourceLevelSync()
         {
-            Console.WriteLine("--- 8. 源码级：实现与测试保持同步 ---");
+            Console.WriteLine("--- 9. 源码级：实现与测试保持同步 ---");
 
             string root = FindRepoRoot();
             if (root == null)
@@ -351,6 +402,18 @@ namespace Clover
                 "★Instant 补充搜索仍在（未被删除）");
             Check(text.IndexOf("MatchCatalog", StringComparison.Ordinal) >= 0,
                 "★MatchCatalog 主搜索仍在");
+            Check(text.IndexOf("ThreadPool.QueueUserWorkItem", StringComparison.Ordinal) >= 0,
+                "★系统补充搜索在后台执行");
+            Check(text.IndexOf("AppIcons.GetAsync", StringComparison.Ordinal) >= 0,
+                "★搜索结果图标异步补齐");
+            Check(text.IndexOf("ownGeneration != generation", StringComparison.Ordinal) >= 0,
+                "★过期搜索结果受 generation 保护");
+            Check(text.IndexOf("SearchRanking.Merge", StringComparison.Ordinal) >= 0,
+                "★两路结果走统一智能排名");
+            Check(text.IndexOf("按来源分组", StringComparison.Ordinal) < 0,
+                "★实现注释不再描述旧的来源分组界面");
+            Check(text.IndexOf("ResultOpened", StringComparison.Ordinal) >= 0,
+                "★从搜索启动也会记录使用历史");
             Console.WriteLine();
         }
 
@@ -368,36 +431,17 @@ namespace Clover
         }
 
         /// <summary>
-        /// 复刻 SearchResultList.AppendBatch 的合并逻辑。
-        ///
-        /// **必须与实现保持同步**：实现改了这里也要改，
-        /// TestSourceLevelSync 会提醒。
+        /// 直接调用生产合并逻辑；空查询用于只验证去重、不改变来源兜底顺序的用例。
         /// </summary>
         static List<SearchResult> Merge(List<SearchResult> main, List<SearchResult> extra, int cap)
         {
-            List<SearchResult> result = new List<SearchResult>();
-            HashSet<string> shown = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            Append(result, shown, main, cap);
-            Append(result, shown, extra, cap);
-            return result;
+            return SearchRanking.Merge(main, extra, "", cap);
         }
 
-        static void Append(List<SearchResult> result, HashSet<string> shown,
-            List<SearchResult> batch, int cap)
+        static List<SearchResult> Merge(List<SearchResult> main, List<SearchResult> extra,
+            string query, int cap)
         {
-            if (batch == null) return;
-            foreach (SearchResult r in batch)
-            {
-                if (r == null) continue;
-                if (result.Count >= cap) return;
-                if (!shown.Add(r.Path)) continue;
-
-                string normName = (r.Name ?? "").Trim().ToLowerInvariant();
-                if (normName.Length > 0 && !shown.Add("N:" + normName)) continue;
-
-                result.Add(r);
-            }
+            return SearchRanking.Merge(main, extra, query, cap);
         }
 
         static int CountCatalogMatches(Catalog cat, string q)
@@ -406,7 +450,7 @@ namespace Clover
             foreach (AppItem a in cat.Apps)
             {
                 if (a == null || string.IsNullOrEmpty(a.Path)) continue;
-                if (Pinyin.Matches(a.Name, q)) n++;
+                if (SearchRanking.Matches(a.Name, q)) n++;
             }
             return n;
         }
@@ -418,16 +462,13 @@ namespace Clover
             foreach (AppItem a in cat.Apps)
             {
                 if (a == null || string.IsNullOrEmpty(a.Path)) continue;
-                if (!Pinyin.Matches(a.Name, q)) continue;
-                list.Add(Make(a.Name, a.Path, "已安装"));
+                if (!SearchRanking.Matches(a.Name, q)) continue;
+                SearchResult r = Make(a.Name, a.Path, "已安装");
+                r.Usage = a.Usage;
+                r.LastUsed = a.LastUsed;
+                list.Add(r);
             }
-            list.Sort(delegate(SearchResult x, SearchResult y)
-            {
-                int lx = x.Name == null ? 0 : x.Name.Length;
-                int ly = y.Name == null ? 0 : y.Name.Length;
-                if (lx != ly) return lx.CompareTo(ly);
-                return string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
-            });
+            SearchRanking.Sort(list, q);
             return list;
         }
 

@@ -222,7 +222,7 @@ namespace Clover
         public bool CollapseLowValue = false;
 
         /// <summary>
-        /// **手动固定到「常用」**的应用路径（右键「添加到常用」写入）。
+        /// **手动固定到「常用」**的应用路径（右键「手动固定到常用」写入）。
         ///
         /// 为什么不直接给 usage.json 加计数：
         ///   · 计数会被「常用」按使用次数排序挤下去，用户点了可能看不见变化
@@ -231,6 +231,16 @@ namespace Clover
         /// 且不占用使用榜的名额。
         /// </summary>
         public List<string> PinnedCommon = new List<string>();
+
+        /// <summary>
+        /// 用户从「常用」页移除最近项时的时间戳（path → 当时的 LastUsed ticks）。
+        ///
+        /// 这里不删除 usage.json：启动次数和最近使用时间仍是真实历史。只有当应用
+        /// 再次启动、LastUsed 晚于该时间戳时，它才会重新进入「最近常用」。
+        /// 固定项不受此表影响。
+        /// </summary>
+        public Dictionary<string, long> CommonDismissed =
+            new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
         // ========== 桌面保持无快捷方式 ==========
 
@@ -406,6 +416,7 @@ namespace Clover
                 // 低价值段折叠：缺键 → false（展开，等于改动前的行为）
                 s.CollapseLowValue = ReadBool(d, "collapseLowValue", false);
                 s.PinnedCommon = ReadStringList(d, "pinnedCommon");
+                s.CommonDismissed = ReadLongDictionary(d, "commonDismissed");
 
                 // ---- 桌面保持无快捷方式 ----
                 s.DesktopCleanEnabled = ReadBool(d, "desktopCleanEnabled", false);
@@ -479,6 +490,7 @@ namespace Clover
                 d["lowValueUnmarked"] = LowValueUnmarked;
                 d["collapseLowValue"] = CollapseLowValue;
                 d["pinnedCommon"] = PinnedCommon;
+                d["commonDismissed"] = CommonDismissed;
                 d["desktopCleanEnabled"] = DesktopCleanEnabled;
                 d["desktopCleanExisting"] = DesktopCleanExisting;
                 d["desktopEnabledAt"] = DesktopEnabledAt;
@@ -541,6 +553,34 @@ namespace Clover
             }
             catch { }
             return list;
+        }
+
+        /// <summary>读 path → ticks 字典；坏条目逐条跳过，缺键返回空表。</summary>
+        static Dictionary<string, long> ReadLongDictionary(Dictionary<string, object> d, string key)
+        {
+            Dictionary<string, long> map =
+                new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                object raw;
+                if (!d.TryGetValue(key, out raw) || raw == null) return map;
+                Dictionary<string, object> obj = raw as Dictionary<string, object>;
+                if (obj == null) return map;
+                foreach (KeyValuePair<string, object> kv in obj)
+                {
+                    if (string.IsNullOrWhiteSpace(kv.Key) || kv.Value == null) continue;
+                    long ticks;
+                    try { ticks = Convert.ToInt64(kv.Value); }
+                    catch { continue; }
+                    if (ticks < 0) continue;
+                    map[kv.Key.Trim()] = ticks;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings." + key + " 读取失败（" + ex.Message + "），已用空字典");
+            }
+            return map;
         }
 
         static string ReadString(Dictionary<string, object> d, string key, string def, string[] allowed)

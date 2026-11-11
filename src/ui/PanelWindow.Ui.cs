@@ -249,6 +249,9 @@ namespace Clover
             contentScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             contentScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
             contentScroll.Padding = new Thickness(10, 4, 8, 6);
+            // WPF 默认滚轮按“行”瞬移，磁贴页会呈现明显的一格一格跳动。
+            // 保留系统滚轮距离语义，但由短促、可中断的像素滚动呈现。
+            contentScroll.PreviewMouseWheel += OnContentPreviewMouseWheel;
             tilePanel = new WrapPanel();
             tilePanel.Orientation = Orientation.Horizontal;
 
@@ -266,6 +269,14 @@ namespace Clover
             // 否则拼音搜索（weixin/wx）在界面上永远搜不到 —— 磁贴被隐藏了，
             // 而 SystemSearch 不包含已扫描清单。
             searchResults.CatalogProvider = delegate { return catalog == null ? null : catalog.Apps; };
+            searchResults.PinnedProvider = delegate(string path) { return IsPinnedCommonPath(path); };
+            searchResults.UsageProvider = delegate(string path) { return usage == null ? 0 : usage.GetCount(path); };
+            searchResults.LastUsedProvider = delegate(string path) { return usage == null ? 0 : usage.GetLast(path); };
+            searchResults.ResultOpened = delegate(string path) { RecordAppUsage(path); };
+            searchResults.ResultsChanged = delegate
+            {
+                try { UpdateSearchFooter(); } catch { }
+            };
 
             // 两者放进同一个 Grid，靠 Visibility 切换
             contentStack = new Grid();
@@ -438,7 +449,12 @@ namespace Clover
                     if (!suppressScrollRecord &&
                         (e.VerticalChange != 0 || e.ExtentHeightChange != 0))
                         scrollOffsets[current] = contentScroll.VerticalOffset;
-                    ScheduleViewportIconRefresh();
+                    // Extent 变化通常来自内容刚建好，需要立即挂载首屏图标；
+                    // 单纯滚动则等手停下再做，避免每帧遍历和替换磁贴控件。
+                    if (e.ExtentHeightChange != 0)
+                        ScheduleViewportIconRefresh();
+                    else if (e.VerticalChange != 0)
+                        ScheduleViewportIconRefreshAfterScroll();
                 }
                 catch { }
             };
@@ -513,7 +529,7 @@ namespace Clover
             deskPanel.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             deskPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            deskToolRow = new StackPanel();
+            deskToolRow = new WrapPanel();
             deskToolRow.Orientation = Orientation.Horizontal;
             deskToolRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
             Grid.SetRow(deskToolRow, 0);

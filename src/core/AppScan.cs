@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Clover
 {
@@ -19,8 +20,25 @@ namespace Clover
     /// </summary>
     static class AppScan
     {
+        /// <summary>扫描前后真正影响目录内容的三个文件。</summary>
+        static readonly string[] CatalogFiles = new string[]
+        {
+            "apps.json", "registry-apps.json", "store-apps.json"
+        };
+
         public static bool Run(string baseDir)
         {
+            return RunDetailed(baseDir).Success;
+        }
+
+        /// <summary>
+        /// 扫描并报告目录内容是否真的变化。比较内容而不是修改时间，兼容旧扫描器
+        /// 仍写 updated 字段的情况；调用方据此决定是否刷新 WPF 控件树。
+        /// </summary>
+        public static ScanResult RunDetailed(string baseDir)
+        {
+            DateTime started = DateTime.UtcNow;
+            Dictionary<string, string> before = Snapshot(baseDir);
             bool ok;
             try
             {
@@ -50,7 +68,7 @@ namespace Clover
                 RegistryScanner.Stats rs = new RegistryScanner.Stats();
                 System.Collections.Generic.List<RegistryScanner.Entry> reg = RegistryScanner.Scan(rs);
                 RegistryScanner.Save(baseDir, reg, rs);
-                Log.Info("注册表扫描完成，写入 " + reg.Count + " 条");
+                Log.Diagnostic("注册表扫描完成，得到 " + reg.Count + " 条");
             }
             catch (Exception ex)
             {
@@ -66,14 +84,58 @@ namespace Clover
                 StoreAppScanner.Stats ss = new StoreAppScanner.Stats();
                 System.Collections.Generic.List<StoreAppScanner.Entry> store = StoreAppScanner.Scan(ss);
                 StoreAppScanner.Save(baseDir, store, ss);
-                Log.Info("商店扫描完成，写入 " + store.Count + " 条");
+                Log.Diagnostic("商店扫描完成，得到 " + store.Count + " 条");
             }
             catch (Exception ex)
             {
                 Log.Hook(ex, "扫描商店应用");
             }
 
-            return ok;
+            int duration = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+            return new ScanResult(ok, Changed(before, Snapshot(baseDir)), duration);
+        }
+
+        static Dictionary<string, string> Snapshot(string baseDir)
+        {
+            Dictionary<string, string> result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string name in CatalogFiles)
+            {
+                string path = System.IO.Path.Combine(baseDir ?? "", "config", name);
+                try { result[name] = System.IO.File.Exists(path) ? System.IO.File.ReadAllText(path) : null; }
+                catch { result[name] = null; }
+            }
+            return result;
+        }
+
+        static bool Changed(Dictionary<string, string> before, Dictionary<string, string> after)
+        {
+            foreach (string name in CatalogFiles)
+            {
+                string a, b;
+                before.TryGetValue(name, out a);
+                after.TryGetValue(name, out b);
+                if (!string.Equals(NormalizeGeneratedJson(a), NormalizeGeneratedJson(b),
+                    StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        // 兼容旧版本生成文件：updated/stats 只用于诊断，不应把相同目录误判为内容变化。
+        internal static string NormalizeGeneratedJson(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            try
+            {
+                System.Web.Script.Serialization.JavaScriptSerializer ser =
+                    new System.Web.Script.Serialization.JavaScriptSerializer();
+                ser.MaxJsonLength = int.MaxValue;
+                Dictionary<string, object> root = ser.Deserialize<Dictionary<string, object>>(text);
+                if (root == null) return text;
+                root.Remove("updated");
+                root.Remove("stats");
+                return ser.Serialize(root);
+            }
+            catch { return text; }
         }
     }
 }

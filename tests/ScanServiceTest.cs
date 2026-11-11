@@ -7,6 +7,7 @@ namespace Clover
     static class AppScan
     {
         public static bool Run(string baseDir) { return true; }
+        public static ScanResult RunDetailed(string baseDir) { return new ScanResult(true, true, 0); }
     }
 
     static class ScanServiceTest
@@ -69,11 +70,15 @@ namespace Clover
                     secondDir = dir;
                 }
                 Interlocked.Decrement(ref active);
-                return true;
+                return new ScanResult(true, n == 2, 7);
             });
 
-            Action<bool> done = delegate(bool ok)
+            bool firstUnchanged = false;
+            bool secondChanged = false;
+            Action<ScanResult> done = delegate(ScanResult result)
             {
+                if (result != null && !result.Changed) firstUnchanged = true;
+                if (result != null && result.Changed) secondChanged = true;
                 if (Interlocked.Increment(ref callbacks) == 3) callbacksDone.Set();
             };
 
@@ -91,6 +96,8 @@ namespace Clover
             Check(runs == 2, "★三次触发只执行首次 + 一次补跑", runs.ToString());
             Check(maxActive == 1, "★扫描严格串行", maxActive.ToString());
             Check(callbacks == 3, "★每个触发方都收到完成回调", callbacks.ToString());
+            Check(firstUnchanged, "结果区分成功但未变化");
+            Check(secondChanged, "结果可携带内容变化");
             Check(secondDir == "C", "补跑采用最新目录状态", secondDir ?? "null");
             Check(!ScanService.Busy, "全部完成后 Busy=false");
             Check(ScanService.LastDone > DateTime.MinValue, "记录最后完成时间");

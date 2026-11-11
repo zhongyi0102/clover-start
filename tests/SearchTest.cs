@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 
 namespace Clover
 {
@@ -44,6 +45,8 @@ namespace Clover
             TestResultShape();
             TestCap();
             TestDeterministic();
+            TestMemoryIndex();
+            TestInvalidationDuringWarmup();
             TestNoDeepRemnants();
 
             Console.WriteLine();
@@ -158,10 +161,94 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 6. 磁盘搜索确实不存在 ----------
+        // ---------- 6. 内存索引 ----------
+        static void TestMemoryIndex()
+        {
+            Console.WriteLine("--- 6. 内存索引 ---");
+            SystemSearch.Invalidate();
+            Check(SystemSearch.IndexedCount == 0, "失效后索引为空");
+
+            Stopwatch cold = Stopwatch.StartNew();
+            SystemSearch.Instant("a");
+            cold.Stop();
+            Check(SystemSearch.IndexedCount > 0, "★首次查询建立索引");
+
+            Stopwatch hot = Stopwatch.StartNew();
+            for (int i = 0; i < 20; i++) SystemSearch.Instant("a");
+            hot.Stop();
+            Check(hot.ElapsedMilliseconds < 1000, "★热索引 20 次查询不反复扫描系统",
+                hot.ElapsedMilliseconds + "ms（冷启动 " + cold.ElapsedMilliseconds + "ms）");
+            Console.WriteLine();
+        }
+
+        // ---------- 7. 预热期间失效仍保持 single-flight ----------
+        static void TestInvalidationDuringWarmup()
+        {
+            Console.WriteLine("--- 7. 预热失效竞态 ---");
+            ManualResetEvent firstStarted = new ManualResetEvent(false);
+            ManualResetEvent releaseFirst = new ManualResetEvent(false);
+            ManualResetEvent queryDone = new ManualResetEvent(false);
+            int builds = 0;
+            List<SearchResult> queryResult = null;
+            try
+            {
+                SystemSearch.SetIndexBuilderForTest(delegate
+                {
+                    int n = Interlocked.Increment(ref builds);
+                    if (n == 1)
+                    {
+                        firstStarted.Set();
+                        releaseFirst.WaitOne(5000);
+                    }
+                    return new List<SearchResult>
+                    {
+                        new SearchResult
+                        {
+                            Name = n == 1 ? "旧索引" : "新索引",
+                            Path = n == 1 ? @"C:\old.exe" : @"C:\new.exe",
+                            Source = "注册表",
+                            Ext = ".exe",
+                        }
+                    };
+                });
+
+                SystemSearch.WarmAsync();
+                Check(firstStarted.WaitOne(2000), "旧一代预热已开始");
+                SystemSearch.Invalidate();
+
+                Thread query = new Thread(new ThreadStart(delegate
+                {
+                    try { queryResult = SystemSearch.Instant("新"); }
+                    finally { queryDone.Set(); }
+                }));
+                query.IsBackground = true;
+                query.Start();
+                Thread.Sleep(30);
+                releaseFirst.Set();
+
+                Check(queryDone.WaitOne(5000), "失效后的查询能完成");
+                Check(builds == 2, "★旧代失效后只补建一次最新索引", builds.ToString());
+                Check(queryResult != null && queryResult.Count == 1
+                    && queryResult[0].Name == "新索引",
+                    "★旧构建结果不能覆盖新一代");
+            }
+            finally
+            {
+                releaseFirst.Set();
+                queryDone.WaitOne(1000);
+                SpinWait.SpinUntil(delegate { return SystemSearch.IndexedCount > 0; }, 1000);
+                try { SystemSearch.SetIndexBuilderForTest(null); } catch { }
+                firstStarted.Close();
+                releaseFirst.Close();
+                queryDone.Close();
+            }
+            Console.WriteLine();
+        }
+
+        // ---------- 8. 磁盘搜索确实不存在 ----------
         static void TestNoDeepRemnants()
         {
-            Console.WriteLine("--- 6. 磁盘搜索逻辑确实已移除 ---");
+            Console.WriteLine("--- 8. 磁盘搜索逻辑确实已移除 ---");
 
             // 反射检查：SystemSearch 不应再有 Deep / DeepRoots 等公开成员
             Type t = typeof(SystemSearch);

@@ -50,12 +50,53 @@ namespace Clover
             TestUsageFilterReal();     // ★ 直接测生产函数 PanelWindow.IsCommonByUsage
             TestMenuActionReal();      // ★ 直接测生产函数 PanelWindow.CommonMenuFor
             TestPinnedOrderReal();     // ★ 新固定项进入常用首位
+            TestDismissedRecentReal(); // ★移除最近项不删除启动历史
             TestContentSignatureReal();// ★ 固定名单变化触发重绘
             TestTileInteractionColors();// ★ 磁贴悬停不能变成不透明白块
 
             Console.WriteLine();
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             Environment.Exit(failed == 0 ? 0 : 1);
+        }
+
+        // ---------- 8. 最近常用移除语义 ----------
+        static void TestDismissedRecentReal()
+        {
+            Console.WriteLine("--- 8. ★最近常用移除后保留历史 ---");
+
+            AppItem app = new AppItem();
+            app.Path = @"C:\Apps\code.exe";
+            app.Usage = 12;
+            app.LastUsed = 500;
+
+            Check(PanelWindow.IsCommonByUsage(app, 0), "有历史且未移除 → 显示");
+            Check(!PanelWindow.IsCommonByUsage(app, 500),
+                "★LastUsed 未晚于移除快照 → 不显示");
+            Check(!PanelWindow.IsCommonByUsage(app, 600),
+                "移除快照更新得更晚 → 不显示");
+            Check(PanelWindow.IsCommonByUsage(app, 499),
+                "★再次启动产生更晚 LastUsed → 自动回来");
+
+            string root = NewRoot();
+            Settings s = Settings.Load(root);
+            s.CommonDismissed[app.Path] = app.LastUsed;
+            s.Save();
+            Settings back = Settings.Load(root);
+            long value;
+            Check(back.CommonDismissed.TryGetValue(app.Path, out value) && value == 500,
+                "★移除快照可写盘往返", Convert.ToString(value));
+
+            string src = ReadSource();
+            if (src != null)
+            {
+                Check(!src.Contains("usage.Remove(a.Path)"),
+                    "★从最近常用移除不再删除 usage.json 历史");
+                Check(src.Contains("settings.CommonDismissed[a.Path]"),
+                    "★生产代码改为保存移除快照");
+                Check(src.Contains("手动固定") && src.Contains("最近常用"),
+                    "★常用页明确分为手动固定与最近常用");
+            }
+            Console.WriteLine();
         }
 
         // ---------- 9. ★磁贴交互色必须保持半透明 ----------
@@ -176,16 +217,16 @@ namespace Clover
                 "全部页 + 已固定 + 有使用记录 → 取消固定到常用");
 
             // 「常用」页（showingCommon=true）
-            Check(PanelWindow.CommonMenuFor(true, true, 0) == PanelWindow.CommonMenuAction.Remove,
-                "常用页 + 已固定 → 从常用移除");
-            Check(PanelWindow.CommonMenuFor(true, false, 3) == PanelWindow.CommonMenuAction.Remove,
-                "常用页 + 未固定但有使用记录 → 从常用移除");
+            Check(PanelWindow.CommonMenuFor(true, true, 0) == PanelWindow.CommonMenuAction.Unpin,
+                "★手动固定项 → 取消手动固定");
+            Check(PanelWindow.CommonMenuFor(true, false, 3) == PanelWindow.CommonMenuAction.DismissRecent,
+                "★最近常用项 → 从最近常用移除");
 
             // 源码级：菜单里不得再出现旧的 inCommon 门控
             string src = ReadSource();
             if (src == null)
             {
-                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow.Nav.cs）");
+                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow partial 源码）");
             }
             else
             {
@@ -238,7 +279,7 @@ namespace Clover
             string src = ReadSource();
             if (src == null)
             {
-                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow.Nav.cs）");
+                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow partial 源码）");
             }
             else
             {
@@ -252,7 +293,8 @@ namespace Clover
                 {
                     string body = src.Substring(start, end - start);
                     Check(body.Contains("hit.Hidden"), "★人工固定分支过滤 Hidden");
-                    Check(body.Contains("IsCommonByUsage(a)"), "★使用榜分支走统一判定（含 Hidden）");
+                    Check(body.Contains("IsCommonByUsage(a, CommonDismissedAt(a.Path))"),
+                        "★使用榜分支统一检查 Hidden 与最近项移除快照");
                 }
             }
             Console.WriteLine();
@@ -362,7 +404,7 @@ namespace Clover
             string src = ReadSource();
             if (src == null)
             {
-                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow.Nav.cs）");
+                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow partial 源码）");
             }
             else
             {
@@ -402,8 +444,25 @@ namespace Clover
                     string d = start;
                     for (int i = 0; i < 8 && d != null; i++)
                     {
-                        string p = Path.Combine(d, "src", "ui", "PanelWindow.Nav.cs");
-                        if (File.Exists(p)) return File.ReadAllText(p);
+                        string ui = Path.Combine(d, "src", "ui");
+                        string nav = Path.Combine(ui, "PanelWindow.Nav.cs");
+                        if (File.Exists(nav))
+                        {
+                            // 生产代码按职责拆成多个 partial。顺序让 Tiles 位于
+                            // TileDrag 前，保留现有源码级方法区间检查的语义。
+                            string[] files = new string[] {
+                                "PanelWindow.Nav.cs", "PanelWindow.Search.cs",
+                                "PanelWindow.Tiles.cs", "PanelWindow.TileDrag.cs",
+                                "PanelWindow.Desks.cs"
+                            };
+                            List<string> chunks = new List<string>();
+                            foreach (string file in files)
+                            {
+                                string p = Path.Combine(ui, file);
+                                if (File.Exists(p)) chunks.Add(File.ReadAllText(p));
+                            }
+                            return string.Join("\n", chunks.ToArray());
+                        }
                         DirectoryInfo parent = Directory.GetParent(d);
                         if (parent == null) break;
                         d = parent.FullName;

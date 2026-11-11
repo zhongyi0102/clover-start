@@ -186,9 +186,13 @@ namespace Clover
                 });
 
                 root["apps"] = apps;
-                root["updated"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                JsonIO.WriteAtomic(appsPath, ser.Serialize(root));
-                Log.Info("便携软件识别：新增 " + added + " 个（扫描目录 " + visited + " 个，候选 " + found.Count + " 个）");
+                // updated 是旧版诊断字段；继续写它会让相同目录每轮都产生不同 JSON，
+                // 破坏“内容未变不触盘”的保证。读取仍兼容旧字段，写回时移除。
+                root.Remove("updated");
+                JsonIO.WriteResult written = JsonIO.WriteAtomicIfChanged(
+                    appsPath, ser.Serialize(root));
+                if (!written.Success) return 0;
+                Log.Diagnostic("便携软件识别：新增 " + added + " 个（扫描目录 " + visited + " 个，候选 " + found.Count + " 个）");
                 return added;
             }
             catch (Exception ex)

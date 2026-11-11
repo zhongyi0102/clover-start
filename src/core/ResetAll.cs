@@ -78,14 +78,11 @@ namespace Clover
                     throw new Exception("任务栏处于自动隐藏状态（本程序不会设置此项，可能是用户原有的设置，未修改）");
             }));
 
-            // ---------- 4. 移除开机自启快捷方式 ----------
+            // ---------- 4. 移除开机自启（登录计划任务 + 旧快捷方式） ----------
             steps.Add(Do("移除开机自启", delegate
             {
-                string lnk = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Startup), "四叶草启动器.lnk");
-                if (!File.Exists(lnk)) return; // 本来就没有，算成功
-                File.Delete(lnk);
-                if (File.Exists(lnk)) throw new Exception("快捷方式未能删除");
+                Autostart.Result result = Autostart.Disable();
+                if (!result.Success) throw new Exception(result.Message);
             }));
 
             // ---------- 5. 停止看门狗进程 ----------

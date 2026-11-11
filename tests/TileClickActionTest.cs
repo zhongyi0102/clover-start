@@ -172,7 +172,7 @@ namespace Clover
             string src = ReadSource();
             if (src == null)
             {
-                Console.WriteLine("SKIP  找不到 src/ui/PanelWindow.Nav.cs，跳过静态检查");
+                Console.WriteLine("SKIP  找不到 PanelWindow partial 源码，跳过静态检查");
                 Console.WriteLine();
                 return;
             }
@@ -231,8 +231,23 @@ namespace Clover
                     string d = start;
                     for (int i = 0; i < 8 && d != null; i++)
                     {
-                        string p = Path.Combine(d, "src", "ui", "PanelWindow.Nav.cs");
-                        if (File.Exists(p)) return File.ReadAllText(p);
+                        string ui = Path.Combine(d, "src", "ui");
+                        string nav = Path.Combine(ui, "PanelWindow.Nav.cs");
+                        if (File.Exists(nav))
+                        {
+                            string[] files = new string[] {
+                                "PanelWindow.Nav.cs", "PanelWindow.Search.cs",
+                                "PanelWindow.Tiles.cs", "PanelWindow.TileDrag.cs",
+                                "PanelWindow.Desks.cs"
+                            };
+                            List<string> chunks = new List<string>();
+                            foreach (string file in files)
+                            {
+                                string p = Path.Combine(ui, file);
+                                if (File.Exists(p)) chunks.Add(File.ReadAllText(p));
+                            }
+                            return string.Join("\n", chunks.ToArray());
+                        }
                         DirectoryInfo parent = Directory.GetParent(d);
                         if (parent == null) break;
                         d = parent.FullName;

@@ -87,11 +87,19 @@ $batInstall = @'
 @echo off
 cd /d "%~dp0"
 echo 正在创建开机自启...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$exe = Join-Path (Get-Location) 'app\CloverStart.exe'; $startup = [Environment]::GetFolderPath('Startup'); $lnk = Join-Path $startup '四叶草启动器.lnk'; $ws = New-Object -ComObject WScript.Shell; $sc = $ws.CreateShortcut($lnk); $sc.TargetPath = $exe; $sc.WorkingDirectory = (Split-Path $exe); $sc.IconLocation = \"$exe,0\"; $sc.Description = '四叶草启动面板'; $sc.Save(); Start-Process $exe"
+"app\CloverStart.exe" --enable-autostart
+if errorlevel 1 goto failed
+start "" "app\CloverStart.exe"
 echo.
 echo 已创建开机自启并启动。
 pause
+exit /b 0
+
+:failed
+echo.
+echo 创建开机自启失败，请直接启动程序后在右键菜单中启用。
+pause
+exit /b 1
 '@
 [System.IO.File]::WriteAllText((Join-Path $pkgDir '安装开机自启.bat'), $batInstall,
     [System.Text.Encoding]::GetEncoding(936))
@@ -109,9 +117,9 @@ $readme = @"
   .NET Framework 4.8（Win10 1903 以后系统自带，一般不用装）
 
 【开机自启】
-  双击「安装开机自启.bat」。
+  双击「安装开机自启.bat」，或运行 app\CloverStart.exe --enable-autostart。
   取消：右键四叶草按钮 → 取消勾选「开机自启」，
-        或删除 %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\四叶草启动器.lnk
+        或运行 app\CloverStart.exe --disable-autostart。
 
 【主要操作】
   · 点击任务栏里的四叶草按钮，或按 Ctrl + Alt + 空格 打开/收起面板
@@ -137,9 +145,9 @@ $readme = @"
   desktop-backup\ 旧版本移走的桌面快捷方式（程序不再读写它）。
 
 【卸载】
-  1. 运行 app\CloverStart.exe --reset-all
-  2. 删除整个文件夹
-  3. 如果开了开机自启，先删掉上面提到的那个 .lnk
+  1. 如果开了开机自启，先运行 app\CloverStart.exe --disable-autostart
+  2. 运行 app\CloverStart.exe --reset-all
+  3. 删除整个文件夹
 
 完整文档见 README.md
 "@

@@ -57,7 +57,12 @@ namespace Clover
         static string[] Forms(string name)
         {
             string[] hit;
-            if (nameCache.TryGetValue(name, out hit)) return hit;
+            // 搜索的目录匹配在 UI 线程，系统索引补充在后台线程；Dictionary
+            // 不能一边写一边无锁读取。这里只锁很短的查表/发布阶段，转换在锁外做。
+            lock (gate)
+            {
+                if (nameCache.TryGetValue(name, out hit)) return hit;
+            }
 
             StringBuilder full = new StringBuilder(name.Length * 3);
             StringBuilder ini = new StringBuilder(name.Length);
@@ -80,7 +85,9 @@ namespace Clover
             hit = new string[] { full.ToString(), ini.ToString() };
             lock (gate)
             {
-                if (!nameCache.ContainsKey(name)) nameCache[name] = hit;
+                string[] existing;
+                if (nameCache.TryGetValue(name, out existing)) return existing;
+                nameCache[name] = hit;
             }
             return hit;
         }

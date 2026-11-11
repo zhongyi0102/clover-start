@@ -11,7 +11,9 @@
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tests\run-tests.ps1
 # CI / 无桌面会话：追加 -CoreOnly，只跑不链接 WPF 界面的套件。
 param(
-    [switch]$CoreOnly
+    [switch]$CoreOnly,
+    [switch]$Stress,
+    [int]$StressCycles = 100
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,10 +45,17 @@ $wpfRefs = $baseRefs + @(
     ('/r:' + (Join-Path $refDir 'System.Xaml.dll')),
     $webRef
 )
+$wpfDir = Join-Path $refDir 'WPF'
 foreach ($n in @('WindowsBase', 'PresentationCore', 'PresentationFramework',
     'UIAutomationClient', 'UIAutomationTypes', 'UIAutomationProvider')) {
-    $asm = [System.Reflection.Assembly]::LoadWithPartialName($n)
-    if ($asm) { $wpfRefs += ('/r:' + $asm.Location) }
+    # 明确取 .NET Framework 4.8 WPF，避免被宿主进程已加载的现代 .NET WPF 污染。
+    $frameworkWpf = Join-Path $wpfDir ($n + '.dll')
+    if (Test-Path $frameworkWpf) {
+        $wpfRefs += ('/r:' + $frameworkWpf)
+    } else {
+        $asm = [System.Reflection.Assembly]::LoadWithPartialName($n)
+        if ($asm) { $wpfRefs += ('/r:' + $asm.Location) }
+    }
 }
 
 $script:failed = 0
@@ -54,14 +63,14 @@ $script:executed = 0
 $script:startedAt = Get-Date
 $script:results = @()
 $script:desktopSuites = @(
-    'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest',
+    'CommonPinTest', 'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest',
     'IconTest', 'FullscreenTest', 'TaskbarCreatedTest', 'TaskbarStabilityTest',
     'TaskbarAccessibilityTest', 'ActiveRowTest',
     'MenuStructureTest', 'OrganizeShellTest', 'DeskRootDialogTest', 'DropHintTest',
     'WindowPosTest', 'BackgroundStoreTest', 'WallpaperEngineTest'
 )
 
-function Invoke-Suite($name, $refs, $sources) {
+function Invoke-Suite($name, $refs, $sources, $module = $null) {
     if ($CoreOnly -and $script:desktopSuites -contains $name) {
         Write-Host "===== $name（CoreOnly 跳过）=====" -ForegroundColor DarkGray
         return
@@ -72,7 +81,9 @@ function Invoke-Suite($name, $refs, $sources) {
     $status = 'passed'
     $script:executed++
     $exe = Join-Path $outDir ($name + '.exe')
-    & $csc /nologo /target:exe /codepage:65001 ('/out:' + $exe) $refs $sources 2>&1 |
+    $moduleArg = @()
+    if ($module) { $moduleArg += ('/addmodule:' + $module) }
+    & $csc /nologo /target:exe /codepage:65001 ('/out:' + $exe) $refs $moduleArg $sources 2>&1 |
         Where-Object { $_ -notmatch 'warning CS' }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "编译失败: $name" -ForegroundColor Red
@@ -218,6 +229,9 @@ Invoke-Suite 'PinyinTest' $baseRefs `
 Invoke-Suite 'SettingsTest' ($baseRefs + $webRef) `
     @((Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SettingsTest.cs'))
 
+Invoke-Suite 'AutostartTest' $baseRefs `
+    @((Join-Path $coreDir 'Autostart.cs'), (Join-Path $testDir 'AutostartTest.cs'))
+
 
 
 # 「文件」标签：自定义文件夹清单（路径校验 / 去重 / 上限 / 重命名 / 容错）
@@ -231,8 +245,12 @@ Invoke-Suite 'SafeCallTest' $baseRefs `
     (@((Join-Path $coreDir 'SafeCall.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SafeCallTest.cs')))
 Invoke-Suite 'VisibleLoadTimerTest' $baseRefs `
     (@((Join-Path $coreDir 'VisibleLoadTimer.cs'), (Join-Path $testDir 'VisibleLoadTimerTest.cs')))
+Invoke-Suite 'ResourceSnapshotTest' $baseRefs `
+    (@((Join-Path $coreDir 'ResourceSnapshot.cs'), (Join-Path $testDir 'ResourceSnapshotTest.cs')))
 Invoke-Suite 'ScanServiceTest' $baseRefs `
     (@((Join-Path $coreDir 'ScanService.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'ScanServiceTest.cs')))
+Invoke-Suite 'CatalogPreloaderTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $coreDir 'CatalogPreloader.cs'), (Join-Path $testDir 'CatalogPreloaderTest.cs')))
 Invoke-Suite 'WatcherTest' $baseRefs `
     @((Join-Path $testDir 'WatcherTest.cs'))
 # 「文件」标签：目录列举（过滤 / 排序 / 上限 / 只读）
@@ -263,6 +281,15 @@ Invoke-Suite 'VerifiedFileMoveTest' $baseRefs `
 # 收纳桌面 / 放回桌面
 Invoke-Suite 'DeskCollectorTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskCollector.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DeskCollectorTest.cs')))
+# 智能整理规则：独立存储、字段往返、校验、损坏主文件回退 .bak
+Invoke-Suite 'DesktopOrganizeRulesTest' ($baseRefs + $webRef) `
+    (@((Join-Path $coreDir 'DesktopOrganizeRules.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DesktopOrganizeRulesTest.cs')))
+# 智能整理预览：通配符/扩展名/大小/日期、优先级、冲突改名、混合状态、顶层扫描
+Invoke-Suite 'DesktopOrganizePlannerTest' ($baseRefs + $webRef) `
+    (@((Join-Path $coreDir 'DesktopOrganizeRules.cs'), (Join-Path $coreDir 'DesktopOrganizePlanner.cs'), (Join-Path $coreDir 'DeskCollector.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DesktopOrganizePlannerTest.cs')))
+# 智能整理执行：移动/复制/忽略、取消勾选、目标竞争不覆盖、源变化保护
+Invoke-Suite 'DesktopOrganizeExecutorTest' ($baseRefs + $webRef) `
+    (@((Join-Path $coreDir 'DesktopOrganizeRules.cs'), (Join-Path $coreDir 'DesktopOrganizePlanner.cs'), (Join-Path $coreDir 'DeskCollector.cs'), (Join-Path $coreDir 'VerifiedFileMove.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'DesktopOrganizeExecutorTest.cs')))
 # 旧桌面迁移冲突提示：同一冲突只弹一次，重启后仍记住
 Invoke-Suite 'DeskMigrationNoticeTest' $baseRefs `
     (@((Join-Path $coreDir 'DeskMigrationNotice.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'DeskMigrationNoticeTest.cs')))
@@ -306,28 +333,54 @@ $allSrc = @(
         ForEach-Object { $_.FullName })
 )
 
+$uiModule = $null
+if (-not $CoreOnly) {
+    # UI 套件共享同一份生产源码模块。/addmodule 会把 netmodule 链入每个最终 EXE，
+    # 所以测试仍处于同一程序集，可访问 internal；但 18 个 UI 套件不再各自重编 100+ 源文件。
+    $uiModule = Join-Path $outDir 'Clover.Tests.Shared.netmodule'
+    $moduleSw = [System.Diagnostics.Stopwatch]::StartNew()
+    & $csc /nologo /target:module /codepage:65001 ('/out:' + $uiModule) $wpfRefs $allSrc 2>&1 |
+        Where-Object { $_ -notmatch 'warning CS' }
+    if ($LASTEXITCODE -ne 0) { throw '编译共享 UI 测试模块失败' }
+    $moduleSw.Stop()
+    Write-Host ('共享 UI 测试模块编译完成：' + $moduleSw.ElapsedMilliseconds + 'ms') -ForegroundColor DarkGray
+}
+
+if ($Stress) {
+    Write-Host '===== ResourceStressTest =====' -ForegroundColor Magenta
+    $stressExe = Join-Path $outDir 'ResourceStressTest.exe'
+    & $csc /nologo /target:exe /codepage:65001 ('/out:' + $stressExe) $wpfRefs `
+        ('/addmodule:' + $uiModule) (Join-Path $testDir 'ResourceStressTest.cs') 2>&1 |
+        Where-Object { $_ -notmatch 'warning CS' }
+    if ($LASTEXITCODE -ne 0) { throw '编译失败: ResourceStressTest' }
+    $stressReport = Join-Path $outDir 'resource-stress.json'
+    & $stressExe $StressCycles $stressReport
+    if ($LASTEXITCODE -ne 0) { throw 'ResourceStressTest 未收敛' }
+    Write-Host ''
+}
+
 # 「常用」名单：右键「添加到常用」的人工固定 + 无上限 + 隐藏项过滤。
 # 需要链接 ui 源码：直接调用生产函数 PanelWindow.IsCommonByUsage()。
 Invoke-Suite 'CommonPinTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'CommonPinTest.cs')))
+    @((Join-Path $testDir 'CommonPinTest.cs')) $uiModule
 
 # CrashGuardTest 要真正调用 CrashGuard（依赖 ErrorLog/Ui），所以走全量源码
 Invoke-Suite 'CrashGuardTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'CrashGuardTest.cs')))
+    @((Join-Path $testDir 'CrashGuardTest.cs')) $uiModule
 
 # 桌面还原：直接测 AppWatcher.RestoreLinks/MakeUniqueDest 的纯文件逻辑
 # 打开文件所在位置：测 PanelWindow.TryBuildExplorerArgs 的路径解析
 Invoke-Suite 'OpenFolderTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'OpenFolderTest.cs')))
+    @((Join-Path $testDir 'OpenFolderTest.cs')) $uiModule
 
 # 毛玻璃背景：删壁纸页后 glassMode / accentFromWallpaper 仍工作
 Invoke-Suite 'GlassBackdropTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'GlassBackdropTest.cs')))
+    @((Join-Path $testDir 'GlassBackdropTest.cs')) $uiModule
 
 
 # 外观参数：每个参数「真的改变渲染输出」的断言
 Invoke-Suite 'AppearanceTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'AppearanceTest.cs')))
+    @((Join-Path $testDir 'AppearanceTest.cs')) $uiModule
 
 
 # 毛玻璃预设：参数映射、切换生效、custom 模式、保存重载、旧配置、边界
@@ -339,48 +392,48 @@ Invoke-Suite 'AppearancePresetTest' ($baseRefs + $webRef) `
 Invoke-Suite 'ContrastTest' $baseRefs `
     (@((Join-Path $coreDir 'ContrastGuard.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'ContrastTest.cs')))
   Invoke-Suite 'IconTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'IconTest.cs')))
+    @((Join-Path $testDir 'IconTest.cs')) $uiModule
 # 系统级搜索：Instant 行为回归 + 确认磁盘搜索逻辑已彻底移除
 Invoke-Suite 'SearchTest' $baseRefs `
-    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SearchTest.cs')))
+    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'SearchRanking.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'SearchTest.cs')))
 Invoke-Suite 'FullscreenTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'FullscreenTest.cs')))
+    @((Join-Path $testDir 'FullscreenTest.cs')) $uiModule
 
 # 搜索合并：主（MatchCatalog）+ 补充（Instant）的去重/排序/上限
 Invoke-Suite 'SearchMergeTest' $baseRefs `
-    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
+    (@((Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'SearchRanking.cs'), (Join-Path $coreDir 'AppPaths.cs'), (Join-Path $coreDir 'NameMatch.cs'), (Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $coreDir 'Catalog.cs'), (Join-Path $coreDir 'Settings.cs'), (Join-Path $coreDir 'AppearancePresets.cs'), (Join-Path $coreDir 'Migration.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'AppDedup.cs'), (Join-Path $coreDir 'ShortcutResolver.cs'), (Join-Path $coreDir 'RegistryScanner.cs'), (Join-Path $coreDir 'StoreAppScanner.cs'), (Join-Path $coreDir 'PortableScanner.cs'), (Join-Path $coreDir 'NativeScanner.cs'), (Join-Path $coreDir 'CategoryRules.cs'), (Join-Path $coreDir 'CategoryOverrides.cs'), (Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'), (Join-Path $coreDir 'UsageStore.cs'), (Join-Path $testDir 'SearchMergeTest.cs')))
 
 Invoke-Suite 'TaskbarCreatedTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'TaskbarCreatedTest.cs')))
+    @((Join-Path $testDir 'TaskbarCreatedTest.cs')) $uiModule
 
 # 任务栏稳定性：500 次事件风暴、generation、有限重试、负坐标与混合 DPI 几何
 Invoke-Suite 'TaskbarStabilityTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'TaskbarStabilityTest.cs')))
+    @((Join-Path $testDir 'TaskbarStabilityTest.cs')) $uiModule
 
 # 四叶草按钮：原生 Button、Tab/焦点、UIAutomation InvokePattern 与冗余状态文本
 Invoke-Suite 'TaskbarAccessibilityTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'TaskbarAccessibilityTest.cs')))
+    @((Join-Path $testDir 'TaskbarAccessibilityTest.cs')) $uiModule
 
 # 任务栏行高亮判定：输入回调只读缓存后，「哪一行该亮」的纯逻辑
 Invoke-Suite 'ActiveRowTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'ActiveRowTest.cs')))
+    @((Join-Path $testDir 'ActiveRowTest.cs')) $uiModule
 
 
 # 右键菜单结构：顶层 8 项、顺序、分隔线、子菜单归属、状态绑定
 Invoke-Suite 'MenuStructureTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'MenuStructureTest.cs')))
+    @((Join-Path $testDir 'MenuStructureTest.cs')) $uiModule
 
 # 「整理与隐藏」外壳完整性：切标签不得覆盖宿主窗口的 Content
 Invoke-Suite 'OrganizeShellTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'OrganizeShellTest.cs')))
+    @((Join-Path $testDir 'OrganizeShellTest.cs')) $uiModule
 
 # 更改存放目录对话框：默认项必须是「搬过去」+ 文案必须写明会搬多少个文件
 Invoke-Suite 'DeskRootDialogTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'DeskRootDialogTest.cs')))
+    @((Join-Path $testDir 'DeskRootDialogTest.cs')) $uiModule
 
 # 放置提示层：常驻不增删子元素 / 只切 Visibility / 不接收命中 / 令牌 / 高亮态 / 文案
 Invoke-Suite 'DropHintTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'DropHintTest.cs')))
+    @((Join-Path $testDir 'DropHintTest.cs')) $uiModule
 
 # 文件夹来源拖入（接入点 3）：文案常量 / 混合拖入 / 名额不足 / 已满 / 字段行为
 Invoke-Suite 'FolderSourceDropTest' $baseRefs `
@@ -398,17 +451,17 @@ Invoke-Suite 'TileClickActionTest' $baseRefs `
 
 # 窗口位置记忆：存取 / 最大化 / 最小尺寸 / 越界 / 损坏回退
 Invoke-Suite 'WindowPosTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'WindowPosTest.cs')))
+    @((Join-Path $testDir 'WindowPosTest.cs')) $uiModule
 # 真实创建 PanelWindow，检查界面确实画出来了，并输出 JSON 证据报告。
 
 # 自定义背景图：导入 / 校验 / 缩放 / 回退 / 清除
 Invoke-Suite 'BackgroundStoreTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'BackgroundStoreTest.cs')))
+    @((Join-Path $testDir 'BackgroundStoreTest.cs')) $uiModule
 # 强制使用临时目录，拒绝接触用户真实 config（见 AcceptanceTest.cs 的安全闸）。
 
 # Wallpaper Engine 集成：目录 / 解析 / 穿越防护 / 视频复制 / 暗度 / 回退
 Invoke-Suite 'WallpaperEngineTest' $wpfRefs `
-    ($allSrc + @((Join-Path $testDir 'WallpaperEngineTest.cs')))
+    @((Join-Path $testDir 'WallpaperEngineTest.cs')) $uiModule
 
 if ($CoreOnly) {
     Complete-TestRun
@@ -419,7 +472,8 @@ Write-Host '===== AcceptanceTest =====' -ForegroundColor Cyan
 $accExe = Join-Path $outDir 'AcceptanceTest.exe'
 $acceptanceSw = [System.Diagnostics.Stopwatch]::StartNew()
 $acceptanceStatus = 'passed'
-& $csc /nologo /target:exe /codepage:65001 ('/out:' + $accExe) $wpfRefs ($allSrc + @((Join-Path $testDir 'AcceptanceTest.cs'))) 2>&1 |
+& $csc /nologo /target:exe /codepage:65001 ('/out:' + $accExe) $wpfRefs `
+    ('/addmodule:' + $uiModule) (Join-Path $testDir 'AcceptanceTest.cs') 2>&1 |
     Where-Object { $_ -notmatch 'warning CS' }
 if ($LASTEXITCODE -ne 0) {
     Write-Host '编译失败: AcceptanceTest' -ForegroundColor Red

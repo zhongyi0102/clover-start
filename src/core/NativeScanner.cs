@@ -189,14 +189,15 @@ namespace Clover
                 });
 
                 Dictionary<string, object> root = new Dictionary<string, object>();
-                root["updated"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 root["order"] = order;
                 root["apps"] = apps;
 
                 JavaScriptSerializer ser2 = new JavaScriptSerializer();
                 ser2.MaxJsonLength = int.MaxValue;
-                JsonIO.WriteAtomic(appsPath, ser2.Serialize(root));
-                Log.Info("内置 C# 扫描完成：" + apps.Count + " 个应用");
+                JsonIO.WriteResult written = JsonIO.WriteAtomicIfChanged(appsPath, ser2.Serialize(root));
+                if (!written.Success) return false;
+                Log.Diagnostic("内置 C# 扫描完成：" + apps.Count + " 个应用"
+                    + (written.Unchanged ? "（未变化）" : "（已更新）"));
                 return true;
             }
             catch (Exception ex)
@@ -219,14 +220,14 @@ namespace Clover
                 if (!string.IsNullOrEmpty(appsText))
                 {
                     string filtered = FilterJson(appsText);
-                    if (filtered != null) JsonIO.WriteAtomic(appsPath, filtered);
+                    if (filtered != null) JsonIO.WriteAtomicIfChanged(appsPath, filtered);
                 }
 
                 string manualText = JsonIO.Read(manualPath);
                 if (!string.IsNullOrEmpty(manualText))
                 {
                     string filtered = FilterJson(manualText);
-                    if (filtered != null) JsonIO.WriteAtomic(manualPath, filtered);
+                    if (filtered != null) JsonIO.WriteAtomicIfChanged(manualPath, filtered);
                 }
             }
             catch (Exception ex)

@@ -24,6 +24,8 @@ namespace Clover
             bool restoreOnly = false;
             bool resetAll = false;
             bool resetKeepConfig = false;
+            bool enableAutostart = false;
+            bool disableAutostart = false;
             bool guard = false;
             int guardPid = 0;
             string guardBaseDir = null;
@@ -39,6 +41,8 @@ namespace Clover
                 else if (string.Compare(a, "--restore-system", true) == 0) restoreOnly = true;
                 else if (string.Compare(a, "--reset-all", true) == 0) resetAll = true;
                 else if (string.Compare(a, "--keep-config", true) == 0) resetKeepConfig = true;
+                else if (string.Compare(a, "--enable-autostart", true) == 0) enableAutostart = true;
+                else if (string.Compare(a, "--disable-autostart", true) == 0) disableAutostart = true;
                 else if (string.Compare(a, "--guard", true) == 0)
                 {
                     guard = true;
@@ -71,10 +75,26 @@ namespace Clover
                 delegate(string msg) { ErrorLog.Log(msg); },
                 delegate(string msg) { ErrorLog.Warn(msg); },
                 delegate(Exception ex, string where) { ErrorLog.Hook(ex, where); },
-                delegate(string dir) { ErrorLog.Init(dir); });
+                delegate(string dir) { ErrorLog.Init(dir); },
+                delegate(string msg) { ErrorLog.Diagnostic(msg); });
             Settings.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
             CategoryOverrides.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
             JsonIO.Warn = delegate(string msg) { ErrorLog.Warn(msg); };
+
+            // ---------- 只切换开机自启然后退出（安装/维护脚本用） ----------
+            // 放在单实例锁之前：程序已经运行时，维护命令也必须能完成，不能被
+            // “通知现有实例显示面板”的分支吃掉。
+            if (enableAutostart || disableAutostart)
+            {
+                ErrorLog.Init(baseDir);
+                Autostart.Result result = enableAutostart
+                    ? Autostart.Enable(Autostart.ExecutablePath(baseDir))
+                    : Autostart.Disable();
+                if (result.Success) ErrorLog.Log(result.Message);
+                else ErrorLog.Warn(result.Message);
+                Environment.ExitCode = result.Success ? 0 : 1;
+                return;
+            }
 
             // ---------- 看门狗模式：无界面，只等主进程退出后还原系统状态 ----------
             if (guard)
@@ -288,6 +308,21 @@ namespace Clover
                     app.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
                     {
                         watcher.Start();
+                        // 旧版使用启动文件夹快捷方式，会被 Explorer 分批延迟。
+                        // 首帧后在后台升级为零延迟的用户登录计划任务；新任务
+                        // 注册和回读校验成功前绝不删除旧快捷方式。
+                        ThreadPool.QueueUserWorkItem(delegate
+                        {
+                            Autostart.Result migration = Autostart.MigrateLegacy(
+                                Autostart.ExecutablePath(baseDir));
+                            if (!migration.Success || migration.UsingLegacyFallback)
+                                ErrorLog.Warn(migration.Message);
+                            else if (migration.Changed)
+                                ErrorLog.Log(migration.Message);
+                        });
+                        // 不提前创建任何 WPF 面板对象；只在首帧后预读纯数据目录。
+                        CatalogPreloader.WarmAsync(baseDir);
+                        SystemSearch.WarmAsync();
                         ResourceWatch.Start();
                         ResourceWatch.Check();
                         if (safeMode) ShowSafeModeTip();

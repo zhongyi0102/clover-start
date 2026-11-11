@@ -121,7 +121,7 @@ namespace Clover
             // ---- HKCU ----
             ScanHive(Registry.CurrentUser, UninstallPaths[2], result, stats, seenExe, seenKey);
 
-            Log.Info(stats.Report());
+            Log.Diagnostic(stats.Report());
             return result;
         }
 
@@ -585,15 +585,14 @@ namespace Clover
                 }
 
                 Dictionary<string, object> root = new Dictionary<string, object>();
-                root["updated"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-                root["stats"] = stats == null ? "" : stats.Report();
                 root["apps"] = arr;
 
                 System.Web.Script.Serialization.JavaScriptSerializer ser =
                     new System.Web.Script.Serialization.JavaScriptSerializer();
                 ser.MaxJsonLength = int.MaxValue;
-                JsonIO.WriteAtomic(PathOf(baseDir), ser.Serialize(root));
-                return true;
+                JsonIO.WriteResult written = JsonIO.WriteAtomicIfChanged(
+                    PathOf(baseDir), ser.Serialize(root));
+                return written.Success;
             }
             catch (Exception ex)
             {
