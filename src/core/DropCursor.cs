@@ -33,6 +33,17 @@ namespace Clover
 
             /// <summary>可以放下（复制）。</summary>
             Copy,
+            Move,
+        }
+
+        /// <summary>桌面转移：尊重拖出方允许的操作，Ctrl 复制，不擅自回退到移动。</summary>
+        public static Effect ResolveDesktop(bool fromDesktop, bool busy, bool control,
+            bool allowsCopy, bool allowsMove)
+        {
+            if (!fromDesktop || busy) return Effect.None;
+            if (control) return allowsCopy ? Effect.Copy : Effect.None;
+            if (allowsMove) return Effect.Move;
+            return allowsCopy ? Effect.Copy : Effect.None;
         }
 
         /// <summary>

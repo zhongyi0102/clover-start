@@ -23,6 +23,7 @@ namespace Clover
         PanelWindow panel;
         Func<PanelWindow> panelFactory;
         bool panelLoading;
+        DispatcherTimer desktopDragReveal;
         string baseDir;
         string exePath;
         Button root;
@@ -119,12 +120,32 @@ namespace Clover
             root.LostKeyboardFocus += delegate { ApplyRootVisualState(); };
             // 原生 Button.Click 同时覆盖鼠标、Enter、Space 与 UIAutomation InvokePattern。
             root.Click += delegate { TogglePanel(); };
+            root.AllowDrop = true;
+            desktopDragReveal = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            desktopDragReveal.Tick += delegate
+            {
+                desktopDragReveal.Stop();
+                WithPanel(delegate(PanelWindow p) { p.ShowDesktopForDrag(); });
+            };
+            root.DragEnter += delegate(object sender, DragEventArgs e)
+            {
+                string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+                if (paths == null || paths.Length == 0) return;
+                foreach (string path in paths) if (!DeskImporter.IsFromDesktop(path)) return;
+                desktopDragReveal.Start();
+                e.Effects = DragDropEffects.None;
+                e.Handled = true;
+            };
+            root.DragLeave += delegate { desktopDragReveal.Stop(); };
+            root.DragOver += delegate(object sender, DragEventArgs e) { e.Effects = DragDropEffects.None; e.Handled = true; };
+            root.Drop += delegate(object sender, DragEventArgs e) { desktopDragReveal.Stop(); e.Handled = true; };
             root.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e) { e.Handled = true; ShowMenu(); };
 
             Content = root;
             TaskbarGeometry.LayoutChanged += OnTaskbarLayoutChanged;
             Closed += delegate
             {
+                desktopDragReveal.Stop();
                 if (hwnd != IntPtr.Zero) Native.UnregisterHotKey(hwnd, 1);
                 TaskbarGeometry.LayoutChanged -= OnTaskbarLayoutChanged;
             };
@@ -612,10 +633,7 @@ namespace Clover
             // ================================================================
             //  菜单结构（一级，**无级联子菜单**）
             //
-            //    重新扫描应用
-            //    ─────────
             //    外观…
-            //    整理与隐藏…
             //    ─────────
             //    ☑ 开机自启
             //    ─────────
@@ -632,13 +650,6 @@ namespace Clover
             //   · 打开面板不再占菜单项 —— 托盘图标左键单击就是它
             // ================================================================
 
-            MenuItem rescan = new MenuItem();
-            rescan.Header = "重新扫描应用";
-            rescan.Click += delegate { WithPanel(delegate(PanelWindow p) { p.Rescan(); }); };
-            cm.Items.Add(rescan);
-
-            cm.Items.Add(new Separator());
-
             // ---- 外观… ----
             MenuItem appearanceItem = new MenuItem();
             appearanceItem.Header = "外观…";
@@ -654,27 +665,6 @@ namespace Clover
                 catch (Exception ex) { ErrorLog.Warn("打开外观窗口失败: " + ex.Message); }
             };
             cm.Items.Add(appearanceItem);
-
-            // ---- 整理与隐藏… ----
-            MenuItem organizeItem = new MenuItem();
-            organizeItem.Header = "整理与隐藏…";
-            organizeItem.ToolTip = "标签一：桌面保持无快捷方式；标签二：已隐藏的应用";
-            organizeItem.Click += delegate
-            {
-                WithPanel(delegate(PanelWindow ready)
-                {
-                    try
-                    {
-                        OrganizeDialog dlg = new OrganizeDialog(
-                            this, baseDir, settings, ready.Watcher, ready,
-                            delegate { ready.RefreshCatalogQuiet(); },
-                            OrganizeDialog.Tab.Desktop);
-                        dlg.Show();
-                    }
-                    catch (Exception ex) { ErrorLog.Warn("打开整理与隐藏窗口失败: " + ex.Message); }
-                });
-            };
-            cm.Items.Add(organizeItem);
 
             cm.Items.Add(new Separator());
 

@@ -64,6 +64,7 @@ namespace Clover
         {
             try
             {
+                if (DeskTransferPending) return;
                 ContextMenu cm = new ContextMenu();
                 MenuItem rename = new MenuItem();
                 rename.Header = "重命名…";
@@ -71,6 +72,7 @@ namespace Clover
                 {
                     try
                     {
+                        if (DeskTransferPending) return;
                         string nn = TextPromptDialog.Ask(this, "重命名标签", "新名字（最多 12 字）", name);
                         if (nn == null) return;
                         string err = customTabs.Rename(name, nn);
@@ -114,6 +116,7 @@ namespace Clover
         {
             try
             {
+                if (DeskTransferPending) return;
                 if (customTabs == null) return;
                 EnsureVirtualDesks();
                 string dir = virtualDesks == null ? null : virtualDesks.FolderOf(name);
@@ -481,6 +484,7 @@ namespace Clover
         {
             try
             {
+                if (DeskTransferPending) return "正在搬运内容，请完成后再更改目录。";
                 EnsureVirtualDesks();
                 if (virtualDesks == null) return "存放目录还没初始化，稍后再试。";
 
@@ -515,6 +519,7 @@ namespace Clover
         {
             try
             {
+                if (DeskTransferPending) return "正在搬运内容，请完成后再更改目录。";
                 if (virtualDesks == null) return "存放目录还没初始化，稍后再试。";
                 if (choice == DeskRootDialog.Choice.Cancel) return null;
                 if (plan == null) plan = new DeskRootChange.Plan();
@@ -582,6 +587,7 @@ namespace Clover
         {
             try
             {
+                if (DeskTransferPending) return;
                 string name = TextPromptDialog.Ask(this, "新建桌面", "桌面名称（最多 12 字）", "");
                 if (name == null) return;   // 用户取消
 
@@ -635,16 +641,29 @@ namespace Clover
                 deskToolRow.Children.Clear();
 
                 deskToolRow.Children.Add(MakeDeskToolButton(
-                    "收纳桌面", "把桌面上的文件收进这个桌面", delegate { CollectDesktop(); }));
+                    "收纳桌面", "文档移入收纳，面板已有的应用快捷方式移到回收站", delegate { CollectDesktop(); }, true));
+                deskBackButton = null;
 
-                deskToolRow.Children.Add(MakeDeskToolButton(
-                    "放回桌面", "把选中（或全部）文件移回桌面", delegate { PutBackToDesktopBatch(); }));
-
-                deskToolRow.Children.Add(MakeDeskToolButton(
-                    "智能整理…", "按规则逐项预览后整理桌面", delegate { SmartOrganizeDesktop(); }));
-
-                deskToolRow.Children.Add(MakeDeskToolButton(
-                    "整理规则…", "新建、编辑和调整桌面整理规则", delegate { ManageOrganizeRules(); }));
+                Button more = null;
+                more = MakeDeskToolButton("更多", "桌面设置、处理记录与全部放回", delegate
+                {
+                    if (!DeskTransferPending) more.ContextMenu.IsOpen = true;
+                });
+                ContextMenu tools = new ContextMenu { PlacementTarget = more };
+                MenuItem configure = new MenuItem { Header = "桌面设置…" };
+                configure.Click += delegate { ShowDesktopSettings(); };
+                tools.Items.Add(configure);
+                tools.Items.Add(new Separator());
+                MenuItem all = new MenuItem { Header = "全部放回桌面…" };
+                all.Click += delegate { if (!DeskTransferPending) PutBackToDesktopBatch(true); };
+                tools.Items.Add(all);
+                more.ContextMenu = tools;
+                deskToolRow.Children.Add(more);
+                TextBlock status = Ui.T(settings.DesktopKeepEmptyEnabled ? "自动保持桌面空 · 已开启" : "自动保持桌面空 · 未开启", 10.5, Ui.Sub);
+                status.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+                status.VerticalAlignment = VerticalAlignment.Center;
+                status.ToolTip = "仅自动处理用户桌面的稳定文件；例外、文件夹、公共桌面及未知入口留待手动处理。";
+                deskToolRow.Children.Add(status);
             }
             catch (Exception ex) { Ui.LogError(ex, "重建桌面工具行"); }
         }
@@ -718,9 +737,11 @@ namespace Clover
                     this, plan, scan.Skipped.Count);
                 if (!preview.ShowDialog()) return;
 
-                DesktopOrganizeExecution done = DesktopOrganizeExecutor.Execute(plan.Items);
-                ReportOrganizeResult(done);
-                RefreshDeskAfterMove();
+                RunDeskTransfer("智能整理", delegate { return DesktopOrganizeExecutor.Execute(plan.Items); }, delegate(DesktopOrganizeExecution done)
+                {
+                    ReportOrganizeResult(done);
+                    RefreshDeskAfterMove();
+                });
             }
             catch (Exception ex) { Ui.LogError(ex, "智能整理桌面"); }
         }
@@ -773,6 +794,8 @@ namespace Clover
             TextBlock t = Ui.T(label, 11.5, primary ? Brushes.White : Ui.Sub,
                 primary ? FontWeights.SemiBold : FontWeights.Normal);
             t.VerticalAlignment = VerticalAlignment.Center;
+            // 既有模板不转发 Padding；在内容上留内边距，避免文字贴着胶囊边缘。
+            t.Margin = new Thickness(12, 0, 12, 0);
             b.Content = t;
 
             b.MouseEnter += delegate
@@ -826,12 +849,38 @@ namespace Clover
             catch { return null; }
         }
 
+        DesktopWorkspace localDesktopWorkspace;
+        DesktopWorkspace Workspace()
+        {
+            if (watcher != null) return watcher.DesktopWorkspace;
+            if (localDesktopWorkspace == null)
+            {
+                AppWatcher localWatcher = new AppWatcher(baseDir, this, settings);
+                localDesktopWorkspace = localWatcher.DesktopWorkspace;
+            }
+            return localDesktopWorkspace;
+        }
+
+        void ShowDesktopSettings()
+        {
+            new OrganizeDialog(this, baseDir, settings, watcher, this,
+                delegate { RebuildDeskToolRow(); }, OrganizeDialog.Tab.Desktop).Show();
+        }
+
+        internal void DesktopWorkspaceUpdated(DesktopWorkspace.Result result)
+        {
+            if (panelClosed) return;
+            if (IsDeskTab(current) && !DeskTransferPending && deskView != null) deskView.Load(current);
+            ShowToast("桌面处理：收纳 " + result.Files.MovedCount + " 项，回收应用快捷方式 " + result.Recycled.Count + " 个");
+        }
+
 
         /// <summary>收纳桌面：先扫描并弹窗确认，再搬运。</summary>
         void CollectDesktop()
         {
             try
             {
+                if (DeskTransferPending) return;
                 string dest = CurrentDeskFolder();
                 if (string.IsNullOrEmpty(dest))
                 {
@@ -840,33 +889,44 @@ namespace Clover
                     return;
                 }
 
-                DeskCollector.ScanResult scan = DeskCollector.Scan();
+                DeskCollector.ScanResult scan = Workspace().Preview();
                 if (scan.Items.Count == 0)
                 {
-                    string msg = "桌面上没有可收纳的文件。";
+                    string msg = "桌面上没有可处理的项目。";
                     if (scan.Skipped.Count > 0)
-                        msg += "\r\n\r\n已跳过 " + scan.Skipped.Count + " 个应用类文件。";
+                        msg += "\r\n\r\n保留了 " + scan.Skipped.Count + " 个例外、临时或未确认项目，桌面并非完全清空。";
                     MessageBox.Show(this, msg, "四叶草 · 收纳桌面",
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
 
-                if (!ConfirmCollect(scan, dest)) return;
-
-                List<string> paths = new List<string>();
-                foreach (DeskCollector.Candidate c in scan.Items) paths.Add(c.Path);
-
-                DeskCollector.MoveResult r = DeskCollector.Collect(paths, dest);
-
-                ReportMoveResult("收纳桌面", r, dest);
-                RefreshDeskAfterMove();
+                List<string> paths = ConfirmCollect(scan, dest);
+                if (paths == null || paths.Count == 0) return;
+                DesktopWorkspace workspace = Workspace();
+                RunDeskTransfer("收纳桌面", delegate { return workspace.Execute(paths, dest); }, delegate(DesktopWorkspace.Result r)
+                {
+                    RefreshDeskAfterMove();
+                    string message = "收纳 " + r.Files.MovedCount + " 项；回收应用快捷方式 " + r.Recycled.Count + " 个。";
+                    int retained = r.Retained.Count + r.Files.Failed.Count + scan.Skipped.Count
+                        + scan.Items.Count - paths.Count;
+                    if (retained > 0) message += " 保留或未处理 " + retained + " 项。";
+                    SetDeskNotice(message);
+                    if (r.Retained.Count > 0 || !r.Files.AllOk)
+                    {
+                        string details = message;
+                        for (int i = 0; i < r.Retained.Count && i < 6; i++) details += "\r\n" + r.Retained[i] + "：" + r.Reasons[i];
+                        for (int i = 0; i < r.Files.Failed.Count && i < 6; i++) details += "\r\n" + r.Files.Failed[i] + "：" + r.Files.Reasons[i];
+                        MessageBox.Show(this, details, "四叶草 · 桌面处理结果", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    else ShowToast(message);
+                });
             }
             catch (Exception ex) { Ui.LogError(ex, "收纳桌面"); }
         }
 
 
         /// <summary>确认弹窗：列出将被收纳的文件名。</summary>
-        bool ConfirmCollect(DeskCollector.ScanResult scan, string dest)
+        List<string> ConfirmCollect(DeskCollector.ScanResult scan, string dest)
         {
             try
             {
@@ -892,39 +952,37 @@ namespace Clover
                 Grid.SetRow(title, 0);
                 root.Children.Add(title);
 
-                TextBlock path = Ui.T("目标位置：" + dest, 10.5, Ui.Sub);
+                TextBlock path = Ui.T("收纳位置：" + dest + "\r\n文档移动；应用仅回收快捷方式，不删除软件。公共桌面默认不选；同名不覆盖。", 10.5, Ui.Sub);
                 path.TextWrapping = TextWrapping.Wrap;
                 path.Margin = new Thickness(0, Ui.S.Xs, 0, Ui.S.Sm);
                 Grid.SetRow(path, 1);
                 root.Children.Add(path);
 
-                System.Text.StringBuilder sb = new System.Text.StringBuilder();
+                StackPanel choices = new StackPanel();
+                List<CheckBox> checks = new List<CheckBox>();
                 foreach (DeskCollector.Candidate c in scan.Items)
-                    sb.AppendLine("· " + Path.GetFileName(c.Path) + "   （" + c.Source + "）");
+                {
+                    CheckBox check = new CheckBox {
+                        Content = (c.ApplicationShortcut ? "回收快捷方式：" : "移入收纳：") + Path.GetFileName(c.Path) + "   （" + c.Source + "）",
+                        Tag = c.Path, IsChecked = c.Source != "公共桌面", Foreground = Ui.Fg,
+                        Margin = new Thickness(0, Ui.S.Xs, 0, Ui.S.Xs), ToolTip = c.Path
+                    };
+                    checks.Add(check);
+                    choices.Children.Add(check);
+                }
 
                 if (scan.Skipped.Count > 0)
                 {
-                    sb.AppendLine();
-                    sb.AppendLine("以下应用类文件会跳过（" + scan.Skipped.Count + " 个）：");
-                    int n = 0;
-                    foreach (string s in scan.Skipped)
-                    {
-                        if (n++ >= 8) { sb.AppendLine("  …"); break; }
-                        sb.AppendLine("· " + s);
-                    }
+                    TextBlock skipped = Ui.T("保留 " + scan.Skipped.Count + " 个例外、临时或未确认项目；公共桌面需手动勾选。", 11, Ui.Sub);
+                    skipped.TextWrapping = TextWrapping.Wrap;
+                    skipped.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+                    choices.Children.Add(skipped);
                 }
 
-                TextBox list = new TextBox();
-                list.Text = sb.ToString();
-                list.IsReadOnly = true;
-                list.TextWrapping = TextWrapping.NoWrap;
+                ScrollViewer list = new ScrollViewer { Content = choices };
                 list.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
                 list.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-                list.FontFamily = Ui.YaHei;
-                list.FontSize = 11.5;
                 list.Background = Ui.SearchBg;
-                list.Foreground = Ui.Fg;
-                list.BorderBrush = Ui.Line;
                 list.Padding = new Thickness(Ui.S.Sm);
                 Grid.SetRow(list, 2);
                 root.Children.Add(list);
@@ -939,6 +997,19 @@ namespace Clover
 
                 Button confirm = MakeDeskToolButton("确认收纳",
                     "把这些文件移进当前收纳目录", delegate { ok = true; dlg.Close(); }, true);
+                Action updateSelection = delegate
+                {
+                    int count = checks.FindAll(check => check.IsChecked == true).Count;
+                    title.Text = "处理选中的 " + count + " 项（按下方标明的动作）";
+                    confirm.IsEnabled = count > 0;
+                };
+                foreach (CheckBox check in checks)
+                {
+                    check.Checked += delegate { updateSelection(); };
+                    check.Unchecked += delegate { updateSelection(); };
+                }
+                updateSelection();
+                dlg.Loaded += delegate { cancel.Focus(); };
 
                 btns.Children.Add(cancel);
                 btns.Children.Add(confirm);
@@ -947,18 +1018,41 @@ namespace Clover
 
                 dlg.Content = root;
                 dlg.ShowDialog();
-                return ok;
+                return ok ? checks.FindAll(check => check.IsChecked == true).ConvertAll(check => (string)check.Tag) : null;
             }
             catch (Exception ex)
             {
                 Ui.LogError(ex, "收纳确认弹窗");
-                return false;
+                return null;
             }
         }
 
 
-        /// <summary>放回桌面：有选中就放选中的，没有就放全部。</summary>
-        void PutBackToDesktopBatch()
+        /// <summary>放回桌面默认只操作所选；全部必须走单独入口并确认。</summary>
+        Button deskBackButton;
+        internal bool DeskTransferPending;
+        public void ShowDesktopForDrag()
+        {
+            ShowPanel();
+            SwitchCategory(VirtualDesktopCategory);
+            dragOverPanel = true;
+            StartDragWatch();
+        }
+        internal void TestDeskSelectAll() { if (deskView != null) deskView.SelectAllVisible(); }
+        public void PutBackSelectedDesktopItems() { PutBackToDesktopBatch(); }
+
+        void UpdateDeskSelectionActions()
+        {
+            if (deskBackButton == null) return;
+            int count = deskView == null ? 0 : deskView.SelectedPaths().Count;
+            deskBackButton.IsEnabled = !DeskTransferPending && count > 0;
+            string label = count == 0 ? "放回桌面" : "放回桌面（" + count + "）";
+            TextBlock text = deskBackButton.Content as TextBlock;
+            if (text != null) text.Text = label;
+            AutomationProperties.SetName(deskBackButton, label);
+        }
+
+        void PutBackToDesktopBatch(bool allItems = false)
         {
             try
             {
@@ -973,33 +1067,30 @@ namespace Clover
                 List<string> paths = new List<string>();
 
                 List<string> sel = deskView == null ? null : deskView.SelectedPaths();
-                if (sel != null && sel.Count > 0)
+                if (!allItems && sel != null && sel.Count > 0)
                 {
                     paths.AddRange(sel);
                 }
-                else
+                else if (allItems)
                 {
                     foreach (string f in Directory.GetFiles(dir)) paths.Add(f);
                     foreach (string d in Directory.GetDirectories(dir)) paths.Add(d);
                 }
 
-                if (paths.Count == 0)
-                {
-                    MessageBox.Show(this, "这个桌面里没有文件。", "四叶草 · 放回桌面",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
+                if (paths.Count == 0 || DeskTransferPending) return;
 
                 if (!TextPromptDialog.Confirm(this, "放回桌面",
-                    "将 " + paths.Count + " 项放回真实桌面？\r\n\r\n"
-                    + "同名项目会自动改名，不会覆盖桌面上的现有文件。",
+                    (allItems ? "将当前收纳的全部 " : "将选中的 ") + paths.Count + " 项放回真实桌面？\r\n\r\n"
+                    + "同名项目会自动改名，不会覆盖现有文件。放回项将设为例外，不会立即再次收纳。",
                     "放回桌面")) return;
 
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-                DeskCollector.MoveResult r = DeskCollector.PutBack(paths, desktop);
-
-                ReportMoveResult("放回桌面", r, desktop);
-                RefreshDeskAfterMove();
+                DesktopWorkspace workspace = Workspace();
+                RunDeskTransfer("放回桌面", delegate { return workspace.PutBack(paths, desktop); }, delegate(DeskCollector.MoveResult r)
+                {
+                    ReportMoveResult("放回桌面", r, desktop);
+                    RefreshDeskAfterMove();
+                });
             }
             catch (Exception ex) { Ui.LogError(ex, "放回桌面"); }
         }
@@ -1023,6 +1114,7 @@ namespace Clover
                 }
                 if (!string.IsNullOrEmpty(where)) msg += "\r\n\r\n位置：" + where;
 
+                if (r.AllOk) { ShowToast(msg); return; }
                 MessageBox.Show(this, msg, "四叶草 · " + action,
                     MessageBoxButton.OK,
                     r.AllOk ? MessageBoxImage.Information : MessageBoxImage.Warning);
@@ -1036,12 +1128,37 @@ namespace Clover
         {
             try
             {
-                if (deskView != null) deskView.Load(current);
+                if (deskView != null && IsDeskTab(current)) deskView.Load(current);
                 if (virtualDesks != null) virtualDesks.Save();
                 RebuildDeskToolRow();
                 SetDeskNotice("");
             }
             catch (Exception ex) { Ui.LogError(ex, "刷新桌面"); }
+        }
+
+        void RunDeskTransfer<T>(string action, Func<T> work, Action<T> completed)
+        {
+            if (DeskTransferPending) return;
+            DeskTransferPending = true;
+            UpdateDeskSelectionActions();
+            SetDeskNotice(action + "中…正在核对内容，请勿重复操作");
+            System.Threading.Thread worker = new System.Threading.Thread(delegate()
+            {
+                T result = default(T);
+                Exception error = null;
+                try { result = work(); } catch (Exception ex) { error = ex; }
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    DeskTransferPending = false;
+                    UpdateDeskSelectionActions();
+                    if (panelClosed) return;
+                    if (error != null) { Ui.LogError(error, action); SetDeskNotice(action + "失败：" + error.Message); return; }
+                    if (!panelClosed && completed != null) completed(result);
+                }));
+            });
+            worker.IsBackground = true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
         }
 
 
@@ -1076,6 +1193,8 @@ namespace Clover
                     {
                         try { UpdateDeskDropHint(count); } catch { }
                     };
+                    deskView.OnSelectionChanged = UpdateDeskSelectionActions;
+                    Closed += delegate { deskView.Dispose(); };
                 }
 
                 // 确保磁盘文件夹存在
@@ -1199,6 +1318,7 @@ namespace Clover
                     {
                         try
                         {
+                            DesktopWorkspace.Keep(settings, onePath);
                             if (watcher != null && watcher.DesktopCleaner != null)
                                 watcher.DesktopCleaner.GrantExemption(onePath);
 
@@ -1234,6 +1354,7 @@ namespace Clover
                     {
                         try
                         {
+                            foreach (string path in all) DesktopWorkspace.Keep(settings, path);
                             if (watcher != null && watcher.DesktopCleaner != null)
                                 foreach (string p in all) watcher.DesktopCleaner.GrantExemption(p);
 

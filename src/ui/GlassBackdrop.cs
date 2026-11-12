@@ -179,6 +179,22 @@ namespace Clover
         /// 当前保底计算的 alpha（诊断/测试用）。0 = 未补偿。
         /// </summary>
         public double GuardAlpha;
+        public bool AutomaticAppearance;
+        public Action<byte[]> OnBackgroundSample;
+        public Action OnBackgroundUnavailable;
+        ImageSource lastSampleImage;
+        byte[] lastSample;
+        BitmapImage desktopWallpaper;
+        string desktopWallpaperKey = "";
+
+        internal byte[] CurrentBackgroundSample { get { return lastSample; } }
+        public void InvalidateSource()
+        {
+            cacheKey = ""; lastSampleImage = null;
+            // Same-path replacements must not keep an already decoded old image.
+            ReleaseWeImage(); ReleaseCustomImage(); desktopWallpaper = null;
+            backgroundImage = null;
+        }
 
 
         /// <summary>
@@ -214,7 +230,7 @@ namespace Clover
         {
             try
             {
-                if (!Supported) return;
+                if (!Supported) { Clear(); if (OnBackgroundUnavailable != null) OnBackgroundUnavailable(); return; }
                 if (OpacityPercent <= 0) { Clear(); return; }
                 if (owner == null || host == null) return;
 
@@ -257,9 +273,9 @@ namespace Clover
                 }
 
                 string key = rect.Left + "_" + rect.Top + "_" + w + "_" + h + "_" + dpi
-                           + "_" + Ui.AppliedTheme
                            + "_" + sourceKey;
 
+                // Theme only affects composition, not source capture.
                 if (cached != null && cacheKey == key)
                 {
                     Attach(cached);
@@ -269,7 +285,7 @@ namespace Clover
                 // 窗口可见时直接截屏会截到自己 → 先移出屏幕
                 bool wasVisible = owner.IsVisible;
                 double oldLeft = owner.Left, oldTop = owner.Top;
-                if (wasVisible)
+                if (wasVisible && FollowWallpaper && !AutomaticAppearance)
                 {
                     owner.Left = -30000;
                     owner.Top = -30000;
@@ -282,7 +298,7 @@ namespace Clover
                 }
                 finally
                 {
-                    if (wasVisible)
+                    if (wasVisible && FollowWallpaper && !AutomaticAppearance)
                     {
                         owner.Left = oldLeft;
                         owner.Top = oldTop;
@@ -290,10 +306,12 @@ namespace Clover
                 }
 
                 if (cached != null) Attach(cached);
+                else if (OnBackgroundUnavailable != null) OnBackgroundUnavailable();
             }
             catch (Exception ex)
             {
                 Ui.LogError(ex, "毛玻璃背景");
+                if (OnBackgroundUnavailable != null) OnBackgroundUnavailable();
             }
         }
 
@@ -393,7 +411,7 @@ namespace Clover
                     ReleaseCustomImage();
                 }
 
-                if (FollowWallpaper) return CaptureFromScreen(rect, dpi);
+                if (FollowWallpaper) return AutomaticAppearance ? CaptureWallpaperImage(rect) : CaptureFromScreen(rect, dpi);
                 return CaptureFromFile(rect, dpi);
             }
             catch (Exception ex)
@@ -486,6 +504,65 @@ namespace Clover
                 Ui.LogError(ex, "截取毛玻璃背景");
                 return null;
             }
+        }
+
+        /// <summary>Automatic mode reads the wallpaper, never captures foreground apps
+        /// or moves its own window offscreen. Fit/fill/style use physical monitor bounds.</summary>
+        ImageSource CaptureWallpaperImage(Native.RECT rect)
+        {
+            try
+            {
+                string path = "", style = "10", tiled = "0";
+                using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop"))
+                    if (key != null)
+                    { path = Convert.ToString(key.GetValue("WallPaper")); style = Convert.ToString(key.GetValue("WallpaperStyle")); tiled = Convert.ToString(key.GetValue("TileWallpaper")); }
+                if (!File.Exists(path))
+                {
+                    // A solid desktop color is a valid wallpaper, not an error.
+                    using (Microsoft.Win32.RegistryKey key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Control Panel\Colors"))
+                    {
+                        string[] rgb = key == null ? new string[0] : Convert.ToString(key.GetValue("Background")).Split(' ');
+                        byte r, g, b;
+                        if (rgb.Length == 3 && byte.TryParse(rgb[0], out r) && byte.TryParse(rgb[1], out g) && byte.TryParse(rgb[2], out b))
+                        { byte[] pixel = { b, g, r, 255 }; return BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, pixel, 4); }
+                    }
+                    return null;
+                }
+                string identity = path + "|" + File.GetLastWriteTimeUtc(path).Ticks;
+                if (desktopWallpaper == null || desktopWallpaperKey != identity)
+                {
+                    BitmapImage bitmap = LoadBitmap(path, 2048);
+                    if (bitmap == null) return null;
+                    desktopWallpaper = bitmap; desktopWallpaperKey = identity;
+                }
+                System.Drawing.Rectangle bounds = System.Windows.Forms.Screen.FromHandle(new WindowInteropHelper(owner).Handle).Bounds;
+                if (style == "22") bounds = System.Windows.Forms.SystemInformation.VirtualScreen;
+                double sw = bounds.Width, sh = bounds.Height, iw = desktopWallpaper.PixelWidth, ih = desktopWallpaper.PixelHeight;
+                double factor = style == "6" ? Math.Min(sw / iw, sh / ih) : Math.Max(sw / iw, sh / ih);
+                double dw = iw * factor, dh = ih * factor;
+                if (style == "2") { dw = sw; dh = sh; }
+                if (style == "0") { dw = iw; dh = ih; }
+                double left = bounds.Left + (sw - dw) / 2, top = bounds.Top + (sh - dh) / 2;
+                int width = Math.Max(1, (rect.Right - rect.Left) / 2), height = Math.Max(1, (rect.Bottom - rect.Top) / 2);
+                DrawingVisual visual = new DrawingVisual();
+                using (DrawingContext dc = visual.RenderOpen())
+                {
+                    dc.DrawRectangle(Brushes.Black, null, new Rect(0, 0, width, height));
+                    dc.PushTransform(new ScaleTransform((double)width / (rect.Right - rect.Left), (double)height / (rect.Bottom - rect.Top)));
+                    dc.PushTransform(new TranslateTransform(-rect.Left, -rect.Top));
+                    if (tiled == "1")
+                    {
+                        ImageBrush tile = new ImageBrush(desktopWallpaper) { TileMode = TileMode.Tile, Stretch = Stretch.Fill,
+                            ViewportUnits = BrushMappingMode.Absolute, Viewport = new Rect(bounds.Left, bounds.Top, iw, ih) };
+                        dc.DrawRectangle(tile, null, new Rect(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top));
+                    }
+                    else dc.DrawImage(desktopWallpaper, new Rect(left, top, dw, dh));
+                    dc.Pop(); dc.Pop();
+                }
+                RenderTargetBitmap result = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+                result.Render(visual); result.Freeze(); return result;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "读取桌面壁纸"); return null; }
         }
 
         /// <summary>
@@ -1078,6 +1155,16 @@ namespace Clover
             {
                 if (img == null || host == null) return;
 
+                if (AutomaticAppearance && OnBackgroundSample != null)
+                {
+                    if (!object.ReferenceEquals(lastSampleImage, img) || lastSample == null)
+                    {
+                        lastSample = SampleImage(img);
+                        lastSampleImage = img;
+                    }
+                    OnBackgroundSample(lastSample);
+                }
+
                 if (blur == null)
                 {
                     blur = new BlurEffect();
@@ -1206,6 +1293,12 @@ namespace Clover
                 RenderOptions.SetBitmapScalingMode(innerLayer, BitmapScalingMode.HighQuality);
                 innerLayer.Background = new ImageBrush(img) { Stretch = Stretch.Fill };
 
+                // Brightness was previously sampled but never painted on brightLayer.
+                int brightness = Math.Max(-50, Math.Min(50, Brightness));
+                brightLayer.Background = brightness == 0 ? null : new SolidColorBrush(Color.FromArgb(
+                    (byte)Math.Round(Math.Abs(brightness) / 100.0 * 255),
+                    (byte)(brightness > 0 ? 255 : 0), (byte)(brightness > 0 ? 255 : 0), (byte)(brightness > 0 ? 255 : 0)));
+
                 // 文字清晰保底：必须放在所有层都设好之后
                 // （它要采样「底图+亮度+染色」的合成结果）
                 AttachGuardLayer(img);
@@ -1255,6 +1348,10 @@ namespace Clover
                 blur = null;
                 cached = null;
                 cacheKey = "";
+                lastSampleImage = null;
+                lastSample = null;
+                desktopWallpaper = null;
+                desktopWallpaperKey = "";
                 backgroundImage = null;
                 ReleaseCustomImage();
                 ReleaseWeImage();
@@ -1267,6 +1364,22 @@ namespace Clover
         {
             try { if (refreshTimer != null) { refreshTimer.Stop(); refreshTimer = null; } }
             catch { }
+        }
+
+        internal static byte[] SampleImage(ImageSource image)
+        {
+            if (image == null) return null;
+            DrawingVisual visual = new DrawingVisual();
+            using (DrawingContext dc = visual.RenderOpen())
+            {
+                dc.DrawRectangle(Brushes.Gray, null, new Rect(0, 0, 64, 40));
+                dc.DrawImage(image, new Rect(0, 0, 64, 40));
+            }
+            RenderTargetBitmap bitmap = new RenderTargetBitmap(64, 40, 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            byte[] pixels = new byte[64 * 40 * 4];
+            bitmap.CopyPixels(pixels, 64 * 4, 0);
+            return pixels;
         }
 
         /// <summary>窗口所在显示器的 DPI（Win10 1607+ 用 GetDpiForWindow，失败回退系统 DPI）。</summary>

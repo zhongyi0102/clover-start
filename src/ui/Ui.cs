@@ -218,6 +218,35 @@ namespace Clover
         /// 它必须知道"要不要在 Fill(palette) 之后再覆盖强调色"。
         /// </summary>
         static Color? accentOverride;
+        static WallpaperAppearance.Scheme automaticPalette;
+        public static bool HasAutomaticPalette { get { return automaticPalette != null; } }
+
+        public static void SetAutomaticPalette(WallpaperAppearance.Scheme scheme)
+        {
+            automaticPalette = scheme;
+            if (scheme == null) return;
+            FillAutomatic(scheme);
+            try { ThemeChanged(); } catch { }
+        }
+
+        static void FillAutomatic(WallpaperAppearance.Scheme s)
+        {
+            AppliedTheme = s.Dark ? ThemeMode.Dark : ThemeMode.Light;
+            Fill(s.Dark ? Dark : Light);
+            Bg.Color = FromRgb24(s.Surface);
+            Fg.Color = FromRgb24(s.Foreground);
+            Sub.Color = FromRgb24(s.Secondary);
+            SearchBg.Color = FromRgb24(s.Surface);
+            Hover.Color = FromRgb24(WallpaperAppearance.Mix(s.Surface, s.Foreground, 0.06));
+            Pressed.Color = FromRgb24(WallpaperAppearance.Mix(s.Surface, s.Foreground, 0.10));
+            // A translucent white hover can erase white labels on dark wallpaper.
+            // Opaque, same-family surfaces keep all interaction states readable.
+            TileHover.Color = Hover.Color;
+            TilePressed.Color = Pressed.Color;
+            Accent.Color = FromRgb24(s.Accent);
+            AccentSoft.Color = FromRgb24(s.AccentSoft);
+            AccentText.Color = FromRgb24(s.AccentText);
+        }
 
         /// <summary>
         /// 设置/清除自定义强调色。传 null 表示回到主题默认。
@@ -292,6 +321,12 @@ namespace Clover
         /// </summary>
         public static void ApplyTheme(ThemeMode mode)
         {
+            if (automaticPalette != null)
+            {
+                FillAutomatic(automaticPalette);
+                try { ThemeChanged(); } catch { }
+                return;
+            }
             ThemeMode effective = mode;
             if (mode == ThemeMode.System) effective = SystemPrefersDark() ? ThemeMode.Dark : ThemeMode.Light;
 

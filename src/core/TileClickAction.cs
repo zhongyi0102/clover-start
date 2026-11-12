@@ -55,9 +55,11 @@ namespace Clover
             // 两次按下落在系统双击间隔内），那时若先判点击就会"拖完顺手启动"。
             if (dragged) return Action.Drop;
 
-            // 只认 ClickCount == 2。三击（3）不启动 —— 与桌面图标一致，
-            // 避免手抖连点三次开出两个窗口。
-            if (clickCount == 2) return Action.Launch;
+            // 每完成一组双击就发出一次启动请求：2、4、6...。
+            // 这样连续双击第二次时不会静默变成“只选中”，而是进入统一的
+            // LaunchThrottle，由它拦截并给出“已发送启动请求”提醒。
+            // 奇数次（含三击）仍只选中，不会额外启动。
+            if (clickCount >= 2 && clickCount % 2 == 0) return Action.Launch;
 
             // 单击 / 三击 / 异常值（0、负数）一律只选中。
             return Action.Select;

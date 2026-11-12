@@ -22,6 +22,13 @@ namespace Clover
 
             /// <summary>批量隐藏（「隐藏全部「系统工具」」等）。</summary>
             Batch = 1,
+
+            /// <summary>用户确认过的具体入口隐藏建议。</summary>
+            Suggested = 2,
+
+            /// <summary>明确配套且没有使用记录的入口自动隐藏。</summary>
+            Automatic = 3,
+            Computer = 4,
         }
 
         /// <summary>类型。</summary>
@@ -52,6 +59,20 @@ namespace Clover
             return new HideReason(Kind.Batch, category);
         }
 
+        public static HideReason Suggested(string group)
+        {
+            return new HideReason(Kind.Suggested, group);
+        }
+
+        public static HideReason Automatic(string group)
+        {
+            return new HideReason(Kind.Automatic, group);
+        }
+
+        public static HideReason Computer() { return new HideReason(Kind.Computer, ""); }
+
+        public bool RetainOnRestore { get { return Type == Kind.Batch || Type == Kind.Suggested || Type == Kind.Automatic; } }
+
         /// <summary>
         /// 分组 key。用于「已隐藏的应用」按原因分组。
         ///
@@ -64,10 +85,11 @@ namespace Clover
             {
                 try
                 {
-                    if (Type == Kind.Batch)
+                    if (Type == Kind.Computer) return "computer";
+                    if (RetainOnRestore)
                     {
                         string c = string.IsNullOrWhiteSpace(Category) ? "未分类" : Category.Trim();
-                        return "batch:" + c;
+                        return (Type == Kind.Automatic ? "automatic:" : Type == Kind.Suggested ? "suggested:" : "batch:") + c;
                     }
                     return "manual";
                 }
@@ -82,10 +104,11 @@ namespace Clover
             {
                 try
                 {
-                    if (Type == Kind.Batch)
+                    if (Type == Kind.Computer) return "电脑用的：平时不显示，支持搜索";
+                    if (RetainOnRestore)
                     {
                         string c = string.IsNullOrWhiteSpace(Category) ? "未分类" : Category.Trim();
-                        return "批量隐藏：" + c;
+                        return (Type == Kind.Automatic ? "自动隐藏：" : Type == Kind.Suggested ? "确认建议隐藏：" : "批量隐藏：") + c;
                     }
                     return "手动隐藏";
                 }
@@ -100,10 +123,11 @@ namespace Clover
             {
                 try
                 {
-                    if (Type == Kind.Batch)
+                    if (Type == Kind.Computer) return "电脑用的（搜索可见）";
+                    if (RetainOnRestore)
                     {
                         string c = string.IsNullOrWhiteSpace(Category) ? "未分类" : Category.Trim();
-                        return "批量隐藏：" + c;
+                        return (Type == Kind.Automatic ? "自动隐藏：" : Type == Kind.Suggested ? "确认建议隐藏：" : "批量隐藏：") + c;
                     }
                     return "手动隐藏";
                 }
@@ -131,6 +155,11 @@ namespace Clover
 
                 if (string.Equals(kind, "batch", StringComparison.OrdinalIgnoreCase))
                     return Batch(cat);
+                if (string.Equals(kind, "suggested", StringComparison.OrdinalIgnoreCase))
+                    return Suggested(cat);
+                if (string.Equals(kind, "automatic", StringComparison.OrdinalIgnoreCase))
+                    return Automatic(cat);
+                if (string.Equals(kind, "computer", StringComparison.OrdinalIgnoreCase)) return Computer();
 
                 return Manual();
             }
@@ -143,8 +172,8 @@ namespace Clover
             Dictionary<string, object> d = new Dictionary<string, object>();
             try
             {
-                d["kind"] = Type == Kind.Batch ? "batch" : "manual";
-                if (Type == Kind.Batch) d["category"] = Category ?? "";
+                d["kind"] = Type == Kind.Computer ? "computer" : Type == Kind.Automatic ? "automatic" : Type == Kind.Suggested ? "suggested" : Type == Kind.Batch ? "batch" : "manual";
+                if (RetainOnRestore) d["category"] = Category ?? "";
             }
             catch { }
             return d;

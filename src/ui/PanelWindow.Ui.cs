@@ -41,7 +41,7 @@ namespace Clover
             // 为什么删掉快速启动区：它和分类栏的「常用」页完全重复 ——
             // 同一批应用在同一屏里出现两次，占了 40px 高度却没有任何
             // 新信息。要快速启动就用「常用」分类（那里还有完整的
-            // 右键菜单、拖拽排序、运行中圆点）。
+            // 右键菜单与拖拽排序）。
             grid.RowDefinitions.Add(new RowDefinition());   // 0 header
             grid.RowDefinitions.Add(new RowDefinition());   // 1 body
             grid.RowDefinitions.Add(new RowDefinition());   // 2 footer
@@ -269,7 +269,23 @@ namespace Clover
             // 否则拼音搜索（weixin/wx）在界面上永远搜不到 —— 磁贴被隐藏了，
             // 而 SystemSearch 不包含已扫描清单。
             searchResults.CatalogProvider = delegate { return catalog == null ? null : catalog.Apps; };
-            searchResults.PinnedProvider = delegate(string path) { return IsPinnedCommonPath(path); };
+            searchResults.RoleProvider = SearchRoleOf;
+            searchResults.ClassificationChanged = ClassifySearchResult;
+            searchResults.ResultAllowed = delegate(SearchResult result)
+            {
+                if (result == null || AppClassification.IsNonAppEntry(result.Name, result.Path)) return false;
+                if (hiddenApps != null && hiddenApps.IsHidden(result.Path)) return false;
+                if (catalog == null || result == null) return true;
+                foreach (AppItem app in catalog.Apps)
+                {
+                    if (!app.Hidden) continue;
+                    if (string.Equals(app.Path, result.Path, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals((app.Name ?? "").Trim(), (result.Name ?? "").Trim(), StringComparison.OrdinalIgnoreCase))
+                        return false;
+                    // 不按共享宿主过滤：隐藏 IDLE 不能把其他 pythonw 应用一并屏蔽。
+                }
+                return true;
+            };
             searchResults.UsageProvider = delegate(string path) { return usage == null ? 0 : usage.GetCount(path); };
             searchResults.LastUsedProvider = delegate(string path) { return usage == null ? 0 : usage.GetLast(path); };
             searchResults.ResultOpened = delegate(string path) { RecordAppUsage(path); };
@@ -332,11 +348,31 @@ namespace Clover
             // ---------------- footer ----------------
             Grid footer = new Grid();
             footer.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, 0);
-            footerHint = Ui.T("Esc 收起 · 输入即可搜索应用 · 方向键选择，Enter 启动", 11, Ui.Sub);
-            footerHint.HorizontalAlignment = HorizontalAlignment.Left;
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            footerHint = Ui.T("单击选中 · 双击启动 · 拖动排序 · 方向键选择 · Enter 启动", 11, Ui.Sub);
+            footerHint.TextTrimming = TextTrimming.CharacterEllipsis;
+            footerHint.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+            footerHint.SetBinding(ToolTipProperty, new System.Windows.Data.Binding("Text") { Source = footerHint });
             footer.Children.Add(footerHint);
+            rescanAppsButton = MakeDeskToolButton("重新扫描应用", "重新查找已安装的应用，保留分类和排序", Rescan);
+            rescanAppsButton.Tag = "apps-rescan";
+            rescanAppsButton.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(rescanAppsButton, 1);
+            footer.Children.Add(rescanAppsButton);
+            refreshFilesButton = MakeDeskToolButton("刷新", "刷新文件库（F5），保留筛选、选择和滚动位置", delegate
+            {
+                if (filesView != null) filesView.Refresh(true);
+            });
+            refreshFilesButton.Tag = "files-refresh";
+            refreshFilesButton.Visibility = Visibility.Collapsed;
+            refreshFilesButton.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(refreshFilesButton, 1);
+            footer.Children.Add(refreshFilesButton);
             footerCount = Ui.T("", 11, Ui.Sub);
             footerCount.HorizontalAlignment = HorizontalAlignment.Right;
+            Grid.SetColumn(footerCount, 2);
             footer.Children.Add(footerCount);
             Grid.SetRow(footer, 2);
             grid.Children.Add(footer);
@@ -411,6 +447,7 @@ namespace Clover
 
             glassBackdrop = new GlassBackdrop(this, contentHost, Path.Combine(baseDir, "res"));
             glassBackdrop.OpacityPercent = 0;    // 默认关闭，由设置决定
+            InitializeAutomaticAppearance(contentHost, grid);
 
             // ---------------- 双层投影 ----------------
             //
@@ -490,18 +527,15 @@ namespace Clover
             filesDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
             filesPanel.Children.Add(filesDropHint.Root);
 
-            ScrollViewer extScroll = new ScrollViewer();
-            extScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-            extScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            extScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            filesExtRow = new StackPanel();
+            filesExtRow = new WrapPanel();
             filesExtRow.Orientation = Orientation.Horizontal;
-            extScroll.Content = filesExtRow;
-            filesPanel.Children.Add(extScroll);
+            filesExtRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            filesPanel.Children.Add(filesExtRow);
 
             filesNotice = Ui.T("", 11, Ui.Sub);
             filesNotice.Margin = new Thickness(2, 0, 0, Ui.S.Sm);
-            filesNotice.TextWrapping = TextWrapping.Wrap;
+            filesNotice.TextTrimming = TextTrimming.CharacterEllipsis;
+            filesNotice.TextWrapping = TextWrapping.NoWrap;
             filesNotice.Visibility = Visibility.Collapsed;
             filesPanel.Children.Add(filesNotice);
 
@@ -551,7 +585,7 @@ namespace Clover
             Grid.SetRow(deskCanvas, 2);
             deskPanel.Children.Add(deskCanvas);
 
-            deskDropHint = new DropHint("把文件拖到桌面收纳", "文件会进入当前收纳目录，可在资源管理器中正常访问");
+            deskDropHint = new DropHint("把桌面内容拖到这里", "只收非应用内容；默认移动，按住 Ctrl 复制；外部文件来源请用文件库");
             Grid.SetRow(deskDropHint.Root, 2);
             Panel.SetZIndex(deskDropHint.Root, 5);
             deskPanel.Children.Add(deskDropHint.Root);
@@ -633,7 +667,7 @@ namespace Clover
                 // 切主题后强调色变了（染色默认用强调色），外观参数要重新注入
                 InjectGlassParams();
                 ApplyGlassTint();
-                if (glassBackdrop != null && settings != null && settings.GlassOpacity > 0)
+                if (glassBackdrop != null && settings != null && EffectiveGlassOpacity > 0)
                 {
                     if (IsVisible) RefreshGlassSoon(120);
                 }
@@ -678,7 +712,7 @@ namespace Clover
             return b;
         }
 
-        static ControlTemplate MakeButtonTemplate(double radius)
+        internal static ControlTemplate MakeButtonTemplate(double radius)
         {
             ControlTemplate template = new ControlTemplate(typeof(Button));
             FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));

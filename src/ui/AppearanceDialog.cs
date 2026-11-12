@@ -224,12 +224,47 @@ namespace Clover
 
                 body.Children.Add(themeRow);
 
+                // Keep the existing manual controls intact, but place the entire set
+                // behind one keyboard-accessible expander. Wallpaper source is separate.
+                StackPanel manualBody = body;
+                Expander manualSettings = new Expander { Header = "手动调整", Content = manualBody,
+                    Foreground = Ui.Fg, Margin = new Thickness(0, Ui.S.Md, 0, Ui.S.Md) };
+                body = new StackPanel();
+                scroll.Content = body;
+                body.Children.Add(SectionLabel("外观适配"));
+                CheckBox autoMode = new CheckBox { Content = "自动适配壁纸", Foreground = Ui.Fg,
+                    IsChecked = settings != null && settings.AutoAppearance,
+                    Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Sm) };
+                body.Children.Add(autoMode);
+                TextBlock autoHint = Ui.T("根据背景自动选择明暗、配色、模糊与文字保护；手动参数保留。", 11, Ui.Sub);
+                autoHint.TextWrapping = TextWrapping.Wrap;
+                body.Children.Add(autoHint);
+                TextBlock autoStatus = Ui.T("", 11, Ui.Fg);
+                autoStatus.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Md);
+                autoStatus.TextWrapping = TextWrapping.Wrap;
+                body.Children.Add(autoStatus);
+                Action refreshAutomatic = delegate
+                {
+                    bool automatic = settings != null && settings.AutoAppearance;
+                    manualSettings.IsEnabled = !automatic;
+                    if (automatic) manualSettings.IsExpanded = false;
+                    autoStatus.Text = panel == null ? (automatic ? "自动适配已开启" : "手动调整 · 原参数已保留")
+                        : panel.AutomaticAppearanceDescription;
+                };
+                autoMode.Click += delegate
+                {
+                    if (settings != null) settings.AutoAppearance = autoMode.IsChecked == true;
+                    commit();
+                    refreshAutomatic();
+                    if (settings != null && !settings.AutoAppearance) manualSettings.IsExpanded = true;
+                };
+
                 // ===== 预设 =====
-                body.Children.Add(SectionLabel("预设"));
+                manualBody.Children.Add(SectionLabel("预设"));
 
                 WrapPanel presetRow = new WrapPanel();
                 presetRow.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Lg);
-                body.Children.Add(presetRow);
+                manualBody.Children.Add(presetRow);
 
                 // 预设按钮的选中态要跟着 settings 变 → 存下来便于刷新
                 Dictionary<string, Border> presetButtons = new Dictionary<string, Border>(StringComparer.OrdinalIgnoreCase);
@@ -304,14 +339,14 @@ namespace Clover
                 }
 
                 // ===== 滑块 =====
-                body.Children.Add(SectionLabel("参数"));
+                manualBody.Children.Add(SectionLabel("参数"));
 
                 // 用一个列表存「从 settings 刷新 UI」的动作
                 List<Action> refreshers = new List<Action>();
 
 
                 // ---- 浓度（glassOpacity 0-100）----
-                body.Children.Add(MakeSlider("浓度", 0, 100, 1,
+                manualBody.Children.Add(MakeSlider("壁纸透出", 0, 100, 1,
                     delegate { return settings == null ? 0 : settings.GlassOpacity; },
                     delegate(double v)
                     {
@@ -324,7 +359,7 @@ namespace Clover
                     schedulePreview, commit, refreshPresetButtons, refreshers));
 
                 // ---- 模糊（glassBlur 0-30）----
-                body.Children.Add(MakeSlider("模糊", 0, 30, 0.5,
+                manualBody.Children.Add(MakeSlider("模糊", 0, 30, 0.5,
                     delegate { return settings == null ? 0 : settings.GlassBlur; },
                     delegate(double v)
                     {
@@ -337,7 +372,7 @@ namespace Clover
                     schedulePreview, commit, refreshPresetButtons, refreshers));
 
                 // ---- 染色强度（glassTintStrength 0-100）----
-                body.Children.Add(MakeSlider("染色强度", 0, 100, 1,
+                manualBody.Children.Add(MakeSlider("染色强度", 0, 100, 1,
                     delegate { return settings == null ? 0 : settings.GlassTintStrength; },
                     delegate(double v)
                     {
@@ -350,7 +385,7 @@ namespace Clover
                     schedulePreview, commit, refreshPresetButtons, refreshers));
 
                 // ---- 亮度（glassBrightness -50~+50）----
-                body.Children.Add(MakeSlider("亮度", -50, 50, 1,
+                manualBody.Children.Add(MakeSlider("亮度", -50, 50, 1,
                     delegate { return settings == null ? 0 : settings.GlassBrightness; },
                     delegate(double v)
                     {
@@ -370,7 +405,7 @@ namespace Clover
                 //
                 // 壁纸偏亮时文字看不清 —— 在背景之上叠一层半透明深色。
                 // 只改一个 Opacity 值，不重算毛玻璃，拖滑块即时见效。
-                body.Children.Add(MakeSlider("背景暗度", 0, 60, 1,
+                manualBody.Children.Add(MakeSlider("背景暗度", 0, 60, 1,
                     delegate { return settings == null ? 0 : settings.GlassDarkness; },
                     delegate(double v)
                     {
@@ -387,10 +422,10 @@ namespace Clover
                     commit, refreshPresetButtons, refreshers));
 
                 // ===== 颜色 =====
-                body.Children.Add(SectionLabel("颜色"));
+                manualBody.Children.Add(SectionLabel("颜色"));
 
                 // 染色色板
-                body.Children.Add(MakeColorRow("染色", settings,
+                manualBody.Children.Add(MakeColorRow("染色", settings,
                     delegate { return settings == null ? "" : settings.GlassTint; },
                     delegate(string hex)
                     {
@@ -408,7 +443,7 @@ namespace Clover
                 // glassAccent → Ui.SetAccentOverride → 全局 Ui.Accent 刷子，
                 // 按钮、选中态、胶囊、搜索框焦点都跟着变。
                 // 用户在这里改，是整个界面变色，不是只改玻璃染色。
-                body.Children.Add(MakeColorRow("界面强调色", settings,
+                manualBody.Children.Add(MakeColorRow("界面强调色", settings,
                     delegate { return settings == null ? "" : settings.GlassAccent; },
                     delegate(string hex)
                     {
@@ -495,7 +530,7 @@ namespace Clover
                     refreshMode();
                     commit();
                 });
-                bScreen.ToolTip = "截取桌面壁纸并模糊（透出真实桌面，但亮壁纸会干扰阅读）";
+                bScreen.ToolTip = "自动模式直接读取桌面壁纸并保护文字；手动模式沿用桌面取景";
                 modeRow.Children.Add(bScreen);
 
                 bCustom = MakeChip("自定义图片", delegate
@@ -613,6 +648,7 @@ namespace Clover
                     DropSpec.BackgroundHintText());
                 customDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Lg);
                 body.Children.Add(customDropHint.Root);
+                body.Children.Add(manualSettings);
 
                 // ---- 拖放接线（只做高亮 + Drop 后校验，不接管任何现有事件）----
                 //
@@ -739,7 +775,7 @@ namespace Clover
 
 
                 // ===== 文字清晰保底 =====
-                body.Children.Add(SectionLabel("文字清晰"));
+                manualBody.Children.Add(SectionLabel("文字清晰"));
 
                 Border guardChip = null;
                 TextBlock guardHint = null;
@@ -753,8 +789,8 @@ namespace Clover
                         {
                             guardChip.Background = on ? Ui.Accent : Ui.SearchBg;
                             TextBlock t = guardChip.Child as TextBlock;
-                            if (t != null) t.Foreground = on ? Brushes.White : Ui.Fg;
-                            t.Text = on ? "已开启" : "已关闭";
+                            if (t != null)
+                            { t.Foreground = on ? Brushes.White : Ui.Fg; t.Text = on ? "已开启" : "已关闭"; }
                         }
                         // 触发时显示灰色小字（提示用户背景被自动补偿了）
                         if (guardHint != null)
@@ -789,15 +825,22 @@ namespace Clover
                 guardChip.ToolTip = "背景太亮/太暗时，自动在文字区域叠一层极淡的压暗或提亮，让文字达到 WCAG 对比度";
                 guardChip.HorizontalAlignment = HorizontalAlignment.Left;
                 guardChip.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
-                body.Children.Add(guardChip);
+                manualBody.Children.Add(guardChip);
 
                 guardHint = Ui.T("", 10.5, Ui.Sub);
                 guardHint.Margin = new Thickness(0, Ui.S.Xs, 0, Ui.S.Lg);
                 guardHint.Visibility = Visibility.Collapsed;
-                body.Children.Add(guardHint);
+                manualBody.Children.Add(guardHint);
 
                 refreshers.Add(refreshGuard);
                 refreshers.Add(refreshMode);
+                refreshers.Add(refreshAutomatic);
+                refreshAutomatic();
+                manualSettings.IsExpanded = settings != null && !settings.AutoAppearance;
+                DispatcherTimer automaticStatusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                automaticStatusTimer.Tick += delegate { refreshAutomatic(); };
+                automaticStatusTimer.Start();
+                dlg.Closed += delegate { automaticStatusTimer.Stop(); };
 
                 // ---- 统一的「从 settings 刷新全部 UI」----
                 refreshAll = delegate
@@ -823,6 +866,12 @@ namespace Clover
                 {
                     try
                     {
+                        if (settings != null && settings.AutoAppearance)
+                        {
+                            if (panel != null) panel.RecalculateAutomaticAppearance();
+                            refreshAutomatic();
+                            return;
+                        }
                         AppearancePresets.RestoreDefaults(settings);
                         refreshAll();
                         commit();
@@ -830,7 +879,7 @@ namespace Clover
                     catch (Exception ex) { Ui.LogError(ex, "恢复默认"); }
                 });
                 reset.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
-                reset.ToolTip = "把参数恢复到当前预设的初始值；当前是自定义时回退到「经典毛玻璃」";
+                reset.ToolTip = "自动模式重新适配当前背景；手动模式恢复当前预设的参数";
                 footer.Children.Add(reset);
 
                 Border done = MakeChip("完成", delegate { dlg.Close(); });
@@ -850,6 +899,19 @@ namespace Clover
                 Grid.SetRow(footer, 2);
                 layout.Children.Add(footer);
 
+                // Compact by default; custom import help only belongs to that source.
+                customDropHint.Root.Visibility = settings != null && settings.GlassMode == "custom"
+                    ? Visibility.Visible : Visibility.Collapsed;
+                Action oldRefreshMode = refreshMode;
+                refreshMode = delegate
+                {
+                    oldRefreshMode();
+                    customDropHint.Root.Visibility = settings != null && settings.GlassMode == "custom"
+                        ? Visibility.Visible : Visibility.Collapsed;
+                };
+                // refreshers captured the old delegate earlier; add the final source
+                // visibility refresh as well for reset/import callbacks.
+                refreshers.Add(refreshMode);
                 root.Child = layout;
                 DialogChrome.UseCloseOnlyTitleBar(dlg, root);
 

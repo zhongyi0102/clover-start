@@ -158,6 +158,7 @@ namespace Clover
 
         /// <summary>只收文件夹（给「添加来源」这类入口用）。</summary>
         public bool AllowDirectoriesOnly = false;
+        public bool NonApplicationsOnly = false;
 
         // ========== 校验 ==========
 
@@ -192,6 +193,11 @@ namespace Clover
 
                     bool isDir = SafeIsDir(full);
                     string ext = isDir ? "" : SafeExt(full);
+                    if (NonApplicationsOnly && DesktopContentRules.Classify(full) != DesktopContentKind.NonApplication)
+                    {
+                        v.RejectedItems.Add(Make(full, ext, RejectReason.AppFile));
+                        continue;
+                    }
 
                     // ---- 2. 只要文件夹 ----
                     if (AllowDirectoriesOnly && !isDir)
@@ -356,7 +362,7 @@ namespace Clover
         public static DropSpec ForDesk()
         {
             DropSpec s = new DropSpec();
-            s.RejectExts.AddRange(AppExts);
+            s.NonApplicationsOnly = true;
             return s;
         }
 

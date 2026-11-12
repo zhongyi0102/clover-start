@@ -28,19 +28,13 @@ namespace Clover
             public string Time = "";
         }
 
-        /// <summary>不收纳的扩展名（应用类）。</summary>
-        static readonly string[] BlockedExt =
-        {
-            ".exe", ".lnk", ".msi", ".bat", ".cmd", ".com", ".scr", ".pif",
-            ".appref-ms", ".url", ".msc", ".cpl", ".dll", ".sys", ".jar", ".ps1", ".vbs"
-        };
-
         /// <summary>一个待收纳的候选文件。</summary>
         public class Candidate
         {
             public string Path = "";
             public long Size;
             public string Source = "";   // "用户桌面" / "公共桌面"
+            public bool ApplicationShortcut;
         }
 
         /// <summary>扫描结果。</summary>
@@ -62,21 +56,13 @@ namespace Clover
             public bool AnyMoved { get { return Moved.Count > 0; } }
         }
 
-        /// <summary>该扩展名是否允许收纳。</summary>
+        /// <summary>按真实身份判定是否允许收纳；未知入口保持原处。</summary>
         public static bool IsAllowed(string path)
         {
             try
             {
                 if (string.IsNullOrEmpty(path)) return false;
-                if (Directory.Exists(path)) return true;   // 文件夹允许
-
-                string ext = Path.GetExtension(path);
-                if (string.IsNullOrEmpty(ext)) return true;
-
-                foreach (string b in BlockedExt)
-                    if (string.Equals(b, ext, StringComparison.OrdinalIgnoreCase)) return false;
-
-                return true;
+                return DesktopContentRules.Classify(path) == DesktopContentKind.NonApplication;
             }
             catch { return false; }
         }
@@ -106,11 +92,14 @@ namespace Clover
 
         /// <summary>扫描桌面上的可收纳文件（只列，不动）。</summary>
         public static ScanResult Scan()
+        { return Scan(DesktopDirs(), false); }
+
+        public static ScanResult Scan(List<string> directories, bool includeApplications)
         {
             ScanResult r = new ScanResult();
             try
             {
-                foreach (string dir in DesktopDirs())
+                foreach (string dir in directories)
                 {
                     string label = IsCommonDesktop(dir) ? "公共桌面" : "用户桌面";
 
@@ -129,7 +118,10 @@ namespace Clover
                             }
                             catch { }
 
-                            if (!IsAllowed(f))
+                            bool application = DesktopContentRules.Classify(f) == DesktopContentKind.Application
+                                && (f.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)
+                                    || f.EndsWith(".url", StringComparison.OrdinalIgnoreCase));
+                            if (DesktopContentRules.IsTemporary(f) || (!IsAllowed(f) && !(includeApplications && application)))
                             {
                                 r.Skipped.Add(Path.GetFileName(f));
                                 continue;
@@ -138,6 +130,7 @@ namespace Clover
                             Candidate c = new Candidate();
                             c.Path = f;
                             c.Source = label;
+                            c.ApplicationShortcut = application;
                             try { c.Size = new FileInfo(f).Length; } catch { }
                             r.Items.Add(c);
                         }

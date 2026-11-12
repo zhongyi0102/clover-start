@@ -201,6 +201,7 @@ namespace Clover
         }
 
         // ---------------- 父进程：测试 ----------------
+        [STAThread]
         static void Main(string[] args)
         {
             if (args.Length > 0 && args[0] == "--host")
@@ -217,6 +218,14 @@ namespace Clover
                 Environment.Exit(RunHost());
                 return;
             }
+
+            // 使用自己的非全屏基线窗口，避免用户当前全屏应用影响测试断言。
+            System.Windows.Window baseline = new System.Windows.Window {
+                Title = "Clover fullscreen test baseline", Width = 480, Height = 320,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.CenterScreen };
+            baseline.Show();
+            IntPtr baselineHandle = new System.Windows.Interop.WindowInteropHelper(baseline).Handle;
+            Check(TryMakeForeground(baselineHandle), "非全屏基线窗口成为前台");
 
             // ---------- 1. 没有全屏窗口时：不应误判 ----------
             bool before = FullscreenWatch.IsFullscreen();
@@ -272,10 +281,12 @@ namespace Clover
             }
 
             Thread.Sleep(800);
+            Check(TryMakeForeground(baselineHandle), "全屏关闭后恢复到非全屏基线窗口");
 
             // ---------- 4. 关掉全屏窗口后：应恢复 ----------
             bool after = FullscreenWatch.IsFullscreen();
             Check(after == false, "全屏窗口关闭后 IsFullscreen() = false", "实际 " + after);
+            baseline.Close();
 
             Console.WriteLine(failed == 0 ? "ALL PASSED" : failed + " FAILED");
             Environment.Exit(failed == 0 ? 0 : 1);

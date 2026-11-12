@@ -33,31 +33,6 @@ namespace Clover
         const int TaskEnumMinIntervalMs = 800;
 
         /// <summary>
-        /// 启动磁贴运行状态刷新；重复调用只复用同一个定时器。
-        /// 隐藏任务列表已经没有界面入口，绝不能在这里顺带枚举系统窗口。
-        /// </summary>
-        void StartRunningStateTimer()
-        {
-            if (runningStateTimer != null)
-            {
-                if (!runningStateTimer.IsEnabled) runningStateTimer.Start();
-                return;
-            }
-            runningStateTimer = new DispatcherTimer();
-            runningStateTimer.Interval = TimeSpan.FromMilliseconds(1500);
-            runningStateTimer.Tick += delegate
-            {
-                if (ErrorLog.ShuttingDown) return;
-                // 刷新磁贴上的“运行中”小圆点：应用可能在面板开着时启动/退出，
-                // 而后台预热完成后也要把先前没画上的点补上。
-                // 只有可见时才做（不可见时没人看），且内部只查表 + 增删一个小 Border。
-                try { if (IsVisible) RefreshRunningDots(); }
-                catch (Exception ex) { Ui.LogError(ex, "刷新运行状态圆点"); }
-            };
-            runningStateTimer.Start();
-        }
-
-        /// <summary>
         /// 只刷新前台窗口句柄缓存，不做全量枚举。
         ///
         /// 用途：面板刚打开（ShowPanel）或窗口被激活时调用，保证鼠标还没划过来之前

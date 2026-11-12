@@ -33,6 +33,9 @@ namespace Clover
         int resultCount;
         int generation;
         bool completed;
+        string lastQuery = "";
+        readonly Dictionary<string, Border> rowsByKey = new Dictionary<string, Border>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<int, TextBlock> headersByRole = new Dictionary<int, TextBlock>();
 
         /// <summary>结果条数或完成状态变化时通知宿主更新底栏。</summary>
         public Action ResultsChanged;
@@ -71,6 +74,7 @@ namespace Clover
                 resultCount = 0;
                 completed = true;
                 if (host != null) host.Children.Clear();
+                rowsByKey.Clear(); headersByRole.Clear(); lastQuery = "";
                 NotifyChanged();
             }
             catch { }
@@ -85,12 +89,12 @@ namespace Clover
         /// </summary>
         public Func<List<AppItem>> CatalogProvider;
 
-        /// <summary>按路径查询是否手动固定，供搜索个性化排序使用。</summary>
-        public Func<string, bool> PinnedProvider;
-
         /// <summary>系统索引结果也可读取启动历史，避免只对目录结果个性化。</summary>
         public Func<string, int> UsageProvider;
         public Func<string, long> LastUsedProvider;
+        public Func<SearchResult, bool> ResultAllowed;
+        public Func<SearchResult, int> RoleProvider;
+        public Action<SearchResult, AppRole> ClassificationChanged;
 
         /// <summary>
         /// 在已扫描的应用清单里匹配（支持中文/英文/全拼/首字母）。
@@ -111,7 +115,7 @@ namespace Clover
 
                 foreach (AppItem a in apps)
                 {
-                    if (a == null || string.IsNullOrEmpty(a.Path)) continue;
+                    if (a == null || a.Hidden || a.ExcludedEntry || string.IsNullOrEmpty(a.Path)) continue;
                     if (!SearchRanking.Matches(a.Name, query)) continue;
 
                     SearchResult r = new SearchResult();
@@ -122,7 +126,8 @@ namespace Clover
                     r.Ext = Path.GetExtension(a.Path).ToLowerInvariant();
                     r.Usage = a.Usage;
                     r.LastUsed = a.LastUsed;
-                    r.Pinned = PinnedProvider != null && PinnedProvider(a.Path);
+                    r.Pinned = false;
+                    r.RoleRank = (int)a.Role;
                     list.Add(r);
                 }
 
@@ -153,7 +158,9 @@ namespace Clover
         {
             try
             {
-                Clear();
+                if (!string.Equals(lastQuery, query, StringComparison.Ordinal)) Clear();
+                else unchecked { generation++; }
+                lastQuery = query;
                 if (host == null) return;
                 if (string.IsNullOrWhiteSpace(query)) return;
                 completed = false;
@@ -210,10 +217,14 @@ namespace Clover
             {
                 if (host == null || batch == null) return;
 
+                int previousRole = -1;
+                List<UIElement> desired = new List<UIElement>();
+                Dictionary<string, Border> nextRows = new Dictionary<string, Border>(StringComparer.OrdinalIgnoreCase);
+                IInputElement focusBefore = Keyboard.FocusedElement;
                 foreach (SearchResult r in batch)
                 {
                     if (r == null) continue;
-                    if (resultCount >= MaxDisplay) return;
+                    if (resultCount >= MaxDisplay) break;
                     // ---- 去重：路径 + 归一化名字，双键 ----
                     //
                     // 为什么单靠 Path 不够（实测）：同一应用在两路里路径不同 ——
@@ -236,9 +247,40 @@ namespace Clover
                     string normName = (r.Name ?? "").Trim().ToLowerInvariant();
                     if (normName.Length > 0 && !shown.Add("N:" + normName)) continue;
 
-                    host.Children.Add(MakeRow(r));
+                    if (previousRole != r.RoleRank)
+                    {
+                        TextBlock header;
+                        if (!headersByRole.TryGetValue(r.RoleRank, out header))
+                        {
+                            header = Ui.T(r.RoleRank == 2 ? "电脑用的（仅搜索显示）" : r.RoleRank == 1 ? "低价值" : "用户用的",
+                                11, Ui.Sub, FontWeights.SemiBold);
+                            headersByRole[r.RoleRank] = header;
+                        }
+                        header.Margin = new Thickness(Ui.S.Xs, resultCount == 0 ? Ui.S.Xs : Ui.S.Md, 0, Ui.S.Xs);
+                        desired.Add(header);
+                        previousRole = r.RoleRank;
+                    }
+                    string rowKey = r.Path + "\n" + r.Name + "\n" + ResultDetail(r);
+                    Border row;
+                    if (!rowsByKey.TryGetValue(rowKey, out row)) row = MakeRow(r);
+                    nextRows[rowKey] = row;
+                    desired.Add(row);
                     resultCount++;
                 }
+
+                for (int i = host.Children.Count - 1; i >= 0; i--)
+                    if (!desired.Contains(host.Children[i])) host.Children.RemoveAt(i);
+                for (int i = 0; i < desired.Count; i++)
+                {
+                    int existing = host.Children.IndexOf(desired[i]);
+                    if (existing == i) continue;
+                    if (existing >= 0) host.Children.RemoveAt(existing);
+                    host.Children.Insert(i, desired[i]);
+                }
+                rowsByKey.Clear();
+                foreach (KeyValuePair<string, Border> pair in nextRows) rowsByKey[pair.Key] = pair.Value;
+                UIElement focused = focusBefore as UIElement;
+                if (focused != null && desired.Contains(focused) && !focused.IsKeyboardFocused) focused.Focus();
 
                 NotifyChanged();
             }
@@ -253,7 +295,8 @@ namespace Clover
                 if (r == null || string.IsNullOrEmpty(r.Path)) continue;
                 try { if (UsageProvider != null) r.Usage = UsageProvider(r.Path); } catch { }
                 try { if (LastUsedProvider != null) r.LastUsed = LastUsedProvider(r.Path); } catch { }
-                try { if (PinnedProvider != null) r.Pinned = PinnedProvider(r.Path); } catch { }
+                r.Pinned = false; // 固定功能已取消，旧补充结果也不能带回固定优先级。
+                try { if (RoleProvider != null) r.RoleRank = RoleProvider(r); } catch { }
             }
         }
 
@@ -267,8 +310,12 @@ namespace Clover
             if (host == null) return;
             shown.Clear();
             resultCount = 0;
-            host.Children.Clear();
 
+            if (ResultAllowed != null)
+            {
+                if (main != null) main = main.FindAll(result => result != null && ResultAllowed(result));
+                if (extra != null) extra = extra.FindAll(result => result != null && ResultAllowed(result));
+            }
             List<SearchResult> merged = SearchRanking.Merge(main, extra, query, MaxDisplay);
             AppendBatch(merged);
             if (final)
@@ -294,6 +341,15 @@ namespace Clover
             b.Background = Brushes.Transparent;
             b.Cursor = Cursors.Hand;
             b.Tag = r;
+            b.Focusable = true;
+            System.Windows.Automation.AutomationProperties.SetName(b, r.Name + "，" + ResultDetail(r));
+            b.GotKeyboardFocus += delegate { b.Background = Ui.Hover; };
+            b.LostKeyboardFocus += delegate { b.Background = Brushes.Transparent; };
+            b.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Key == Key.Enter) { Open(r); e.Handled = true; }
+                if (e.Key == Key.Apps) { ShowRowMenu(r, b); e.Handled = true; }
+            };
 
             Grid g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition());
@@ -471,12 +527,13 @@ namespace Clover
         static string ResultDetail(SearchResult r)
         {
             if (r == null) return "";
+            string role = r.RoleRank == 2 ? "电脑用的" : r.RoleRank == 1 ? "低价值" : "用户用的";
             string path = ShortPath(r);
-            if (string.IsNullOrWhiteSpace(r.Source)) return path;
+            if (string.IsNullOrWhiteSpace(r.Source)) return role + " · " + path;
             if (string.IsNullOrWhiteSpace(path)
                 || string.Equals(path, r.Source, StringComparison.OrdinalIgnoreCase))
-                return r.Source;
-            return r.Source + " · " + path;
+                return role + " · " + r.Source;
+            return role + " · " + r.Source + " · " + path;
         }
 
         /// <summary>打开：文件夹用资源管理器，文件用默认程序。</summary>
@@ -560,6 +617,19 @@ namespace Clover
             try
             {
                 ContextMenu cm = new ContextMenu();
+                if (ClassificationChanged != null)
+                {
+                    MenuItem category = new MenuItem { Header = "应用分类" };
+                    foreach (AppRole value in new[] { AppRole.User, AppRole.LowValue, AppRole.Computer })
+                    {
+                        AppRole selected = value;
+                        MenuItem option = new MenuItem { Header = value == AppRole.User ? "用户用的" : value == AppRole.LowValue ? "低价值" : "电脑用的（仅搜索显示）",
+                            IsCheckable = true, IsChecked = r.RoleRank == (int)value };
+                        option.Click += delegate { ClassificationChanged(r, selected); };
+                        category.Items.Add(option);
+                    }
+                    cm.Items.Add(category);
+                }
 
                 MenuItem open = new MenuItem();
                 open.Header = "打开";

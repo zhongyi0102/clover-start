@@ -16,6 +16,15 @@ namespace Clover
         [STAThread]
         static void Main(string[] args)
         {
+            // Embedded full license keeps single-file distribution compliant.
+            if (args != null && Array.Exists(args, delegate(string a) { return a == "--licenses"; }))
+            {
+                System.Reflection.Assembly assembly = typeof(Program).Assembly;
+                using (Stream stream = assembly.GetManifestResourceStream("CloverStart.MaterialColors.License.txt"))
+                using (StreamReader reader = stream == null ? null : new StreamReader(stream))
+                    if (reader != null) MessageBox.Show(reader.ReadToEnd(), "四叶草 · Material Color Utilities · Apache-2.0");
+                return;
+            }
             Stopwatch startupWatch = Stopwatch.StartNew();
             bool rescan = false;
             bool show = false;

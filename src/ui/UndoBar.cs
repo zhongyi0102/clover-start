@@ -171,7 +171,13 @@ namespace Clover
         /// </summary>
         public void Show(string text, Action undo)
         {
-            Show(text, undo, null);
+            Show(text, undo, null, LifetimeMs);
+        }
+
+        /// <summary>显示无操作按钮的短提示，可自定义停留时间。</summary>
+        public void Show(string text, Action undo, int lifetimeMs)
+        {
+            Show(text, undo, null, lifetimeMs);
         }
 
         /// <summary>
@@ -181,6 +187,11 @@ namespace Clover
         /// 桌面快捷方式被移除时传它，让用户能一键把东西留下来。
         /// </summary>
         public void Show(string text, Action undo, Action keep)
+        {
+            Show(text, undo, keep, LifetimeMs);
+        }
+
+        void Show(string text, Action undo, Action keep, int lifetimeMs)
         {
             try
             {
@@ -216,7 +227,7 @@ namespace Clover
                     };
                 }
                 timer.Stop();
-                timer.Interval = TimeSpan.FromMilliseconds(LifetimeMs);
+                timer.Interval = TimeSpan.FromMilliseconds(Math.Max(250, lifetimeMs));
                 timer.Start();
             }
             catch (Exception ex) { Ui.LogError(ex, "显示撤销提示"); }

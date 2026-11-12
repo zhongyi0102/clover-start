@@ -81,12 +81,12 @@ namespace Clover
 
             Check(!DeskImporter.IsAllowed("a.exe"), "★exe 拒绝");
             // ★ .lnk 已放开：快捷方式当书签用，不是程序
-            Check(DeskImporter.IsAllowed("a.lnk"), "★lnk 允许（快捷方式可拖入）");
-            Check(DeskImporter.IsAllowed("a.LnK"), "★大小写混合也允许");
+            Check(!DeskImporter.IsAllowed("a.lnk"), "无法解析快捷方式保留原处");
+            Check(!DeskImporter.IsAllowed("a.LnK"), "无法解析快捷方式忽略大小写");
             Check(!DeskImporter.IsAllowed("a.EXE"), "★EXE 大写仍拒绝");
-            Check(!DeskImporter.IsAllowed("a.msi"), "msi 拒绝");
-            Check(!DeskImporter.IsAllowed("a.bat"), "bat 拒绝");
-            Check(!DeskImporter.IsAllowed("a.dll"), "dll 拒绝");
+            Check(DeskImporter.IsAllowed("a.msi"), "安装包属于非应用内容");
+            Check(DeskImporter.IsAllowed("a.bat"), "脚本属于非应用内容");
+            Check(DeskImporter.IsAllowed("a.dll"), "组件文件不等同于应用入口");
             Check(!DeskImporter.IsAllowed("a.url"), "★url 仍拒绝（纯网址书签，未放开）");
 
             Check(!DeskImporter.IsAllowed(null), "null 拒绝");
@@ -151,14 +151,14 @@ namespace Clover
                     }, dst);
 
                 // doc.txt 收进来；app.exe / setup.msi 被拒；link.lnk **现在收进来**
-                Check(r.ImportedCount == 2, "★导入 txt + lnk", Convert.ToString(r.ImportedCount));
-                Check(r.SkippedCount == 2, "★跳过 2 个应用（exe + msi）",
+                Check(r.ImportedCount == 2, "★导入 txt + 安装包", Convert.ToString(r.ImportedCount));
+                Check(r.SkippedCount == 2, "★跳过应用与无法解析的快捷方式",
                     Convert.ToString(r.SkippedCount));
                 Check(r.AllOk, "★跳过不算失败");
                 Check(File.Exists(Path.Combine(src, "app.exe")), "★exe 仍在原处（没被动）");
                 Check(File.Exists(Path.Combine(src, "link.lnk")), "★lnk 仍在原处（复制不是移动）");
                 Check(!File.Exists(Path.Combine(dst, "app.exe")), "exe 没进目标");
-                Check(File.Exists(Path.Combine(dst, "link.lnk")), "★lnk 进了目标");
+                Check(!File.Exists(Path.Combine(dst, "link.lnk")), "未知快捷方式没有被搬动");
             }
             finally { Clean(src); Clean(dst); }
 

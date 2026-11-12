@@ -20,7 +20,7 @@ namespace Clover
     /// ── 上限 ──
     ///
     ///   枚举 5000 项就停（防止在巨大目录上卡死界面线程）；
-    ///   排序后最多返回 500 项（再多用户也翻不动）。
+    ///   List 兼容入口返回 500 项；ScanMany 保留有界元数据快照，供界面先筛选再分页。
     ///   两种情况都会在返回结果里标记，界面负责显示提示。
     /// </summary>
     public static class FileScanner
@@ -92,6 +92,9 @@ namespace Clover
             /// <summary>错误信息。null = 没出错。</summary>
             public string Error;
 
+            /// <summary>部分来源不可读时仍保留其它来源，并明确提示。</summary>
+            public string Warning;
+
             /// <summary>枚举到的原始条目数（过滤前）。</summary>
             public int ScannedCount;
 
@@ -132,70 +135,88 @@ namespace Clover
         /// </summary>
         public static Result ListMany(List<string> dirPaths, SortKey sort, bool ascending)
         {
+            Result r = ScanMany(dirPaths, sort, ascending);
+            LimitReturn(r);
+            return r;
+        }
+
+        /// <summary>
+        /// 有界元数据快照。所有来源共用 5000 项原始枚举预算；不先截取 500 项，
+        /// 让搜索、范围与后缀筛选覆盖完整的已扫描集合。
+        /// </summary>
+        public static Result ScanMany(List<string> dirPaths, SortKey sort, bool ascending)
+        {
+            return ScanMany(dirPaths, sort, ascending, null);
+        }
+
+        /// <summary>取消只停止读取，不更改文件系统；调用方丢弃取消的结果。</summary>
+        public static Result ScanMany(List<string> dirPaths, SortKey sort, bool ascending, Func<bool> cancelled)
+        {
             Result r = new Result();
-            List<Entry> all = new List<Entry>();
-            HashSet<string> seenPath = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            int okCount = 0;
-            bool truncated = false;
-            string firstError = null;
-
-            try
+            if (dirPaths == null || dirPaths.Count == 0)
             {
-                if (dirPaths == null || dirPaths.Count == 0)
+                r.Error = "没有选中任何来源";
+                return r;
+            }
+            HashSet<string> seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> errors = new List<string>();
+            int okCount = 0;
+            foreach (string dir in dirPaths)
+            {
+                if (cancelled != null && cancelled()) return r;
+                string norm;
+                if (!FileFolders.TryNormalize(dir, out norm))
                 {
-                    r.Error = "没有选中任何来源";
-                    return r;
+                    errors.Add((dir ?? "") + "：路径无效");
+                    continue;
                 }
-
-                foreach (string dir in dirPaths)
+                if (!seenRoots.Add(norm)) continue;
+                if (r.ScannedCount >= MaxEnumerate)
                 {
-                    if (all.Count >= MaxEnumerate) { truncated = true; break; }
-
-                    Result one = List(dir, sort, ascending);
-                    if (!string.IsNullOrEmpty(one.Error))
+                    r.EnumerateTruncated = true;
+                    break;
+                }
+                try
+                {
+                    if (!Directory.Exists(norm)) throw new DirectoryNotFoundException();
+                    foreach (string path in Directory.EnumerateFileSystemEntries(norm))
                     {
-                        if (firstError == null) firstError = one.Error;
-                        continue;   // 单个来源失败 → 跳过，不影响其他
+                        if (cancelled != null && cancelled()) return r;
+                        if (r.ScannedCount >= MaxEnumerate)
+                        {
+                            r.EnumerateTruncated = true;
+                            break;
+                        }
+                        // 连被排除或无法读取的条目也消耗预算，避免巨大临时文件目录无界枚举。
+                        r.ScannedCount++;
+                        if (!seenPaths.Add(path)) continue;
+                        try
+                        {
+                            bool isFolder = (File.GetAttributes(path) & FileAttributes.Directory) != 0;
+                            Entry e = MakeEntry(path, isFolder, norm);
+                            if (e != null) r.Items.Add(e);
+                        }
+                        catch { }
                     }
                     okCount++;
-
-                    foreach (Entry e in one.Items)
-                    {
-                        if (e == null) continue;
-                        if (all.Count >= MaxEnumerate) { truncated = true; break; }
-                        if (!seenPath.Add(e.Path)) continue;   // 跨来源去重
-                        all.Add(e);
-                    }
-
-                    if (one.EnumerateTruncated) truncated = true;
                 }
-
-                if (okCount == 0)
-                {
-                    r.Error = firstError ?? "所有来源都读取失败";
-                    return r;
-                }
-
-                r.ScannedCount = all.Count;
-                r.EnumerateTruncated = truncated;
-
-                Sort(all, sort, ascending);
-
-                r.FilteredCount = all.Count;
-                if (all.Count > MaxReturn)
-                {
-                    all.RemoveRange(MaxReturn, all.Count - MaxReturn);
-                    r.ReturnTruncated = true;
-                }
-                r.Items = all;
+                catch (UnauthorizedAccessException) { errors.Add(norm + "：没有访问权限"); }
+                catch (DirectoryNotFoundException) { errors.Add(norm + "：目录不存在"); }
+                catch (Exception ex) { errors.Add(norm + "：读取失败（" + ex.Message + "）"); }
             }
-            catch (Exception ex)
-            {
-                r.Error = "读取失败: " + ex.Message;
-                r.Items = new List<Entry>();
-            }
-
+            if (errors.Count > 0) r.Warning = "部分来源未完整读取：" + string.Join("；", errors.ToArray());
+            if (okCount == 0 && r.Items.Count == 0) r.Error = r.Warning ?? "所有来源都读取失败";
+            Sort(r.Items, sort, ascending);
+            r.FilteredCount = r.Items.Count;
             return r;
+        }
+
+        static void LimitReturn(Result r)
+        {
+            if (r.Items.Count <= MaxReturn) return;
+            r.Items.RemoveRange(MaxReturn, r.Items.Count - MaxReturn);
+            r.ReturnTruncated = true;
         }
 
         /// <summary>
@@ -218,95 +239,7 @@ namespace Clover
 
         public static Result List(string dirPath, SortKey sort, bool ascending)
         {
-            Result r = new Result();
-
-            try
-            {
-                string norm;
-                if (!FileFolders.TryNormalize(dirPath, out norm))
-                {
-                    r.Error = "路径无效";
-                    return r;
-                }
-
-                if (!Directory.Exists(norm))
-                {
-                    r.Error = "目录不存在";
-                    return r;
-                }
-
-                List<Entry> all = new List<Entry>();
-                bool truncated = false;
-
-                // ---- 枚举子目录 ----
-                //
-                // 用 EnumerateDirectories/EnumerateFiles 而不是 GetDirectories/GetFiles：
-                // 后者一次性把整目录读进数组，几万项的目录会直接吃掉几十 MB 内存。
-                // Enumerate 是流式的，我们数到 MaxEnumerate 就 break。
-                try
-                {
-                    foreach (string d in Directory.EnumerateDirectories(norm))
-                    {
-                        if (all.Count >= MaxEnumerate) { truncated = true; break; }
-                        Entry e = MakeEntry(d, true, norm);
-                        if (e != null) all.Add(e);
-                    }
-                }
-                catch (UnauthorizedAccessException) { throw; }   // 整目录无权限 → 交给外层
-                catch (DirectoryNotFoundException) { throw; }
-                catch { }   // 枚举到一半出错：保留已拿到的，继续列文件
-
-                // ---- 枚举文件 ----
-                if (!truncated)
-                {
-                    try
-                    {
-                        foreach (string f in Directory.EnumerateFiles(norm))
-                        {
-                            if (all.Count >= MaxEnumerate) { truncated = true; break; }
-                            Entry e = MakeEntry(f, false, norm);
-                            if (e != null) all.Add(e);
-                        }
-                    }
-                    catch (UnauthorizedAccessException) { throw; }
-                    catch (DirectoryNotFoundException) { throw; }
-                    catch { }
-                }
-
-                r.ScannedCount = all.Count;
-                r.EnumerateTruncated = truncated;
-
-                // ---- 排序 ----
-                Sort(all, sort, ascending);
-
-                r.FilteredCount = all.Count;
-
-                // ---- 截断 ----
-                if (all.Count > MaxReturn)
-                {
-                    all.RemoveRange(MaxReturn, all.Count - MaxReturn);
-                    r.ReturnTruncated = true;
-                }
-
-                r.Items = all;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                r.Error = "没有访问权限";
-                r.Items = new List<Entry>();
-            }
-            catch (DirectoryNotFoundException)
-            {
-                r.Error = "目录不存在";
-                r.Items = new List<Entry>();
-            }
-            catch (Exception ex)
-            {
-                r.Error = "读取失败: " + ex.Message;
-                r.Items = new List<Entry>();
-            }
-
-            return r;
+            return ListMany(new List<string> { dirPath }, sort, ascending);
         }
 
         /// <summary>

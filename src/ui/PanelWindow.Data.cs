@@ -61,41 +61,22 @@ namespace Clover
             try
             {
                 ReloadCatalog();
-                // 应用清单换了：旧的 lnk→目标 缓存可能指向已卸载的程序，清掉重建
-                RunningApps.Clear();
-                WarmRunningCache();
-                RebuildNav();
-                RenderApps();
+                if (IsDeskTab(current) || current == FilesCategory)
+                {
+                    // 应用目录变动不应重载用户正在选择/拖动的桌面内容。
+                    renderedSig = "";
+                    RefreshNavCountsInPlace();
+                    return;
+                }
+                RefreshNavCountsInPlace();
+                if (searchBox != null && searchBox.Text.Trim().Length > 0)
+                { searchResults.Search(searchBox.Text.Trim()); renderedSig = ""; return; }
+                if (!TryRefreshCurrentTilesInPlace()) RenderApps();
             }
             catch (Exception ex)
             {
                 Ui.LogError(ex, "刷新面板");
             }
-            // 清单更新后继续刷新磁贴“运行中”圆点；不可见任务列表不再枚举。
-            StartRunningStateTimer();
-        }
-
-        /// <summary>
-        /// 后台预热"应用是否在运行"要用的 .lnk 目标缓存。
-        ///
-        /// 首次解析 112 个快捷方式实测 239 ms（COM 调用，每个 1-3 ms）。
-        /// 这代价若落在用户打开面板那一刻会明显卡一下，
-        /// 所以挪到后台线程提前做——面板每次渲染只读缓存（实测 0 ms）。
-        /// 内部起线程，不会阻塞界面。
-        /// </summary>
-        void WarmRunningCache()
-        {
-            try
-            {
-                if (catalog == null || catalog.Apps == null) return;
-                List<string> paths = new List<string>(catalog.Apps.Count);
-                foreach (AppItem a in catalog.Apps)
-                {
-                    if (!string.IsNullOrEmpty(a.Path)) paths.Add(a.Path);
-                }
-                RunningApps.WarmUpAsync(paths);
-            }
-            catch { }
         }
 
         public void Rescan()
@@ -106,7 +87,12 @@ namespace Clover
                 Ui.Log("手动重新扫描");
                 ScanService.RunAsync(baseDir, "手动", delegate(ScanResult result)
                 {
-                    if (result == null || !result.Success || !result.Changed) return;
+                    if (result == null) return;
+                    if (!result.Success || !result.Changed)
+                    {
+                        Dispatcher.BeginInvoke(new Action(delegate { ShowToast(result.Success ? "应用扫描完成，没有变化" : "应用扫描未完成，原清单已保留"); }));
+                        return;
+                    }
                     CatalogPreloader.Invalidate();
                     SystemSearch.Invalidate();
                     try
@@ -115,11 +101,9 @@ namespace Clover
                         {
                             try
                             {
-                                AppIcons.Clear();
                                 Pinyin.ClearCache();
-                                ReloadCatalog();
-                                RebuildNav();
-                                RenderApps();
+                                RefreshCatalogQuiet();
+                                ShowToast("应用扫描完成，分类和顺序已保留");
                             }
                             catch (Exception ex) { Ui.LogError(ex, "重新扫描后刷新"); }
                         }));
@@ -134,10 +118,47 @@ namespace Clover
         }
         void ReloadCatalog()
         {
-            catalog = CatalogPreloader.TakeOrLoad(baseDir);
+            Catalog next = CatalogPreloader.TakeOrLoad(baseDir);
+            // 磁贴的事件闭包绑定 AppItem；按路径复用对象才能真正局部更新。
+            if (catalog != null && next != null)
+            {
+                foreach (AppItem incoming in next.Apps)
+                {
+                    AppItem existing = catalog.Apps.Find(a => string.Equals(a.Path, incoming.Path, StringComparison.OrdinalIgnoreCase));
+                    if (existing != null)
+                    {
+                        existing.Name = incoming.Name; existing.Category = incoming.Category;
+                        existing.Source = incoming.Source; existing.Version = incoming.Version;
+                        existing.Publisher = incoming.Publisher; existing.InstallDate = incoming.InstallDate;
+                        existing.InstallLocation = incoming.InstallLocation; existing.Aumid = incoming.Aumid;
+                        existing.Launchable = incoming.Launchable;
+                    }
+                }
+                for (int i = 0; i < next.Apps.Count; i++)
+                {
+                    AppItem existing = catalog.Apps.Find(a => string.Equals(a.Path, next.Apps[i].Path, StringComparison.OrdinalIgnoreCase));
+                    if (existing != null) next.Apps[i] = existing;
+                }
+            }
+            catalog = next;
             if (usage != null) catalog.ApplyUsage(usage);
+            hiddenApps = HiddenApps.Load(baseDir);
+            ApplyAutomaticAppHiding();
             hiddenCats = new List<string>();   // 分类系统已下线，不再从 settings 读
             catalog.HideCategories(hiddenCats);
+        }
+
+        void ApplyAutomaticAppHiding()
+        {
+            if (catalog == null) return;
+            if (appClassification == null) appClassification = new AppClassification(baseDir);
+            if (appClassification.NeedsBaseline)
+            {
+                // 首次重新分类连系统搜索中的旧入口一起建立基线，避免只改面板已有条目。
+                foreach (SearchResult entry in SystemSearch.Snapshot())
+                    appClassification.SeedExisting(entry.Name, entry.Path);
+            }
+            appClassification.Apply(catalog.Apps, settings, hiddenApps);
         }
 
         /// <summary>
@@ -174,7 +195,7 @@ namespace Clover
                 if (settings == null) return;
 
                 bool wantWe = string.Equals(settings.GlassMode, "we", StringComparison.OrdinalIgnoreCase)
-                    && settings.GlassOpacity > 0;
+                    && EffectiveGlassOpacity > 0;
 
                 if (!wantWe)
                 {
@@ -343,7 +364,7 @@ namespace Clover
 
                 bool wantVideo = settings != null
                     && string.Equals(settings.GlassMode, "custom", StringComparison.OrdinalIgnoreCase)
-                    && settings.GlassOpacity > 0;
+                    && EffectiveGlassOpacity > 0;
 
                 string vid = wantVideo ? BackgroundStore.FindVideo(baseDir) : null;
 
@@ -392,7 +413,7 @@ namespace Clover
             {
                 if (darkOverlay == null) return;
 
-                double d = settings == null ? 0 : settings.GlassDarkness;
+                double d = settings == null || settings.AutoAppearance ? 0 : settings.GlassDarkness;
                 if (d < 0) d = 0;
                 if (d > 60) d = 60;
 
@@ -462,7 +483,7 @@ namespace Clover
                 InjectGlassParams();
 
                 // 浓度 0 → 关掉玻璃（与正式路径一致）
-                if (settings.GlassOpacity <= 0)
+                if (EffectiveGlassOpacity <= 0)
                 {
                     glassBackdrop.Clear();
                     glassBackdrop.OpacityPercent = 0;
@@ -470,7 +491,7 @@ namespace Clover
                     return;
                 }
 
-                glassBackdrop.OpacityPercent = settings.GlassOpacity;
+                glassBackdrop.OpacityPercent = EffectiveGlassOpacity;
                 glassBackdrop.CornerRadius = Ui.R.Lg;
                 ApplyGlassTint();
 
@@ -511,6 +532,7 @@ namespace Clover
                 {
                     glassBackdrop.TintColor = null;   // 用 Ui.Accent
                 }
+                ConfigureAutomaticAppearance();
             }
             catch { }
         }
@@ -554,7 +576,7 @@ namespace Clover
                 // 外观参数注入（抽成独立方法，启动/切主题/改设置三条路径都调）
                 InjectGlassParams();
 
-                if (settings.GlassOpacity <= 0)
+                if (EffectiveGlassOpacity <= 0)
                 {
                     glassBackdrop.Clear();
                     glassBackdrop.OpacityPercent = 0;
@@ -562,7 +584,7 @@ namespace Clover
                     return;
                 }
 
-                glassBackdrop.OpacityPercent = settings.GlassOpacity;
+                glassBackdrop.OpacityPercent = EffectiveGlassOpacity;
                 glassBackdrop.CornerRadius = Ui.R.Lg;
                 ApplyGlassTint();         // 底色改半透明
 
@@ -755,8 +777,7 @@ namespace Clover
                 {
                     Ui.Log("隐藏分类: " + category + " (" + n + " 个)");
                     if (current == category) { current = ""; SaveLastCategory(); }
-                    RebuildNav();
-                    RenderApps();
+                    RefreshHiddenDisplay();
                 }
                 return n;
             }
@@ -767,38 +788,56 @@ namespace Clover
             }
         }
 
-        /// <summary>取消隐藏全部，并把界面切到「隐藏的项目」查看结果。</summary>
+        /// <summary>恢复全部，保留用户明确恢复的批量 / 建议隐藏例外。</summary>
         public int UnhideAll()
         {
-            try
-            {
-                if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
-                int n = hiddenApps.Clear();
-                if (n == 0) return 0;
-
-                // 逐个清标记（Clear 只清了文件，内存里的标记还在）
-                foreach (AppItem a in catalog.Apps) a.Hidden = false;
-
-                Ui.Log("取消隐藏全部: " + n + " 个");
-                current = "";
-                SaveLastCategory();
-                RebuildNav();
-                RenderApps();
-                return n;
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "取消隐藏全部");
-                return 0;
-            }
+            return RestoreAllHidden();
         }
 
         // ========== 「已隐藏的应用」页面需要的接口 ==========
 
+        void RefreshHiddenDisplay()
+        {
+            RefreshNavCountsInPlace();
+            // 应用显示状态不应重建正在浏览的文件库 / 桌面收纳。
+            if (IsDeskTab(current) || current == FilesCategory) { renderedSig = ""; return; }
+            if (searchBox != null && searchBox.Text.Trim().Length > 0)
+            { if (searchResults != null) searchResults.Search(searchBox.Text.Trim()); renderedSig = ""; return; }
+            if (!TryRefreshCurrentTilesInPlace()) RenderApps();
+        }
+
+        internal List<AppHideSuggestion> HideSuggestionSnapshot()
+        {
+            if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+            return AppHideSuggestions.Build(catalog == null ? null : catalog.Apps, settings, hiddenApps);
+        }
+
+        internal int ApplyHideSuggestions(List<AppHideChoice> choices)
+        {
+            if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+            int count = AppHideSuggestions.Apply(catalog == null ? null : catalog.Apps, settings, hiddenApps, choices);
+            if (count > 0)
+            {
+                RefreshHiddenDisplay();
+                Ui.Log("确认建议隐藏: " + count + " 个");
+            }
+            return count;
+        }
+
+        internal void ShowHideSuggestions(Window owner)
+        {
+            try
+            {
+                SuggestedHideDialog preview = new SuggestedHideDialog(owner ?? this, HideSuggestionSnapshot());
+                if (preview.ShowDialog()) ApplyHideSuggestions(preview.Choices());
+            }
+            catch (Exception ex) { Ui.LogError(ex, "建议隐藏预览"); }
+        }
+
         /// <summary>隐藏应用快照（供弹窗显示）。</summary>
         internal List<AppItem> HiddenSnapshot()
         {
-            try { return catalog == null ? new List<AppItem>() : catalog.HiddenItems(); }
+            try { return catalog == null ? new List<AppItem>() : catalog.Apps.FindAll(a => a.Hidden); }
             catch { return new List<AppItem>(); }
         }
 
@@ -808,6 +847,9 @@ namespace Clover
             try
             {
                 if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
+                AppItem computer = FindAppByPath(appPath);
+                if (computer != null && !computer.Hidden && computer.Role == AppRole.Computer)
+                    return HideReason.Computer();
                 return hiddenApps.ReasonOf(appPath);
             }
             catch { return HideReason.Manual(); }
@@ -816,7 +858,7 @@ namespace Clover
         /// <summary>
         /// 恢复一个隐藏项。
         ///
-        /// **例外名单写入时机**：只有该项的原因是「批量隐藏」时才写
+        /// **例外名单写入时机**：原因是「批量 / 建议隐藏」时才写
         /// （`ShowWithException`）；手动隐藏的项走普通 `Show`，不写例外。
         /// </summary>
         internal bool RestoreHidden(AppItem a)
@@ -826,8 +868,10 @@ namespace Clover
                 if (a == null || string.IsNullOrEmpty(a.Path)) return false;
                 if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
 
+                if (!a.Hidden) return false;
+
                 HideReason r = hiddenApps.ReasonOf(a.Path);
-                bool wasBatch = (r != null && r.Type == HideReason.Kind.Batch);
+                bool wasBatch = (r != null && r.RetainOnRestore);
 
                 bool ok = wasBatch
                     ? hiddenApps.ShowWithException(a.Path)
@@ -835,9 +879,9 @@ namespace Clover
 
                 a.Hidden = false;
 
-                Ui.Log("恢复隐藏项: " + a.Name + (wasBatch ? "（批量隐藏，已加入例外名单）" : ""));
+                Ui.Log("恢复隐藏项: " + a.Name + (wasBatch ? "（已加入保留例外）" : ""));
 
-                RefreshCatalogQuiet();
+                RefreshHiddenDisplay();
                 return ok;
             }
             catch (Exception ex)
@@ -858,13 +902,20 @@ namespace Clover
                 List<string> all = hiddenApps.Snapshot();
                 int n = 0;
                 foreach (string p in all)
-                    if (hiddenApps.Show(p)) n++;
+                {
+                    bool changed = hiddenApps.ReasonOf(p).RetainOnRestore
+                        ? hiddenApps.ShowWithException(p) : hiddenApps.Show(p);
+                    if (changed) n++;
+                }
 
                 if (catalog != null)
-                    foreach (AppItem a in catalog.Apps) a.Hidden = false;
+                    foreach (AppItem a in catalog.Apps)
+                    {
+                        a.Hidden = false;
+                    }
 
                 Ui.Log("恢复全部隐藏项: " + n + " 个（例外名单保留）");
-                RefreshCatalogQuiet();
+                RefreshHiddenDisplay();
                 return n;
             }
             catch (Exception ex)
@@ -912,7 +963,7 @@ namespace Clover
                 // 统一入口：打开「整理与隐藏」窗口并定位到标签二
                 OrganizeDialog dlg = new OrganizeDialog(
                     this, baseDir, settings, watcher, this,
-                    delegate { RefreshCatalogQuiet(); },
+                    null,
                     OrganizeDialog.Tab.Hidden);
                 dlg.Show();
             }

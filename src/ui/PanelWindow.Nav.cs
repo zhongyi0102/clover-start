@@ -94,9 +94,6 @@ namespace Clover
 
         int pendingLowCount;
         bool pendingCollapseLow;
-        int pendingPinnedCount;
-        int pendingRecentCount;
-        bool pendingShowCommonSections;
         string pendingQuery = "";
         bool pendingSearching;
         int usageRevision;
@@ -377,11 +374,6 @@ namespace Clover
             foreach (string cat in cats)
             {
                 string c = cat;
-                // 文件与虚拟桌面标签不显示应用数量
-                int count = (c == FilesCategory || IsDeskTab(c)) ? -1
-                          : (c == "常用" ? CommonApps().Count
-                          : (catalog.Apps.Count - catalog.HiddenItems().Count));
-
                 // 显示名
                 string label = DisplayCategoryName(c);
 
@@ -399,6 +391,7 @@ namespace Clover
                 Grid g = new Grid();
                 g.ColumnDefinitions.Add(new ColumnDefinition());
                 g.ColumnDefinitions.Add(new ColumnDefinition());
+                g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 // 左侧竖条已废弃，但保留元素（宽度 0）——
                 // navBars 列表被 UpdateNav 直接索引，删掉会破坏下标对应。
                 g.ColumnDefinitions[0].Width = new GridLength(0);
@@ -417,20 +410,22 @@ namespace Clover
                 name.FontSize = 12;
                 name.Foreground = Ui.Fg;
                 name.VerticalAlignment = VerticalAlignment.Center;
-                name.Margin = new Thickness(0);
+                // 模板不转发 Button.Padding；名称自己留出间距，去掉数字后也不挤成一串。
+                name.Margin = new Thickness(10, 0, 10, 0);
                 name.TextTrimming = TextTrimming.CharacterEllipsis;
                 Grid.SetColumn(name, 1);
                 g.Children.Add(name);
 
                 TextBlock cnt = new TextBlock();
-                cnt.Text = count < 0 ? "" : count.ToString();
-                cnt.Visibility = count < 0 ? Visibility.Collapsed : Visibility.Visible;
+                // 数量统一放在右下角，保留元素仅为了维持既有导航映射。
+                cnt.Text = "";
+                cnt.Visibility = Visibility.Collapsed;
                 cnt.FontFamily = Ui.YaHei;
                 cnt.FontSize = 10.5;
                 cnt.Foreground = Ui.Sub;
                 cnt.VerticalAlignment = VerticalAlignment.Center;
                 cnt.Margin = new Thickness(5, 0, 0, 0);
-                Grid.SetColumn(cnt, 1);
+                Grid.SetColumn(cnt, 2);
                 g.Children.Add(cnt);
 
                 item.Content = g;
@@ -450,6 +445,27 @@ namespace Clover
                     SaveScrollOffset();
                     SwitchCategory(c);
                 };
+                if (IsDeskTab(c))
+                {
+                    DispatcherTimer reveal = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+                    reveal.Tick += delegate
+                    {
+                        reveal.Stop();
+                        SwitchCategory(c);
+                        dragOverPanel = true;
+                    };
+                    item.AllowDrop = true;
+                    item.DragEnter += delegate(object sender, DragEventArgs e)
+                    {
+                        string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+                        if (paths == null || paths.Length == 0 || HasAnyInternalDrag(e)) return;
+                        foreach (string path in paths) if (!DeskImporter.IsFromDesktop(path)) return;
+                        if (!reveal.IsEnabled) reveal.Start();
+                    };
+                    item.DragLeave += delegate { reveal.Stop(); };
+                    item.Drop += delegate { reveal.Stop(); };
+                    item.Unloaded += delegate { reveal.Stop(); };
+                }
                 item.GotKeyboardFocus += delegate
                 {
                     if (current != c) item.Background = Ui.AccentSoft;
@@ -483,10 +499,31 @@ namespace Clover
             }
 
             UpdateNav();
-
-            // 「+」新建标签：排在所有标签最后
-            navStack.Children.Add(MakeAddTabButton());
         }
+
+        /// <summary>
+        /// 保持导航数量隐藏，不销毁并重建整条导航栏。
+        /// 保留既有刷新调用；应用数量只由右下角统计呈现。
+        /// </summary>
+        void RefreshNavCountsInPlace()
+        {
+            try
+            {
+                for (int i = 0; i < navCats.Count && i < navCounts.Count; i++)
+                {
+                    TextBlock countText = navCounts[i];
+                    if (countText == null) continue;
+
+                    countText.Text = "";
+                    countText.Visibility = Visibility.Collapsed;
+                }
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "就地刷新标签数量");
+            }
+        }
+
 
         static string DisplayCategoryName(string category)
         {
@@ -498,6 +535,11 @@ namespace Clover
 
         void UpdateNav()
         {
+            if (rescanAppsButton != null)
+                rescanAppsButton.Visibility = current == FilesCategory || IsDeskTab(current)
+                    ? Visibility.Collapsed : Visibility.Visible;
+            if (refreshFilesButton != null)
+                refreshFilesButton.Visibility = current == FilesCategory ? Visibility.Visible : Visibility.Collapsed;
             for (int i = 0; i < navItems.Count; i++)
             {
                 bool sel = navCats[i] == current;
@@ -528,19 +570,19 @@ namespace Clover
                 {
                     searchName = "筛选文件库";
                     hint = "筛选当前文件来源…";
-                    footer = "文件库 · 浏览多个来源；Delete 移到回收站，F5 刷新";
+                    footer = "文件库 · 双击打开 · Ctrl 多选 · Delete 移到回收站";
                 }
                 else if (IsDeskTab(current))
                 {
                     searchName = "搜索桌面收纳";
                     hint = "搜索桌面收纳中的文件…";
-                    footer = "桌面收纳 · 文件存放在真实目录；可拖入、框选和自由摆放";
+                    footer = "桌面收纳 · 桌面拖入默认移动，Ctrl 复制 · 框选／自由摆放 · Ctrl+Z 撤销摆放";
                 }
                 else
                 {
                     searchName = "搜索应用";
                     hint = "搜索应用（支持拼音 / 首字母）…";
-                    footer = "Esc 收起 · 输入即可搜索应用 · 方向键选择，Enter 启动";
+                    footer = "单击选中 · 双击启动 · 拖动排序 · 方向键选择 · Enter 启动";
                 }
 
                 if (searchHint != null) searchHint.Text = hint;
@@ -587,8 +629,10 @@ namespace Clover
             try
             {
                 string next = cat ?? "";
+                if (DeskTransferPending) { ShowToast("正在转移桌面内容，请完成后再切换页面"); return; }
                 bool wasFiles = (current == FilesCategory);
                 bool willFiles = (next == FilesCategory);
+                if (current != next) SaveScrollOffset();
 
                 // ---- 1. 离开的标签释放状态 ----
                 if (wasFiles && !willFiles && filesView != null)
@@ -606,15 +650,29 @@ namespace Clover
 
                 // ---- 3. 切换 + 渲染 ----
                 current = next;
+                if (contentScroll != null)
+                    contentScroll.HorizontalScrollBarVisibility = IsDeskTab(next)
+                        ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
                 SaveLastCategory();
                 UpdateNav();
                 UpdateContextChrome();
 
-                // 进入文件标签：重置瞬时状态，从干净状态开始
+                // 文件搜索属于文件库自身；返回时恢复，不带入应用或桌面。
                 if (willFiles && filesView != null)
+                {
                     filesView.OnEnter();
+                    if (searchBox != null)
+                    {
+                        searchSuppress = true;
+                        try { searchBox.Text = filesView.FilterQuery; }
+                        finally { searchSuppress = false; }
+                        if (searchHint != null) searchHint.Visibility = searchBox.Text.Length == 0
+                            ? Visibility.Visible : Visibility.Collapsed;
+                    }
+                }
 
                 RenderApps();
+                if (!wasFiles && willFiles && filesView != null) filesView.RestorePageScroll();
             }
             catch (Exception ex)
             {
@@ -666,6 +724,7 @@ namespace Clover
                 // 三者互斥：只显示文件层
                 ShowContentLayer(ContentLayer.Files);
                 if (searchResults != null) searchResults.Clear();
+                if (footerCount != null) footerCount.Text = ""; // 文件数量由文件视图更新，不能沿用应用统计。
 
                 // 首次创建 FilesTabView
                 if (filesView == null && filesPanel != null)
@@ -673,6 +732,7 @@ namespace Clover
                     filesView = new FilesTabView(this, settings, baseDir,
                         filesChipRow, filesExtRow, filesListPanel, filesNotice,
                         filesUndoHost);
+                    filesView.AttachStatus(footerCount);
 
                     // 注入放置提示层（FilesTabView 只拿容器引用，不负责建控件）
                     if (filesDropHint != null) filesView.AttachDropHint(filesDropHint);
@@ -680,6 +740,7 @@ namespace Clover
 
                 if (filesView != null)
                 {
+                    filesView.OnEnter();
                     // 搜索词只传给文件视图做本地过滤
                     string q = searchBox == null ? "" : searchBox.Text.Trim();
                     filesView.ApplyFilter(q);
@@ -724,11 +785,9 @@ namespace Clover
                     }
                 }
 
-                // 商店应用没有真实文件路径，不做「失效」判定
-                string target = a.Path;
-                if (!string.IsNullOrEmpty(a.Aumid)) target = null;
-
-                return LowValueRules.Explain(a.Name, target, LowValueRules.ExeNameOf(target));
+                return a.Role == AppRole.LowValue
+                    ? new LowValueVerdict(true, LowValueReason.ManualMarked, a.RoleDetail ?? "低价值")
+                    : LowValueVerdict.NotLow;
             }
             catch { return LowValueVerdict.NotLow; }
         }
@@ -900,7 +959,7 @@ namespace Clover
         /// <summary>测试用：文件列表行数。</summary>
         internal int TestFilesRowCount()
         {
-            try { return filesListPanel == null ? 0 : filesListPanel.Children.Count; }
+            try { return filesView == null ? 0 : filesView.TestRowCount(); }
             catch { return 0; }
         }
 
@@ -1070,10 +1129,6 @@ namespace Clover
         {
             /// <summary>不显示任何常用相关项。</summary>
             None = 0,
-            /// <summary>「添加到常用」——固定到常用页。</summary>
-            Add,
-            /// <summary>「取消手动固定」——只取消固定，保留使用记录。</summary>
-            Unpin,
             /// <summary>「从最近常用移除」——保留历史，直到下次真实启动前不再显示。</summary>
             DismissRecent
         }

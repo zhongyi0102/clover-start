@@ -10,8 +10,8 @@ namespace Clover
     /// <summary>
     /// 监听开始菜单与桌面：
     /// 1) 新软件安装（开始菜单出现 .lnk）-> 自动重新扫描并刷新面板
-    /// 2) 桌面上出现/存在的快捷方式 -> 自动移到 desktop-backup 备份文件夹（可恢复），
-    ///    并把快捷方式指向的程序登记到 manual-apps.json，保证仍能在面板里启动
+    /// 2) 应用快捷方式先保存完整入口并登记到面板，确认交接成功后才移到回收站。
+    ///    文件/文件夹快捷方式、网页链接与未知入口不自动清理。
     /// </summary>
     class AppWatcher
     {
@@ -33,6 +33,40 @@ namespace Clover
 
         /// <summary>桌面保持无快捷方式。懒创建（开关打开时才需要）。</summary>
         DesktopCleaner desktopCleaner;
+        DesktopWorkspace desktopWorkspace;
+        public DesktopWorkspace DesktopWorkspace { get { return EnsureDesktopWorkspace(); } }
+
+        DesktopWorkspace EnsureDesktopWorkspace()
+        {
+            if (desktopWorkspace != null) return desktopWorkspace;
+            desktopCleaner = desktopCleaner ?? new DesktopCleaner(baseDir, settings);
+            desktopCleaner.EnsureApplicationEntry = PreserveDesktopApplication;
+            desktopWorkspace = new DesktopWorkspace(settings, delegate
+            {
+                VirtualDesks desks = new VirtualDesks(baseDir);
+                desks.Load();
+                if (string.IsNullOrEmpty(desks.Root)) desks.Root = VirtualDesks.DefaultRoot(baseDir);
+                desks.EnsureDesk(PanelWindow.VirtualDesktopCategory);
+                return desks.FolderOf(PanelWindow.VirtualDesktopCategory);
+            }, IsPanelApplication, desktopCleaner.CleanManual);
+            desktopWorkspace.OnCompleted = delegate(DesktopWorkspace.Result result)
+            {
+                if (panel != null) dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (panel != null) panel.DesktopWorkspaceUpdated(result);
+                }));
+            };
+            return desktopWorkspace;
+        }
+
+        internal bool IsPanelApplication(string path)
+        {
+            string identity = DesktopContentRules.ApplicationIdentity(path);
+            if (string.IsNullOrEmpty(identity)) return false;
+            foreach (AppItem app in Catalog.Load(baseDir).Apps)
+                if (app != null && string.Equals(identity, DesktopContentRules.ApplicationIdentity(app.Path), StringComparison.Ordinal)) return true;
+            return false;
+        }
 
         /// <summary>桌面清理器（可能为 null）。</summary>
         public DesktopCleaner DesktopCleaner
@@ -120,7 +154,7 @@ namespace Clover
                 Watch(d, true, true);
 
             // ---------- 桌面保持无快捷方式 ----------
-            StartDesktopCleanIfEnabled();
+            if (settings.DesktopKeepEmptyEnabled) EnsureDesktopWorkspace().Start();
         }
 
 
@@ -170,6 +204,7 @@ namespace Clover
                 if (desktopCleaner == null)
                 {
                     desktopCleaner = new DesktopCleaner(baseDir, settings);
+                    desktopCleaner.EnsureApplicationEntry = PreserveDesktopApplication;
 
                     // 移除后弹轻提示（面板负责显示「保留 / 撤销」）
                     desktopCleaner.OnRemoved = NotifyDesktopRemoved;
@@ -197,16 +232,12 @@ namespace Clover
         {
             try
             {
-                if (desktopCleaner == null)
-                {
-                    desktopCleaner = new DesktopCleaner(baseDir, settings);
-
-                    // 移除后弹轻提示（面板负责显示「保留 / 撤销」）
-                    desktopCleaner.OnRemoved = NotifyDesktopRemoved;
-                }
-
-                if (enabled) desktopCleaner.OnEnabled();
-                else desktopCleaner.OnDisabled();
+                settings.DesktopKeepEmptyEnabled = enabled;
+                settings.DesktopCleanEnabled = false;
+                settings.Save();
+                DesktopWorkspace workspace = EnsureDesktopWorkspace();
+                if (desktopCleaner != null) desktopCleaner.Stop();
+                if (enabled) workspace.Start(); else workspace.Stop();
             }
             catch (Exception ex) { Ui.LogError(ex, "切换桌面清理开关"); }
         }
@@ -229,6 +260,7 @@ namespace Clover
             watchers.Clear();
 
             try { if (desktopCleaner != null) desktopCleaner.Stop(); } catch { }
+            try { if (desktopWorkspace != null) desktopWorkspace.Stop(); } catch { }
         }
 
         void OnChange(bool isStartMenu)
@@ -337,6 +369,80 @@ namespace Clover
                 }));
             }
             catch (Exception ex) { Ui.LogError(ex, "调度桌面移除提示"); }
+        }
+
+        readonly object desktopEntryGate = new object();
+        internal bool PreserveDesktopApplication(string source)
+        {
+            try
+            {
+                lock (desktopEntryGate)
+                {
+                    if (!IsPanelApplication(source)) return false;
+                    string identity = DesktopContentRules.ApplicationIdentity(source);
+                    foreach (AppItem app in Catalog.Load(baseDir).Apps)
+                        if (!string.Equals(app.Path, source, StringComparison.OrdinalIgnoreCase)
+                            && string.Equals(identity, DesktopContentRules.ApplicationIdentity(app.Path), StringComparison.Ordinal))
+                            return true; // 已有独立可用入口，不再登记重复应用。
+                    string fingerprint = DesktopContentRules.Fingerprint(source);
+                    if (string.IsNullOrEmpty(fingerprint)) return false;
+                    // 保存 lnk 本身，保留启动参数、工作目录与图标。
+                    string folder = Path.Combine(baseDir, "config", "desktop-app-entries");
+                    Directory.CreateDirectory(folder);
+                    string target = Path.Combine(folder, fingerprint + Path.GetExtension(source));
+                    if (!File.Exists(target) && !VerifiedFileMove.Copy(source, target).Ok) return false;
+                    if (DesktopContentRules.Fingerprint(target) != fingerprint
+                        || DesktopContentRules.Fingerprint(source) != fingerprint) return false;
+                    Catalog existing = Catalog.Load(baseDir);
+                    if (existing.ContainsPath(target)) return true;
+                    string manual = Path.Combine(baseDir, "config", "manual-apps.json");
+                    System.Web.Script.Serialization.JavaScriptSerializer serializer = new System.Web.Script.Serialization.JavaScriptSerializer();
+                    string old = JsonIO.Read(manual);
+                    Dictionary<string, object> data = string.IsNullOrEmpty(old)
+                        ? new Dictionary<string, object>() : serializer.Deserialize<Dictionary<string, object>>(old);
+                    List<object> apps = new List<object>();
+                    object array;
+                    if (data.TryGetValue("apps", out array))
+                        foreach (object item in JsonIO.AsArray(array)) apps.Add(item);
+                    bool registered = false;
+                    foreach (object entry in apps)
+                    {
+                        Dictionary<string, object> app = entry as Dictionary<string, object>;
+                        object appPath;
+                        if (app != null && app.TryGetValue("path", out appPath)
+                            && string.Equals(Convert.ToString(appPath), target, StringComparison.OrdinalIgnoreCase))
+                            registered = true;
+                    }
+                    if (!registered)
+                    {
+                        string appName = Path.GetFileNameWithoutExtension(source);
+                        if (existing.ContainsName(appName)) appName += " · 桌面入口 " + fingerprint.Substring(0, 6);
+                        apps.Add(new Dictionary<string, object> {
+                            { "name", appName }, { "path", target }, { "category", "其他" }
+                        });
+                    }
+                    data["apps"] = apps;
+                    if (!JsonIO.WriteAtomic(manual, serializer.Serialize(data)).Success) return false;
+                    string saved = JsonIO.Read(manual);
+                    if (string.IsNullOrEmpty(saved) || saved.IndexOf(Path.GetFileName(target), StringComparison.Ordinal) < 0)
+                        return false;
+                    AppItem original = existing.Apps.Find(a => string.Equals(a.Path, source, StringComparison.OrdinalIgnoreCase));
+                    if (original != null)
+                    {
+                        AppClassification classification = new AppClassification(baseDir);
+                        HiddenApps hidden = HiddenApps.Load(baseDir);
+                        classification.Apply(existing.Apps, settings, hidden);
+                        classification.Set(new AppItem { Path = target }, original.Role);
+                        if (hidden.IsHidden(source)) hidden.Hide(target, hidden.ReasonOf(source));
+                    }
+                    Catalog check = Catalog.Load(baseDir);
+                    if (!check.ContainsPath(target)) return false;
+                    CatalogPreloader.Invalidate();
+                    if (panel != null) dispatcher.BeginInvoke(new Action(delegate { panel.RefreshCatalogQuiet(); }));
+                    return true;
+                }
+            }
+            catch (Exception ex) { Log.Warn("桌面应用入口未交接，保留原处：" + ex.Message); return false; }
         }
 
         /// <summary>

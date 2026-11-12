@@ -114,6 +114,10 @@ $ico = Join-Path $root 'res\clover.ico'
 $png = Join-Path $root 'res\clover.png'
 $resourceArgs = @()
 if (Test-Path $png) { $resourceArgs += ('/resource:' + $png + ',CloverStart.clover.png') }
+$colorLicense = Join-Path $root 'licenses\Apache-2.0.txt'
+$thirdPartyNotices = Join-Path $root 'THIRD-PARTY-NOTICES.md'
+if (Test-Path $colorLicense) { $resourceArgs += ('/resource:' + $colorLicense + ',CloverStart.MaterialColors.License.txt') }
+if (Test-Path $thirdPartyNotices) { $resourceArgs += ('/resource:' + $thirdPartyNotices + ',CloverStart.ThirdPartyNotices.md') }
 
 $sources = $coreSources + $uiSources
 $cscArgs = @('/nologo', '/target:winexe', '/codepage:65001', '/optimize+',

@@ -10,6 +10,7 @@ namespace Clover
     {
         public int Count;
         public long LastTicks;
+        public List<long> RecentTicks = new List<long>();
     }
 
     /// <summary>记录每个应用（按快捷方式/程序路径）的启动次数与最近使用时间，用于排序。</summary>
@@ -41,6 +42,13 @@ namespace Clover
                         object v;
                         if (m.TryGetValue("count", out v) && v != null) e.Count = Convert.ToInt32(v);
                         if (m.TryGetValue("last", out v) && v != null) e.LastTicks = Convert.ToInt64(v);
+                        if (m.TryGetValue("recent", out v) && v is System.Collections.IEnumerable)
+                        {
+                            foreach (object tick in (System.Collections.IEnumerable)v)
+                                if (tick != null) e.RecentTicks.Add(Convert.ToInt64(tick));
+                        }
+                        // 老记录只有累计次数与最后启动时间，不能把历史次数当成近期频率。
+                        else if (e.LastTicks > 0) e.RecentTicks.Add(e.LastTicks);
                         s.map[kv.Key] = e;
                     }
                 }
@@ -51,6 +59,11 @@ namespace Clover
 
         public void Record(string appPath)
         {
+            Record(appPath, DateTime.UtcNow.Ticks);
+        }
+
+        internal void Record(string appPath, long nowTicks)
+        {
             if (string.IsNullOrEmpty(appPath)) return;
             UsageEntry e;
             if (!map.TryGetValue(appPath, out e))
@@ -59,8 +72,33 @@ namespace Clover
                 map[appPath] = e;
             }
             e.Count++;
-            e.LastTicks = DateTime.UtcNow.Ticks;
+            e.LastTicks = nowTicks;
+            e.RecentTicks.RemoveAll(t => t <= nowTicks - RecentWindowTicks || t > nowTicks);
+            e.RecentTicks.Add(nowTicks);
             Save();
+        }
+
+        internal const long RecentWindowTicks = 3 * TimeSpan.TicksPerDay;
+
+        public int GetRecentCount(string appPath, long nowTicks)
+        {
+            UsageEntry e;
+            if (string.IsNullOrEmpty(appPath) || !map.TryGetValue(appPath, out e)) return 0;
+            int count = 0;
+            foreach (long tick in e.RecentTicks)
+                if (tick > nowTicks - RecentWindowTicks && tick <= nowTicks) count++;
+            return count;
+        }
+
+        public int GetRecentDays(string appPath, long nowTicks)
+        {
+            UsageEntry e;
+            if (string.IsNullOrEmpty(appPath) || !map.TryGetValue(appPath, out e)) return 0;
+            HashSet<long> days = new HashSet<long>();
+            foreach (long tick in e.RecentTicks)
+                if (tick > nowTicks - RecentWindowTicks && tick <= nowTicks)
+                    days.Add((nowTicks - tick) / TimeSpan.TicksPerDay);
+            return days.Count;
         }
 
         public void Remove(string appPath)
@@ -88,11 +126,13 @@ namespace Clover
             try
             {
                 Dictionary<string, object> apps = new Dictionary<string, object>();
+                long nowTicks = DateTime.UtcNow.Ticks;
                 foreach (KeyValuePair<string, UsageEntry> kv in map)
                 {
                     Dictionary<string, object> m = new Dictionary<string, object>();
                     m["count"] = kv.Value.Count;
                     m["last"] = kv.Value.LastTicks;
+                    m["recent"] = kv.Value.RecentTicks.FindAll(t => t > nowTicks - RecentWindowTicks && t <= nowTicks);
                     apps[kv.Key] = m;
                 }
                 Dictionary<string, object> root = new Dictionary<string, object>();

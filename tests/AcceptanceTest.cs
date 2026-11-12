@@ -280,7 +280,7 @@ namespace Clover
             Verify("★隐藏任务列表保持休眠", delegate
             {
                 return panel.TestHiddenTaskListDormant()
-                    ? "ok（未创建不可见任务列表，定时器只刷新运行圆点）"
+                    ? "ok（未创建不可见任务列表，也未启动后台窗口枚举）"
                     : "不可见任务列表仍创建了控件树";
             });
 
@@ -470,7 +470,11 @@ namespace Clover
                     panel.TestSwitchCategory("常用");
                     if (panel.TestSearchHint().IndexOf("应用", StringComparison.Ordinal) < 0)
                         return "常用页搜索提示不含“应用”：" + panel.TestSearchHint();
-                    if (panel.TestFooterHint().IndexOf("Enter 启动", StringComparison.Ordinal) < 0)
+                    string footer = panel.TestFooterHint();
+                    if (footer.IndexOf("单击选中", StringComparison.Ordinal) < 0
+                        || footer.IndexOf("双击启动", StringComparison.Ordinal) < 0
+                        || footer.IndexOf("拖动排序", StringComparison.Ordinal) < 0
+                        || footer.IndexOf("Enter 启动", StringComparison.Ordinal) < 0)
                         return "常用页底部提示错误：" + panel.TestFooterHint();
 
                     panel.TestSwitchCategory("文件");
@@ -485,7 +489,8 @@ namespace Clover
                     if (panel.TestSearchHint().IndexOf("桌面收纳", StringComparison.Ordinal) < 0)
                         return "桌面收纳搜索提示错误：" + panel.TestSearchHint();
                     if (!panel.TestDeskSurfaceCreated()) return "首次进入后仍未创建桌面收纳表面";
-                    if (panel.TestFooterHint().IndexOf("真实目录", StringComparison.Ordinal) < 0)
+                    if (panel.TestFooterHint().IndexOf("默认移动", StringComparison.Ordinal) < 0
+                        || panel.TestFooterHint().IndexOf("Ctrl", StringComparison.Ordinal) < 0)
                         return "桌面收纳底部提示错误：" + panel.TestFooterHint();
 
                     panel.TestSwitchCategory("常用");
@@ -526,7 +531,7 @@ namespace Clover
                 }
             });
 
-            Verify("★桌面收纳保留旧操作并增加智能整理入口，不显示撤销", delegate
+            Verify("★桌面收纳顶部收纳/更多，设置与全部放回归更多", delegate
             {
                 try
                 {
@@ -536,13 +541,14 @@ namespace Clover
                     List<Button> buttons = panel.TestDeskToolButtons();
                     panel.TestSwitchCategory("常用");
 
-                    if (labels.Count != 4)
-                        return "应有 4 个操作，实际 " + labels.Count + "：" + string.Join(" / ", labels.ToArray());
+                    if (labels.Count != 2)
+                        return "应有 2 个操作，实际 " + labels.Count + "：" + string.Join(" / ", labels.ToArray());
                     if (buttons.Count != labels.Count)
                         return "桌面操作没有全部使用原生按钮：" + buttons.Count + " / " + labels.Count;
-                    if (labels[0] != "收纳桌面" || labels[1] != "放回桌面"
-                        || labels[2] != "智能整理…" || labels[3] != "整理规则…")
+                    if (labels[0] != "收纳桌面" || labels[1] != "更多")
                         return "操作顺序或文字不对：" + string.Join(" / ", labels.ToArray());
+                    if (buttons[1].ContextMenu == null || buttons[1].ContextMenu.Items.Count != 3)
+                        return "桌面设置与全部放回没有归到更多";
                     for (int i = 0; i < labels.Count; i++)
                     {
                         string label = labels[i];
@@ -994,7 +1000,11 @@ namespace Clover
 
                     panel.TestAddFileFolder(tmp);
                     panel.TestSwitchCategory("文件");
+                    // 文件库现在保留上次搜索（前面的用例为 abc）；本用例要检查无筛选的来源。
+                    panel.TestSetSearchText("");
                     WaitForDispatcher(600);
+                    for (int i = 0; i < 40 && panel.TestFilesNotice().StartsWith("正在读取"); i++)
+                        WaitForDispatcher(100);
 
                     int rows = panel.TestFilesRowCount();
                     int chips = panel.TestFilesChipCount();
@@ -1147,6 +1157,112 @@ namespace Clover
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
             });
 
+            Verify("★标记/取消低价值复用磁贴且不整页刷新", delegate
+            {
+                bool originalCollapse = false;
+                string path = null;
+                try
+                {
+                    originalCollapse = Settings.Load(root).CollapseLowValue;
+                    panel.TestSwitchCategory("");
+                    panel.TestSetCollapseLowValue(false);
+                    if (!WaitUntilDeferredRenderComplete(panel, 5000))
+                        return "磁贴没有在 5 秒内完成渲染";
+
+                    path = panel.TestFirstNormalRenderedPath();
+                    int beforeIndex = panel.TestRenderedIndexOfPath(path);
+                    List<Border> before = panel.TestRenderedTileSnapshot();
+                    if (beforeIndex < 0 || beforeIndex >= before.Count) return "找不到可测试的正常磁贴";
+                    Border target = before[beforeIndex];
+                    int lowBefore = panel.TestLowValueCount();
+
+                    if (!panel.TestSetLowValueByPath(path, true)) return "标记后状态没有生效";
+                    List<Border> marked = panel.TestRenderedTileSnapshot();
+                    if (marked.Count != before.Count) return "展开态标记后磁贴数量变化";
+                    if (!marked.Contains(target)) return "被标记磁贴被重建";
+                    foreach (Border tile in before)
+                        if (!marked.Contains(tile)) return "标记后其它磁贴被重建";
+                    if (Math.Abs(target.Opacity - (Ui.HasAutomaticPalette ? 1.0 : 0.45)) > 0.01)
+                        return "原磁贴低价值显示不符合当前外观模式";
+                    if (panel.TestLowValueCount() != lowBefore + 1) return "低价值计数没有增加";
+                    if (!panel.TestTileMapConsistent()) return "标记后磁贴映射不一致";
+
+                    if (!panel.TestSetLowValueByPath(path, false)) return "取消标记后状态没有恢复";
+                    List<Border> restored = panel.TestRenderedTileSnapshot();
+                    if (!restored.Contains(target)) return "取消标记时磁贴被重建";
+                    if (Math.Abs(target.Opacity - 1.0) > 0.01) return "原磁贴没有就地恢复不透明";
+                    if (panel.TestLowValueCount() != lowBefore) return "低价值计数没有恢复";
+                    if (!panel.TestTileMapConsistent()) return "取消标记后磁贴映射不一致";
+                    return "ok（全部磁贴对象复用；仅就地换位、变淡与更新计数）";
+                }
+                catch (Exception ex) { return "抛异常: " + ex.Message; }
+                finally
+                {
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(path)) panel.TestSetLowValueByPath(path, false);
+                        panel.TestSetCollapseLowValue(originalCollapse);
+                        panel.TestSwitchCategory("");
+                    }
+                    catch { }
+                }
+            });
+
+            Verify("★旧人工排序中的正常应用不会掉进低价值，折叠不误藏", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    WaitUntilDeferredRenderComplete(panel, 5000);
+                    panel.TestSetCollapseLowValue(false);
+                    panel.TestSetLowValueByPath(exeA, true);
+                    panel.TestOrder(new List<string> { exeA, exeB, exeC });
+                    if (!panel.TestLowValueAtEnd()) return "正常应用仍排在低价值后面";
+                    if (panel.TestRenderedIndexOfPath(exeB) < 0) return "正常应用丢失";
+                    panel.TestSetCollapseLowValue(true);
+                    if (panel.TestRenderedIndexOfPath(exeA) >= 0) return "收起后仍渲染低价值";
+                    if (panel.TestRenderedIndexOfPath(exeB) < 0 || panel.TestRenderedIndexOfPath(exeC) < 0)
+                        return "收起误藏正常应用";
+                    return "ok（真实人工混排、真实收起路径）";
+                }
+                finally
+                {
+                    panel.TestSetLowValueByPath(exeA, false);
+                    panel.TestSetCollapseLowValue(false);
+                    panel.TestOrder(new List<string>());
+                }
+            });
+
+            Verify("★三类应用重新分类，电脑类不平铺，其他图标原地复用", delegate
+            {
+                try
+                {
+                    panel.TestSwitchCategory("");
+                    WaitUntilDeferredRenderComplete(panel, 5000);
+                    int low = panel.TestLowValueCount();
+                    int before = panel.TestRenderedIndexOfPath(exeB);
+                    Border tile = panel.TestRenderedTileSnapshot()[before];
+                    panel.TestClassification(exeB, AppRole.LowValue);
+                    if (panel.TestClassificationOf(exeB) != AppRole.LowValue) return "低价值分类未生效";
+                    if (panel.TestLowValueCount() != low + 1) return "低价值数量未增加";
+                    if (!ReferenceEquals(tile, panel.TestRenderedTileSnapshot()[panel.TestRenderedIndexOfPath(exeB)]))
+                        return "分类重建了应用图标";
+                    panel.TestClassification(exeB, AppRole.Computer);
+                    if (panel.TestRenderedIndexOfPath(exeB) >= 0) return "电脑类仍然平铺";
+                    if (panel.TestRenderedIndexOfPath(exeA) < 0) return "误藏主动使用应用";
+                    if (panel.TestAuxiliaryHeaderCount() != 0) return "旧辅助区域仍然存在";
+                    panel.TestCommitDrag(0, 3);
+                    if (panel.TestAuxiliaryHeaderCount() != 0) return "拖动后旧辅助区域复活";
+                    panel.TestClassification(exeB, AppRole.User);
+                    panel.UpdateLayout();
+                    RenderVisualPng(panel, Path.Combine(Path.GetDirectoryName(reportPath), "acceptance-app-roles.png"));
+                    panel.TestRole(exeB, false);
+                    if (panel.TestClassificationOf(exeB) != AppRole.User) return "用户类覆盖未生效";
+                    return "ok（三类互斥，电脑类仅搜索，分类原地更新）";
+                }
+                finally { panel.TestCollapseAuxiliary(false); panel.TestRole(exeB, false); panel.TestOrder(new List<string>()); }
+            });
+
             Verify("★拖动预览只移动插入线且磁贴保持静止", delegate
             {
                 try
@@ -1160,6 +1276,8 @@ namespace Clover
                     // 从首项跨到下一行，覆盖旧实现最卡的“整行让位动画”路径。
                     if (!panel.TestDragPreviewKeepsTilesStationary(0, 10))
                         return "跨行预览改变了磁贴位移，或插入位置不正确";
+                    if (panel.TestDragHit(10, 10, 0.25, 0.5) != 10)
+                        return "跨行落点受前一行横向距离干扰";
                     return "ok（跨行时仅更新插入线；周围磁贴无位移/动画）";
                 }
                 catch (Exception ex) { return "抛异常: " + ex.Message; }
@@ -1259,7 +1377,7 @@ namespace Clover
             // ---------- 5b. 商店应用固定后必须真实显示在「常用」首位 ----------
             // 这里走 PanelWindow 的生产方法与真实渲染列表，不复制合并/排序逻辑。
             // 夹具路径就是用户截图中的 shell:AppsFolder 形态，专门覆盖 AUMID 场景。
-            Verify("★商店应用添加到常用后立即显示在首位", delegate
+            Verify("★商店用户应用启动后自动进入常用", delegate
             {
                 bool actionOk = false;
                 bool saved = false;
@@ -1267,26 +1385,23 @@ namespace Clover
                 try
                 {
                     panel.TestSwitchCategory("");
-                    actionOk = panel.TestSetPinnedCommon(storePath, true);
+                    panel.TestRecordAppUsage(storePath);
+                    actionOk = true;
                     panel.TestSwitchCategory("常用");
                     WaitForDispatcher(200);
 
                     first = panel.TestFirstRenderedPath();
-                    Settings reloaded = Settings.Load(root);
-                    saved = reloaded.PinnedCommon.Exists(delegate(string p)
-                    {
-                        return string.Equals(p, storePath, StringComparison.OrdinalIgnoreCase);
-                    });
+                    saved = UsageStore.Load(root).GetCount(storePath) > 0;
                 }
                 finally
                 {
                     // 临时夹具清干净，避免影响后面的「常用为空」验收。
-                    panel.TestSetPinnedCommon(storePath, false);
+                    panel.TestDismissCommon(storePath);
                     panel.TestSwitchCategory("");
                 }
 
-                if (!actionOk) return "生产固定方法没有成功";
-                if (!saved) return "settings.json 没有保存商店应用路径";
+                if (!actionOk) return "启动记录方法没有成功";
+                if (!saved) return "usage.json 没有保存商店应用启动";
                 if (!string.Equals(first, storePath, StringComparison.OrdinalIgnoreCase))
                     return "常用首项不是新固定应用，实际: " + (first ?? "<null>");
                 return "ok（已保存并渲染在第 1 位）";
@@ -1324,7 +1439,7 @@ namespace Clover
 
             // ---------- 6b. 最窄窗口下的常用分组 + 搜索排名视觉证据 ----------
             // 使用独立子目录，既不改本验收窗口的数据，也不接触用户真实配置。
-            Verify("★最窄窗口常用分组与搜索首项视觉证据", delegate
+            Verify("★最窄窗口统一常用排序与搜索首项视觉证据", delegate
             {
                 PanelWindow visual = null;
                 try
@@ -1349,9 +1464,8 @@ namespace Clover
                     Settings visualSettings = Settings.Load(visualRoot);
                     visualSettings.Theme = "light";
                     visualSettings.GlassOpacity = 0;
+                    visualSettings.AutoAppearance = false;
                     visualSettings.ShowFilesTab = true;
-                    visualSettings.PinnedCommon.Add(exeB);
-                    visualSettings.PinnedCommon.Add(exeA);
                     visualSettings.Save();
 
                     UsageStore visualUsage = UsageStore.Load(visualRoot);
@@ -1370,30 +1484,25 @@ namespace Clover
                     visual.UpdateLayout();
 
                     List<Border> borders = FindAll<Border>(visual);
-                    Border pinnedHeader = null;
-                    Border recentHeader = null;
+                    Border commonHeader = null;
                     foreach (Border b in borders)
                     {
                         string n = AutomationProperties.GetName(b) ?? "";
-                        if (n.StartsWith("手动固定，", StringComparison.Ordinal)) pinnedHeader = b;
-                        if (n.StartsWith("最近常用，", StringComparison.Ordinal)) recentHeader = b;
+                        if (n.StartsWith("手动固定，", StringComparison.Ordinal) || n.StartsWith("最近常用，", StringComparison.Ordinal))
+                            return "统一常用仍存在旧分组";
+                        if (n.StartsWith("常用，", StringComparison.Ordinal)) commonHeader = b;
                     }
-                    if (pinnedHeader == null) return "最窄窗口缺少“手动固定”分组标题";
-                    if (recentHeader == null) return "最窄窗口缺少“最近常用”分组标题";
-                    if (pinnedHeader.ActualWidth > visual.ActualWidth + 0.5
-                        || recentHeader.ActualWidth > visual.ActualWidth + 0.5)
+                    if (commonHeader == null) return "最窄窗口缺少统一常用标题";
+                    if (commonHeader.ActualWidth > visual.ActualWidth + 0.5)
                         return "常用分组标题横向溢出主面板";
 
-                    bool pinnedHintTrims = false;
                     bool recentHintTrims = false;
                     foreach (TextBlock t in FindAll<TextBlock>(visual))
                     {
-                        if (t.Text == "固定项始终保留，可拖动调整组内顺序")
-                            pinnedHintTrims = t.TextTrimming == TextTrimming.CharacterEllipsis;
-                        if (t.Text == "按使用频率与最近启动时间排列")
+                        if (t.Text == "自动排序 · 3 天未使用自动移除")
                             recentHintTrims = t.TextTrimming == TextTrimming.CharacterEllipsis;
                     }
-                    if (!pinnedHintTrims || !recentHintTrims)
+                    if (!recentHintTrims)
                         return "分组说明未启用窄窗口省略策略";
 
                     string evidenceDir = string.IsNullOrEmpty(reportPath)
@@ -1431,7 +1540,7 @@ namespace Clover
                     bool hasInlineSource = false;
                     foreach (TextBlock t in FindAll<TextBlock>(visual))
                     {
-                        if ((t.Text ?? "").StartsWith("已安装 · ", StringComparison.Ordinal))
+                        if ((t.Text ?? "").Contains("已安装 · ") && (t.Text ?? "").Contains("用户用的"))
                         {
                             hasInlineSource = true;
                             break;
@@ -1527,6 +1636,20 @@ namespace Clover
             });
 
             // ---------- 10. ★回归：上次分类已消失时必须回退，不能停在空分类 ----------
+            Verify("★隐藏应用不从应用搜索或系统补充结果重新出现", delegate
+            {
+                try
+                {
+                    CatalogPreloader.Invalidate();
+                    panel.RefreshCatalogQuiet();
+                    panel.TestSetSearchText("BetaApp");
+                    WaitForDispatcher(1200);
+                    if (!panel.TestSearchCompleted()) return "搜索未完成";
+                    if (panel.TestSearchResultCount() != 0) return "隐藏应用重新出现在搜索里";
+                    return "ok（真实隐藏数据与异步搜索路径）";
+                }
+                finally { panel.TestSetSearchText(""); WaitForDispatcher(150); }
+            });
             // 这条对应一个真实 bug：取消隐藏全部后重启，程序会停在已不存在的
             // 「隐藏的项目」上，面板一片空白。
             //
@@ -1683,7 +1806,6 @@ namespace Clover
                     if (Math.Abs(r - Ui.R.Md) < 0.1) continue;  // 12
                     if (Math.Abs(r - Ui.R.Lg) < 0.1) continue;  // 16
                     if (Math.Abs(r - 2) < 0.1) continue;        // 2 = 1px 细条（选中条/分隔）
-                    if (Math.Abs(r - 4) < 0.1) continue;        // 4 = 8px 小圆点（正圆）
                     double h = b.Height;
                     if (double.IsNaN(h) || h <= 0) h = b.ActualHeight;
                     if (h > 0 && Math.Abs(r - h / 2) < 0.6) continue; // 胶囊（含 Button 模板边框）
@@ -1691,7 +1813,7 @@ namespace Clover
                 }
                 if (bad.Count > 0)
                     return "发现不在体系内的圆角: " + string.Join(" / ", bad.ToArray());
-                return string.Format("ok（档位 {0:N0}/{1:N0}/{2:N0} + 细条 + 圆点 + 胶囊）",
+                return string.Format("ok（档位 {0:N0}/{1:N0}/{2:N0} + 细条 + 胶囊）",
                     Ui.R.Sm, Ui.R.Md, Ui.R.Lg);
             });
 

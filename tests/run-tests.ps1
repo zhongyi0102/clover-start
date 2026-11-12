@@ -63,14 +63,20 @@ $script:executed = 0
 $script:startedAt = Get-Date
 $script:results = @()
 $script:desktopSuites = @(
-    'CommonPinTest', 'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest',
+    'CommonPinTest', 'FilesLibraryUiTest', 'DesktopWorkspaceTest', 'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest', 'AutoAppearanceTest',
     'IconTest', 'FullscreenTest', 'TaskbarCreatedTest', 'TaskbarStabilityTest',
     'TaskbarAccessibilityTest', 'ActiveRowTest',
     'MenuStructureTest', 'OrganizeShellTest', 'DeskRootDialogTest', 'DropHintTest',
-    'WindowPosTest', 'BackgroundStoreTest', 'WallpaperEngineTest'
+    'WindowPosTest', 'BackgroundStoreTest', 'WallpaperEngineTest', 'DesktopInteractionTest', 'SuggestedHideUiTest'
 )
 
 function Invoke-Suite($name, $refs, $sources, $module = $null) {
+    if (-not $module -and @($sources | Where-Object {
+        [System.IO.Path]::GetFileName($_) -in @('Catalog.cs', 'NativeScanner.cs', 'DropSpec.cs', 'DeskCollector.cs', 'DeskImporter.cs', 'DesktopCleaner.cs')
+    }).Count -gt 0) {
+        $sources = @($sources) + @((Join-Path $coreDir 'DesktopContentRules.cs'))
+        $sources = @($sources | Select-Object -Unique)
+    }
     if ($CoreOnly -and $script:desktopSuites -contains $name) {
         Write-Host "===== $name（CoreOnly 跳过）=====" -ForegroundColor DarkGray
         return
@@ -214,14 +220,9 @@ Invoke-Suite 'ScanChainTest' ($baseRefs + $webRef) `
         (Join-Path $testDir 'ScanChainTest.cs')
     ))
 
-# 运行状态判定：必须是精确路径匹配（弱匹配曾把 7 个 Python 应用误标为运行中）
-Invoke-Suite 'RunningAppsTest' ($baseRefs + $webRef) `
-    (@(
-        (Join-Path $coreDir 'RunningApps.cs'),
-          (Join-Path $coreDir 'AppPaths.cs'),
-        (Join-Path $coreDir 'JsonIO.cs'),
-        (Join-Path $testDir 'RunningAppsTest.cs')
-    ))
+# 启动请求短时去重：失败不冷却、同应用拦截、不同应用互不影响
+Invoke-Suite 'LaunchThrottleTest' $baseRefs `
+    (@((Join-Path $coreDir 'LaunchThrottle.cs'), (Join-Path $testDir 'LaunchThrottleTest.cs')))
 
 Invoke-Suite 'PinyinTest' $baseRefs `
     @((Join-Path $coreDir 'Pinyin.cs'), (Join-Path $coreDir 'PinyinData.cs'), (Join-Path $testDir 'PinyinTest.cs'))
@@ -319,6 +320,10 @@ Invoke-Suite 'DesktopKeepTest' $baseRefs `
 # 隐藏项数据层 v2：原因 / 例外名单 / 向后兼容
 Invoke-Suite 'HiddenAppsV2Test' $baseRefs `
     (@((Join-Path $coreDir 'HiddenApps.cs'), (Join-Path $coreDir 'HideReason.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $coreDir 'Log.cs'), (Join-Path $testDir 'HiddenAppsV2Test.cs')))
+Invoke-Suite 'AppHideSuggestionsTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $coreDir 'AppHideSuggestions.cs'), (Join-Path $testDir 'AppHideSuggestionsTest.cs')))
+Invoke-Suite 'AppClassificationTest' ($baseRefs + $webRef) `
+    ($catalogDeps + @((Join-Path $coreDir 'AppClassification.cs'), (Join-Path $coreDir 'SystemSearch.cs'), (Join-Path $coreDir 'SearchRanking.cs'), (Join-Path $testDir 'AppClassificationTest.cs')))
 Invoke-Suite 'FileOpsTest' $baseRefs `
     (@((Join-Path $coreDir 'FileOps.cs'), (Join-Path $coreDir 'Elevation.cs'), (Join-Path $coreDir 'JsonIO.cs'), (Join-Path $testDir 'FileOpsTest.cs')))
 # 虚拟化面板的几何/滚动计算（用到 ItemsControl，需要 WPF 引用）
@@ -363,6 +368,14 @@ if ($Stress) {
 # 需要链接 ui 源码：直接调用生产函数 PanelWindow.IsCommonByUsage()。
 Invoke-Suite 'CommonPinTest' $wpfRefs `
     @((Join-Path $testDir 'CommonPinTest.cs')) $uiModule
+Invoke-Suite 'DesktopInteractionTest' $wpfRefs `
+    @((Join-Path $testDir 'DesktopInteractionTest.cs')) $uiModule
+Invoke-Suite 'DesktopWorkspaceTest' $wpfRefs `
+    @((Join-Path $testDir 'DesktopWorkspaceTest.cs')) $uiModule
+Invoke-Suite 'SuggestedHideUiTest' $wpfRefs `
+    @((Join-Path $testDir 'SuggestedHideUiTest.cs')) $uiModule
+Invoke-Suite 'FilesLibraryUiTest' $wpfRefs `
+    @((Join-Path $testDir 'FilesLibraryUiTest.cs')) $uiModule
 
 # CrashGuardTest 要真正调用 CrashGuard（依赖 ErrorLog/Ui），所以走全量源码
 Invoke-Suite 'CrashGuardTest' $wpfRefs `
@@ -381,6 +394,9 @@ Invoke-Suite 'GlassBackdropTest' $wpfRefs `
 # 外观参数：每个参数「真的改变渲染输出」的断言
 Invoke-Suite 'AppearanceTest' $wpfRefs `
     @((Join-Path $testDir 'AppearanceTest.cs')) $uiModule
+
+Invoke-Suite 'AutoAppearanceTest' $wpfRefs `
+    @((Join-Path $testDir 'AutoAppearanceTest.cs')) $uiModule
 
 
 # 毛玻璃预设：参数映射、切换生效、custom 模式、保存重载、旧配置、边界

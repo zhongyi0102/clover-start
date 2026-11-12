@@ -65,6 +65,7 @@ namespace Clover
 
         void UpdateSearchFooter()
         {
+            if (current == FilesCategory || IsDeskTab(current)) return;
             if (footerCount == null || searchResults == null || searchBox == null
                 || searchBox.Text.Trim().Length == 0) return;
             int n = searchResults.ShownCount;

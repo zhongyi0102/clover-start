@@ -59,8 +59,8 @@ namespace Clover
             // 「收纳」不受影响（收纳是把桌面清空，快捷方式也该被收走才怪，
             // 保持原行为最稳）。
             Check(!DeskCollector.IsAllowed("a.lnk"), "★lnk 在收纳侧仍拒绝");
-            Check(!DeskCollector.IsAllowed("a.msi"), "msi 拒绝");
-            Check(!DeskCollector.IsAllowed("a.bat"), "bat 拒绝");
+            Check(DeskCollector.IsAllowed("a.msi"), "安装包归非应用内容");
+            Check(DeskCollector.IsAllowed("a.bat"), "脚本文件不按扩展名自动当应用");
             Check(!DeskCollector.IsAllowed(null), "null 拒绝");
         }
 

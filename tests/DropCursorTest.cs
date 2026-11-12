@@ -39,6 +39,12 @@ namespace Clover
                 TestMatrix();
                 TestInternalFormats();
                 TestFilesTabDragBack();
+                Check(DropCursor.ResolveDesktop(true, false, false, true, true) == DropCursor.Effect.Move, "桌面拖入默认移动");
+                Check(DropCursor.ResolveDesktop(true, false, true, true, true) == DropCursor.Effect.Copy, "Ctrl 明确复制");
+                Check(DropCursor.ResolveDesktop(true, false, false, true, false) == DropCursor.Effect.Copy, "只允许复制的来源不被移动");
+                Check(DropCursor.ResolveDesktop(true, false, true, false, true) == DropCursor.Effect.None, "Ctrl 不允许复制时禁止，不擅自删除源");
+                Check(DropCursor.ResolveDesktop(false, false, false, true, true) == DropCursor.Effect.None, "非桌面来源留给文件库");
+                Check(DropCursor.ResolveDesktop(true, true, false, true, true) == DropCursor.Effect.None, "搬运中拒绝重复拖入");
             }
             catch (Exception ex)
             {

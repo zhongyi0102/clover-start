@@ -21,6 +21,17 @@ namespace Clover
     /// </summary>
     public static class FileExtGroups
     {
+        public enum EntryMode { All, Files, Folders }
+
+        /// <summary>范围明确；文件夹不受后缀筛选影响。</summary>
+        public static bool KeepEntry(bool isFolder, string entryExt,
+            EntryMode mode, HashSet<string> selectedExts,
+            List<Group> builtin, List<Group> custom)
+        {
+            if (isFolder) return mode != EntryMode.Files;
+            return mode != EntryMode.Folders && Passes(entryExt, selectedExts, builtin, custom);
+        }
+
         /// <summary>「其他」组的内部 key。</summary>
         public const string OtherKey = "__other__";
 

@@ -134,8 +134,8 @@ namespace Clover
                 else if (o is MenuItem) funcs++;
             }
 
-            Check(funcs == 6, "★顶层功能项 = 6", "实际 " + funcs);
-            Check(seps == 3, "分隔线 = 3", "实际 " + seps);
+            Check(funcs == 4, "★顶层功能项 = 4", "实际 " + funcs);
+            Check(seps == 2, "分隔线 = 2", "实际 " + seps);
             Console.WriteLine();
         }
 
@@ -152,7 +152,7 @@ namespace Clover
             }
 
             string[] expect = {
-                "重新扫描应用", "外观…", "整理与隐藏…", "开机自启", "设置…", "退出"
+                "外观…", "开机自启", "设置…", "退出"
             };
             Check(names.Count == expect.Length, "顶层项数一致", names.Count + " vs " + expect.Length);
 
@@ -185,12 +185,11 @@ namespace Clover
 
             List<int> sepPos = new List<int>();
             for (int i = 0; i < seq.Count; i++) if (seq[i] == "---") sepPos.Add(i);
-            Check(sepPos.Count == 3, "分隔线 3 条", "实际 " + sepPos.Count);
-            if (sepPos.Count == 3)
+            Check(sepPos.Count == 2, "分隔线 2 条", "实际 " + sepPos.Count);
+            if (sepPos.Count == 2)
             {
-                Check(sepPos[0] == 1, "第 1 条在「重新扫描」之后", "索引 " + sepPos[0]);
-                Check(sepPos[1] == 4, "第 2 条在「整理与隐藏…」之后", "索引 " + sepPos[1]);
-                Check(sepPos[2] == 6, "第 3 条在「开机自启」之后", "索引 " + sepPos[2]);
+                Check(sepPos[0] == 1, "第 1 条在「外观」之后", "索引 " + sepPos[0]);
+                Check(sepPos[1] == 3, "第 2 条在「开机自启」之后", "索引 " + sepPos[1]);
             }
             Console.WriteLine();
         }

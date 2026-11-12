@@ -7,7 +7,7 @@ namespace Clover
     /// 搜索结果的匹配与个性化排序。
     ///
     /// 这是纯 core 逻辑：不读文件、不依赖 WPF。界面把目录结果和系统索引结果
-    /// 交进来后，统一按「匹配质量 → 手动固定 → 使用次数 → 最近使用」排序。
+    /// 交进来后，统一按「三类顺序 → 匹配质量 → 手动固定 → 使用次数 → 最近使用」排序。
     /// </summary>
     static class SearchRanking
     {
@@ -45,7 +45,8 @@ namespace Clover
                 // 名字键刻意只做 Trim + 忽略大小写。不能用 NameMatch.Normalize：
                 // 后者会把 Notepad++ 折成 notepad，误伤两个不同应用。
                 string name = (r.Name ?? "").Trim();
-                if (name.Length > 0 && !names.Add(name)) continue;
+                // 同名的界面与服务属于不同入口，不跨三类合并。
+                if (name.Length > 0 && !names.Add(r.RoleRank + "|" + name)) continue;
                 target.Add(r);
             }
         }
@@ -65,9 +66,11 @@ namespace Clover
             if (a == null) return 1;
             if (b == null) return -1;
 
+            int c = a.RoleRank.CompareTo(b.RoleRank);
+            if (c != 0) return c;
             int qa = MatchTier(a.Name, query);
             int qb = MatchTier(b.Name, query);
-            int c = qa.CompareTo(qb);
+            c = qa.CompareTo(qb);
             if (c != 0) return c;
 
             // 同等匹配质量下，尊重用户的明确选择和真实使用习惯。

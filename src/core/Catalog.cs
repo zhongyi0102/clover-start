@@ -7,6 +7,8 @@ using System.Web.Script.Serialization;
 
 namespace Clover
 {
+    public enum AppRole { User = 0, LowValue = 1, Computer = 2 }
+
     /// <summary>
     /// 判为低价值的**原因**。
     ///
@@ -53,6 +55,14 @@ namespace Clover
         /// </summary>
         public bool Hidden;
 
+        // 分类与完全隐藏独立：Computer 不平铺，但可搜索；Hidden 永不出现在普通列表。
+        [ScriptIgnore]
+        public AppRole Role;
+        [ScriptIgnore]
+        public string RoleDetail;
+        [ScriptIgnore]
+        public bool ExcludedEntry;
+
         // ---------- 以下是「多来源扫描」新增的可选字段 ----------
         //
         // 全部可空/空串：老 config\apps.json 没有这些键时能正常读取
@@ -91,8 +101,8 @@ namespace Clover
         /// <summary>
         /// 低价值条目（卸载器/帮助/许可/失效快捷方式等）。
         ///
-        /// **运行时计算，不写进 json** —— 由 LowValueRules 自动判定 +
-        /// settings 里的手动标记共同决定，每次渲染时重算。
+        /// **运行时计算，不写进 json** —— 只由 settings 的显式标记决定，
+        /// 名称和应用角色不会自动改变低价值状态。
         /// </summary>
         [System.Web.Script.Serialization.ScriptIgnore]
         public bool LowValue;
@@ -101,7 +111,7 @@ namespace Clover
         /// 判为低价值的**原因分类**（运行时计算，不写进 json）。
         ///
         /// 与 LowValue 完全同样处理：`[ScriptIgnore]` 保证它不会污染 apps.json。
-        /// 判定来源见 PanelWindow.IsLowValueApp（手动标记 &gt; 自动规则）。
+        /// 判定来源见 PanelWindow.IsLowValueApp（只用手动状态）。
         /// </summary>
         [System.Web.Script.Serialization.ScriptIgnore]
         public LowValueReason LowValueReason;
@@ -350,6 +360,8 @@ namespace Clover
                         a.Path = GetStr(m, "path");
                         a.Category = GetStr(m, "category");
                         if (string.IsNullOrEmpty(a.Name) || string.IsNullOrEmpty(a.Path)) continue;
+                        if (!AppPaths.IsShellPath(a.Path)
+                            && DesktopContentRules.Classify(a.Path) == DesktopContentKind.NonApplication) continue;
 
                         // 新增可选字段：老配置里没有这些键时 GetStr 返回 ""，
                         // GetBool 返回默认值 —— 不报错、不丢条目（铁律 3）。
@@ -455,6 +467,44 @@ namespace Clover
             }
             catch { }
             return list;
+        }
+
+        static readonly object manualEntryGate = new object();
+
+        /// <summary>搜索补充入口经用户分类后登记到面板；保留现有条目和未知字段。</summary>
+        public static bool RegisterManual(string baseDir, AppItem app)
+        {
+            if (app == null || string.IsNullOrWhiteSpace(app.Name) || string.IsNullOrWhiteSpace(app.Path)) return false;
+            lock (manualEntryGate)
+            {
+                try
+                {
+                    string path = Path.Combine(baseDir, "config", "manual-apps.json");
+                    JsonIO.ReadResult read = JsonIO.ReadDetailed(path);
+                    if (read.UsedBackup && File.Exists(path)) return false;
+                    string old = read.Text;
+                    if (string.IsNullOrEmpty(old) && File.Exists(path)) return false;
+                    JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                    Dictionary<string, object> data = string.IsNullOrEmpty(old)
+                        ? new Dictionary<string, object>() : serializer.Deserialize<Dictionary<string, object>>(old);
+                    if (data == null) return false;
+                    List<object> entries = new List<object>();
+                    object array;
+                    if (data.TryGetValue("apps", out array))
+                        foreach (object item in JsonIO.AsArray(array))
+                        {
+                            Dictionary<string, object> entry = item as Dictionary<string, object>;
+                            if (entry != null && HiddenApps.Normalize(GetStr(entry, "path")) == HiddenApps.Normalize(app.Path)) return true;
+                            entries.Add(item);
+                        }
+                    entries.Add(new Dictionary<string, object> {
+                        { "name", app.Name }, { "path", app.Path }, { "category", app.Category ?? "其他" }
+                    });
+                    data["apps"] = entries;
+                    return JsonIO.WriteAtomicIfChanged(path, serializer.Serialize(data)).Success;
+                }
+                catch (Exception ex) { Log.Warn("登记搜索应用失败，保留原清单：" + ex.Message); return false; }
+            }
         }
         /// <summary>
         /// 按名称判定分类。
@@ -639,7 +689,7 @@ namespace Clover
             List<AppItem> list = new List<AppItem>();
             foreach (AppItem a in Apps)
             {
-                if (!includeHidden && a.Hidden) continue;
+                if (!includeHidden && (a.Hidden || a.ExcludedEntry || a.Role == AppRole.Computer)) continue;
                 if (string.IsNullOrEmpty(cat) || a.Category == cat)
                     list.Add(a);
             }

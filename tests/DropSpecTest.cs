@@ -103,7 +103,7 @@ namespace Clover
             try
             {
                 string e = Path.Combine(dir, "app.exe");
-                string l = Path.Combine(dir, "setup.msi");
+                string l = Path.Combine(dir, "tool.com");
                 File.WriteAllText(e, "x");
                 File.WriteAllText(l, "y");
 
@@ -123,7 +123,7 @@ namespace Clover
 
                 // 扩展名被记下来（步骤 2 汇总用）
                 List<string> exts = v.RejectedExts();
-                Check(exts.Count == 2 && exts.Contains(".exe") && exts.Contains(".msi"),
+                Check(exts.Count == 2 && exts.Contains(".exe") && exts.Contains(".com"),
                     "★扩展名已记录", string.Join(",", exts.ToArray()));
 
                 Console.WriteLine();
@@ -140,9 +140,9 @@ namespace Clover
             try
             {
                 string ok1 = Path.Combine(dir, "doc.txt");
-                string bad = Path.Combine(dir, "setup.exe");
+                string bad = Path.Combine(dir, "program.exe");
                 string ok2 = Path.Combine(dir, "pic.png");
-                string bad2 = Path.Combine(dir, "old.msi");
+                string bad2 = Path.Combine(dir, "old.com");
                 File.WriteAllText(ok1, "x");
                 File.WriteAllText(bad, "x");
                 File.WriteAllText(ok2, "x");
@@ -333,7 +333,7 @@ namespace Clover
             // 桌面预设
             DropSpec d = DropSpec.ForDesk();
             Check(d.Accept.Count == 0, "桌面预设不限类型");
-            Check(d.RejectExts.Count == 13, "★桌面预设 13 个应用类", Convert.ToString(d.RejectExts.Count));
+            Check(d.NonApplicationsOnly && d.RejectExts.Count == 0, "按真实身份判断，非纯扩展名黑名单");
             Check(d.MaxFiles == 0 && d.MaxSizeBytes == 0, "桌面预设不限数量与大小");
 
             // 常量自洽：预设与常量不能各写一份
@@ -341,20 +341,20 @@ namespace Clover
                 "★预设读的就是常量");
             Check(DropSpec.BackgroundExts.Length == 8, "★背景扩展名 8 个",
                 Convert.ToString(DropSpec.BackgroundExts.Length));
-            Check(DropSpec.AppExts.Length == 13, "★应用类扩展名 13 个（.lnk 已放开）",
+            Check(DropSpec.AppExts.Length == 13, "旧版兼容扩展名表保留 13 项（不驱动收纳判断）",
                 Convert.ToString(DropSpec.AppExts.Length));
 
             // ★ .lnk 已放开：不在拒收列表里
             bool lnkBlocked = false;
             foreach (string x in DropSpec.AppExts)
                 if (string.Equals(x, ".lnk", StringComparison.OrdinalIgnoreCase)) lnkBlocked = true;
-            Check(!lnkBlocked, "★.lnk 不在 AppExts 里（快捷方式可拖入）");
+            Check(!lnkBlocked, ".lnk 不在旧版兼容扩展名表中");
 
-            // .url 仍被拒（纯网址书签，未放开）
+            // 旧版兼容表保留原值，新版网页身份判断另测。
             bool urlBlocked = false;
             foreach (string x in DropSpec.AppExts)
                 if (string.Equals(x, ".url", StringComparison.OrdinalIgnoreCase)) urlBlocked = true;
-            Check(urlBlocked, "★.url 仍在 AppExts 里");
+            Check(urlBlocked, ".url 的旧版兼容表值未变（新收纳规则不读取它）");
 
             // ---- 约束文案由常量生成 ----
             string hint = DropSpec.BackgroundHintText();
@@ -425,7 +425,7 @@ namespace Clover
             {
                 string e1 = Path.Combine(dir, "a.exe");
                 string e2 = Path.Combine(dir, "b.exe");
-                string e3 = Path.Combine(dir, "c.msi");
+                string e3 = Path.Combine(dir, "c.scr");
                 string bad = Path.Combine(dir, "d.xyz");
                 File.WriteAllText(e1, "x");
                 File.WriteAllText(e2, "x");
@@ -447,9 +447,9 @@ namespace Clover
                     "★不支持 1 个");
 
                 List<string> exts = v.RejectedExts();
-                // 三种被拒项各有一种扩展名：.exe / .msi / .xyz（.exe 出现两次但去重）
+                // 三种被拒项各有一种扩展名：.exe / .scr / .xyz（.exe 出现两次但去重）
                 Check(exts.Count == 3, "★去重后 3 种扩展名", string.Join(",", exts.ToArray()));
-                Check(exts[0] == ".exe" && exts[1] == ".msi" && exts[2] == ".xyz",
+                Check(exts[0] == ".exe" && exts[1] == ".scr" && exts[2] == ".xyz",
                     "★按字母序", string.Join(",", exts.ToArray()));
 
                 Console.WriteLine();

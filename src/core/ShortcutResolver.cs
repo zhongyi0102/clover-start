@@ -16,12 +16,6 @@ namespace Clover
     /// 放在 core 层而不是复用 ui 层的 PanelWindow.ResolveShortcutTarget：
     /// core 不能依赖 ui（build.ps1 会单独编译 core 来验证这一点）。
     ///
-    /// 与 RunningApps 的关系：
-    /// RunningApps 有自己的 targetCache，但它是**私有**的、
-    /// 且语义是"这个应用在不在运行"。这里需要的是"给我 lnk 的目标路径"，
-    /// 用途不同、生命周期不同，所以独立一份缓存。
-    /// 两份缓存的代价可接受：AppDedup 只在扫描时跑一次。
-    ///
     /// 缓存策略：
     ///   · key = lnk 完整路径（忽略大小写）
     ///   · value = 目标路径；null 表示解析失败（也缓存，避免反复尝试 COM）

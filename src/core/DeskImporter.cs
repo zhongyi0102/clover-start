@@ -10,7 +10,7 @@ namespace Clover
     /// ── 需求边界 ──
     ///
     ///   1. 只处理**非应用文件**（文档、图片、压缩包、文件夹…）。
-    ///      `.exe` / `.lnk` 直接忽略：不弹窗、不复制、不提示。
+    ///      应用入口和无法识别的快捷方式不搬动；文件/文件夹快捷方式可收纳。
     ///      理由：应用有自己的归宿（「常用」「全部」），虚拟桌面只放文件。
     ///   2. **按源位置决定移动还是复制**：
     ///        · 源文件在真实桌面目录里 → **移动**（桌面上的东西被收进来了）
@@ -26,14 +26,6 @@ namespace Clover
     /// </summary>
     public static class DeskImporter
     {
-        /// <summary>
-        /// 不接收的扩展名（应用类，有自己的归宿）。
-        ///
-        /// **单一来源是 `DropSpec.AppExts`** —— 过滤规则、拖放提示的约束文案、
-        /// 拒绝原因的措辞都读那一份，避免三处各写一遍后分叉。
-        /// </summary>
-        static readonly string[] BlockedExt = DropSpec.AppExts;
-
         /// <summary>一次导入的结果。</summary>
         public class Result
         {
@@ -71,11 +63,11 @@ namespace Clover
         /// 这个路径是否允许进入虚拟桌面。
         ///
         /// 文件夹一律允许（用户可能想整理一整个目录）；
-        /// 文件按扩展名过滤。
+        /// 文件按 DesktopContentRules 的真实身份过滤。
         ///
         /// **保留为独立 API**：`Import` 现在走 `DropSpec`，但这个方法
         /// 有测试在用，且语义更直白（只要一个 bool）。两处判定读同一份
-        /// `BlockedExt`，不会分叉。
+        /// `DesktopContentRules`，不会分叉。
         /// </summary>
         public static bool IsAllowed(string path)
         {
@@ -83,17 +75,7 @@ namespace Clover
             {
                 if (string.IsNullOrEmpty(path)) return false;
 
-                // 文件夹放行
-                if (Directory.Exists(path)) return true;
-
-                string ext = Path.GetExtension(path);
-                if (string.IsNullOrEmpty(ext)) return true;    // 无扩展名：当普通文件
-
-                foreach (string b in BlockedExt)
-                {
-                    if (string.Equals(b, ext, StringComparison.OrdinalIgnoreCase)) return false;
-                }
-                return true;
+                return DesktopContentRules.Classify(path) == DesktopContentKind.NonApplication;
             }
             catch { return false; }
         }

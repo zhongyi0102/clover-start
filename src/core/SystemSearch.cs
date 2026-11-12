@@ -27,6 +27,9 @@ namespace Clover
 
         /// <summary>是否被用户手动固定到「常用」。</summary>
         public bool Pinned;
+
+        /// <summary>用户类=0，低价值=1，电脑类=2；独立于来源和匹配精度。</summary>
+        public int RoleRank;
     }
 
     /// <summary>
@@ -122,6 +125,8 @@ namespace Clover
         {
             return SearchIndex(query, GetOrBuildIndex());
         }
+
+        internal static List<SearchResult> Snapshot() { return new List<SearchResult>(GetOrBuildIndex()); }
 
         /// <summary>
         /// 在内存索引中匹配。索引首次构建后，后续每次按键不再递归开始菜单或遍历注册表。

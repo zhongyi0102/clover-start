@@ -66,7 +66,7 @@ namespace Clover
             this.current = initialTab;
 
             dlg = new Window();
-            dlg.Title = "四叶草 · 整理与隐藏";
+            dlg.Title = initialTab == Tab.Hidden ? "四叶草 · 已隐藏的应用" : "四叶草 · 桌面设置";
             dlg.Width = 560;
             dlg.Height = 700;
             dlg.WindowStartupLocation = owner != null
@@ -109,6 +109,8 @@ namespace Clover
             tabs.Children.Add(tabHiddenBtn);
 
             Grid.SetRow(tabs, 0);
+            // 两种入口独立显示，不再把桌面设置和应用隐藏放在同一个标签窗口。
+            tabs.Visibility = Visibility.Collapsed;
             layout.Children.Add(tabs);
 
             // ---- 内容 ----
@@ -194,7 +196,7 @@ namespace Clover
                 if (tab == Tab.Desktop)
                 {
                     if (desktopPage == null)
-                        desktopPage = new DesktopCleanPage(dlg, settings, watcher, Notify);
+                        desktopPage = new DesktopCleanPage(dlg, settings, watcher, Notify, panel);
                     pageHost.Content = desktopPage.Content;
                 }
                 else

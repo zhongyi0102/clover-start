@@ -1,476 +1,209 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Web.Script.Serialization;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace Clover
 {
-    /// <summary>
-    /// 「常用」名单测试：人工固定（右键「添加到常用」）+ 使用榜合并、无上限。
-    ///
-    /// **为什么需要它**：
-    ///   1. 早期 `CommonApps()` 截断到前 12 个 —— 使用榜已满时右键「添加到常用」
-    ///      点了看不到任何变化，用户以为功能坏了。这个上限必须钉死为「不存在」。
-    ///   2. 固定名单存 `settings.json` 的 `pinnedCommon`，与 usage.json 是两套数据，
-    ///      合并时容易出重复项、大小写差异、已隐藏/已卸载残留。
-    ///
-    /// **怎么测**：真建 Settings 文件写盘 → 重新 Load → 验证往返；
-    /// 再用一份假的 AppItem 清单验证合并规则（不启动 WPF）。
-    /// </summary>
+    // 保留套件名，验证取消固定后的统一常用，不再测试旧固定功能。
     static class CommonPinTest
     {
-        static int failed = 0;
-        static int passed = 0;
-
-        static void Check(bool cond, string name, string detail = "")
+        static int passed, failed;
+        static void Check(bool ok, string name)
         {
-            if (cond) { passed++; Console.WriteLine("PASS  " + name); }
-            else
-            {
-                failed++;
-                Console.WriteLine("FAIL  " + name + (string.IsNullOrEmpty(detail) ? "" : "  [" + detail + "]"));
-            }
+            if (ok) passed++; else failed++;
+            Console.WriteLine((ok ? "PASS  " : "FAIL  ") + name);
         }
-
-        static string NewRoot()
+        static void Wait(PanelWindow panel)
         {
-            string root = Path.Combine(Path.GetTempPath(), "clover-common-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Path.Combine(root, "config"));
-            return root;
-        }
-
-        static void Main()
-        {
-            Console.WriteLine("=== 常用名单测试（人工固定 + 无上限 + 隐藏过滤）===");
-            Console.WriteLine();
-
-            TestDefault();
-            TestRoundTrip();
-            TestDedupAndCase();
-            TestNoCap();
-            TestUsageFilterReal();     // ★ 直接测生产函数 PanelWindow.IsCommonByUsage
-            TestMenuActionReal();      // ★ 直接测生产函数 PanelWindow.CommonMenuFor
-            TestPinnedOrderReal();     // ★ 新固定项进入常用首位
-            TestDismissedRecentReal(); // ★移除最近项不删除启动历史
-            TestContentSignatureReal();// ★ 固定名单变化触发重绘
-            TestTileInteractionColors();// ★ 磁贴悬停不能变成不透明白块
-
-            Console.WriteLine();
-            Console.WriteLine("通过 " + passed + " / 失败 " + failed);
-            Environment.Exit(failed == 0 ? 0 : 1);
-        }
-
-        // ---------- 8. 最近常用移除语义 ----------
-        static void TestDismissedRecentReal()
-        {
-            Console.WriteLine("--- 8. ★最近常用移除后保留历史 ---");
-
-            AppItem app = new AppItem();
-            app.Path = @"C:\Apps\code.exe";
-            app.Usage = 12;
-            app.LastUsed = 500;
-
-            Check(PanelWindow.IsCommonByUsage(app, 0), "有历史且未移除 → 显示");
-            Check(!PanelWindow.IsCommonByUsage(app, 500),
-                "★LastUsed 未晚于移除快照 → 不显示");
-            Check(!PanelWindow.IsCommonByUsage(app, 600),
-                "移除快照更新得更晚 → 不显示");
-            Check(PanelWindow.IsCommonByUsage(app, 499),
-                "★再次启动产生更晚 LastUsed → 自动回来");
-
-            string root = NewRoot();
-            Settings s = Settings.Load(root);
-            s.CommonDismissed[app.Path] = app.LastUsed;
-            s.Save();
-            Settings back = Settings.Load(root);
-            long value;
-            Check(back.CommonDismissed.TryGetValue(app.Path, out value) && value == 500,
-                "★移除快照可写盘往返", Convert.ToString(value));
-
-            string src = ReadSource();
-            if (src != null)
+            for (int i = 0; i < 100 && !panel.TestDeferredRenderComplete(); i++)
             {
-                Check(!src.Contains("usage.Remove(a.Path)"),
-                    "★从最近常用移除不再删除 usage.json 历史");
-                Check(src.Contains("settings.CommonDismissed[a.Path]"),
-                    "★生产代码改为保存移除快照");
-                Check(src.Contains("手动固定") && src.Contains("最近常用"),
-                    "★常用页明确分为手动固定与最近常用");
+                Dispatcher.CurrentDispatcher.Invoke(new Action(delegate { }), DispatcherPriority.ApplicationIdle);
+                System.Threading.Thread.Sleep(20);
             }
-            Console.WriteLine();
+            panel.UpdateLayout();
         }
-
-        // ---------- 9. ★磁贴交互色必须保持半透明 ----------
-        static void TestTileInteractionColors()
+        static bool Text(DependencyObject node, string value)
         {
-            Console.WriteLine("--- 9. ★磁贴悬停 / 按下色（浅色与深色）---");
-
-            Ui.ApplyTheme(Ui.ThemeMode.Light);
-            Check(Ui.TileHover.Color.A > 0 && Ui.TileHover.Color.A < 255,
-                "★浅色磁贴悬停为半透明", "Alpha=" + Ui.TileHover.Color.A);
-            Check(Ui.TilePressed.Color.A > Ui.TileHover.Color.A && Ui.TilePressed.Color.A < 255,
-                "★浅色磁贴按下更明显且仍半透明",
-                "Hover=" + Ui.TileHover.Color.A + " Pressed=" + Ui.TilePressed.Color.A);
-
-            Ui.ApplyTheme(Ui.ThemeMode.Dark);
-            Check(Ui.TileHover.Color.A > 0 && Ui.TileHover.Color.A < 255,
-                "★深色磁贴悬停为半透明", "Alpha=" + Ui.TileHover.Color.A);
-            Check(Ui.TilePressed.Color.A > Ui.TileHover.Color.A && Ui.TilePressed.Color.A < 255,
-                "★深色磁贴按下更明显且仍半透明",
-                "Hover=" + Ui.TileHover.Color.A + " Pressed=" + Ui.TilePressed.Color.A);
-
-            // 清回默认，避免影响同进程后续检查。
-            Ui.ApplyTheme(Ui.ThemeMode.Light);
-
-            // 令牌透明还不够，生产磁贴也必须真的使用组件令牌；否则改了令牌
-            // 却仍绑定全局 Ui.Hover，截图里的不透明白块会原样复发。
-            string src = ReadSource();
-            if (src != null)
-            {
-                int start = src.IndexOf("Border MakeTile(AppItem a, int generation)");
-                int end = start < 0 ? -1 : src.IndexOf("void BeginDragVisual", start);
-                string body = start >= 0 && end > start ? src.Substring(start, end - start) : "";
-                Check(body.Contains("b.Background = Ui.TileHover"),
-                    "★生产磁贴悬停绑定 TileHover");
-                Check(body.Contains("b.Background = Ui.TilePressed"),
-                    "★生产磁贴按下绑定 TilePressed");
-                Check(src.Contains("ReferenceEquals(sourceTile, selectedTile)")
-                    && src.Contains("sourceTile.IsMouseOver"),
-                    "★右键菜单关闭后按键盘选中/鼠标状态恢复磁贴背景");
-            }
-            Console.WriteLine();
+            TextBlock t = node as TextBlock;
+            if (t != null && t.Text.Contains(value)) return true;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                if (Text(VisualTreeHelper.GetChild(node, i), value)) return true;
+            return false;
         }
-
-        // ---------- 8. ★内容签名必须识别固定名单的内容与顺序 ----------
-        static void TestContentSignatureReal()
+        static Button ResetButton(DependencyObject node)
         {
-            Console.WriteLine("--- 8. ★固定名单变化触发重绘 ---");
-
-            List<string> one = new List<string> { "app-a", "app-b" };
-            List<string> changed = new List<string> { "app-a", "app-c" };
-            List<string> reordered = new List<string> { "app-b", "app-a" };
-
-            string s1 = PanelWindow.PathListSignature(one);
-            Check(s1 != PanelWindow.PathListSignature(changed),
-                "★数量相同但固定项变化 → 签名变化");
-            Check(s1 != PanelWindow.PathListSignature(reordered),
-                "★固定项顺序变化 → 签名变化");
-            Check(s1 == PanelWindow.PathListSignature(new List<string> { "app-a", "app-b" }),
-                "相同固定名单 → 签名稳定");
-
-            string src = ReadSource();
-            if (src != null)
+            Button b = node as Button;
+            if (b != null && AutomationProperties.GetName(b) == "恢复自动排序") return b;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
             {
-                int start = src.IndexOf("string CurrentContentSig()");
-                int end = start < 0 ? -1 : src.IndexOf("void SaveScrollOffset()", start);
-                string body = start >= 0 && end > start ? src.Substring(start, end - start) : "";
-                Check(body.Contains("settings.PinnedCommon"),
-                    "★CurrentContentSig() 纳入 PinnedCommon");
-            }
-            Console.WriteLine();
-        }
-
-        // ---------- 7. ★新固定项必须立即出现在常用首位 ----------
-        static void TestPinnedOrderReal()
-        {
-            Console.WriteLine("--- 7. ★固定状态同步到常用排序（生产函数）---");
-
-            string store = @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App";
-            List<string> order = new List<string> {
-                @"C:\Apps\old-a.exe", store.ToUpperInvariant(), @"C:\Apps\old-b.exe", store
-            };
-
-            PanelWindow.UpdateCommonOrder(order, store, true);
-            Check(order.Count == 3, "★重复固定记录被去重", "实际 " + order.Count);
-            Check(string.Equals(order[0], store, StringComparison.Ordinal),
-                "★新固定的商店应用排到常用首位", order[0]);
-
-            PanelWindow.UpdateCommonOrder(order, store, true);
-            Check(order.Count == 3 && order[0] == store,
-                "★重复执行固定仍只有一条且保持首位");
-
-            bool removed = PanelWindow.UpdateCommonOrder(order, store, false);
-            Check(removed, "★取消固定会报告排序记录已移除");
-            Check(!order.Exists(delegate(string p)
-                { return string.Equals(p, store, StringComparison.OrdinalIgnoreCase); }),
-                "★取消固定会清除常用人工排序项");
-            Console.WriteLine();
-        }
-
-        // ---------- 6. ★生产行为：右键菜单项选择 ----------
-        //
-        // 回归背景：菜单曾经用 `inCommon = pinned || Usage > 0` 当门控。
-        // 在「全部」页里，任何用过一次的应用都落进 inCommon，却又不在常用页、
-        // 也没固定 —— 三个分支全不命中，菜单项直接消失。
-        // 绝大多数应用都被启动过，所以「添加到常用」几乎看不到。
-        static void TestMenuActionReal()
-        {
-            Console.WriteLine("--- 6. ★右键菜单项选择（生产函数 CommonMenuFor）---");
-
-            // 「全部」页（showingCommon=false）
-            Check(PanelWindow.CommonMenuFor(false, false, 0) == PanelWindow.CommonMenuAction.Add,
-                "★全部页 + 未固定 + 无使用记录 → 添加到常用");
-            Check(PanelWindow.CommonMenuFor(false, false, 7) == PanelWindow.CommonMenuAction.Add,
-                "★全部页 + 未固定 + 有使用记录 → 仍显示添加到常用（回归：原实现此处什么都不显示）");
-            Check(PanelWindow.CommonMenuFor(false, true, 0) == PanelWindow.CommonMenuAction.Unpin,
-                "全部页 + 已固定 → 取消固定到常用");
-            Check(PanelWindow.CommonMenuFor(false, true, 9) == PanelWindow.CommonMenuAction.Unpin,
-                "全部页 + 已固定 + 有使用记录 → 取消固定到常用");
-
-            // 「常用」页（showingCommon=true）
-            Check(PanelWindow.CommonMenuFor(true, true, 0) == PanelWindow.CommonMenuAction.Unpin,
-                "★手动固定项 → 取消手动固定");
-            Check(PanelWindow.CommonMenuFor(true, false, 3) == PanelWindow.CommonMenuAction.DismissRecent,
-                "★最近常用项 → 从最近常用移除");
-
-            // 源码级：菜单里不得再出现旧的 inCommon 门控
-            string src = ReadSource();
-            if (src == null)
-            {
-                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow partial 源码）");
-            }
-            else
-            {
-                Check(!src.Contains("bool inCommon = pinned || a.Usage > 0"),
-                    "★菜单不再用 inCommon = pinned || Usage > 0 当门控");
-                Check(src.Contains("CommonMenuFor(showingCommon, pinned, a.Usage)"),
-                    "★菜单改走 CommonMenuFor 判定");
-            }
-            Console.WriteLine();
-        }
-
-        // ---------- 5. ★生产行为：使用榜分支必须过滤隐藏项 ----------
-        //
-        // 回归背景：CommonApps() 的 usage 分支曾经只判 Usage > 0，
-        // 没判 Hidden —— 隐藏但有使用记录的应用会重新出现在「常用」页，
-        // 用户刚把它藏起来却还在。这里直接调用生产函数，不复制逻辑。
-        static void TestUsageFilterReal()
-        {
-            Console.WriteLine("--- 5. ★使用榜分支：隐藏项必须被过滤（生产函数）---");
-
-            AppItem normal = new AppItem();
-            normal.Path = @"C:\Apps\wechat.exe";
-            normal.Usage = 5;
-            normal.Hidden = false;
-
-            AppItem hidden = new AppItem();
-            hidden.Path = @"C:\Apps\secret.exe";
-            hidden.Usage = 99;          // 使用记录很多，但已隐藏
-            hidden.Hidden = true;
-
-            AppItem zero = new AppItem();
-            zero.Path = @"C:\Apps\never.exe";
-            zero.Usage = 0;
-            zero.Hidden = false;
-
-            AppItem noPath = new AppItem();
-            noPath.Path = "";
-            noPath.Usage = 3;
-            noPath.Hidden = false;
-
-            Check(PanelWindow.IsCommonByUsage(normal), "★有使用记录 + 未隐藏 → 进常用");
-            Check(!PanelWindow.IsCommonByUsage(hidden),
-                "★有使用记录但已隐藏 → 不进常用（回归：原实现会漏进来）");
-            Check(!PanelWindow.IsCommonByUsage(zero), "无使用记录 → 不进常用");
-            Check(!PanelWindow.IsCommonByUsage(noPath), "无路径 → 不进常用");
-            Check(!PanelWindow.IsCommonByUsage(null), "null → 不进常用");
-
-            // 两条分支一致：人工固定分支同样跳过隐藏项（源码级断言，
-            // 因为固定分支在实例方法里、依赖 catalog，不便直接构造）
-            string src = ReadSource();
-            if (src == null)
-            {
-                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow partial 源码）");
-            }
-            else
-            {
-                int start = src.IndexOf("List<AppItem> CommonApps()");
-                int end = start < 0 ? -1 : src.IndexOf("internal static bool IsCommonByUsage", start);
-                if (start < 0 || end < 0)
-                {
-                    Check(false, "★找得到 CommonApps() 与 IsCommonByUsage()");
-                }
-                else
-                {
-                    string body = src.Substring(start, end - start);
-                    Check(body.Contains("hit.Hidden"), "★人工固定分支过滤 Hidden");
-                    Check(body.Contains("IsCommonByUsage(a, CommonDismissedAt(a.Path))"),
-                        "★使用榜分支统一检查 Hidden 与最近项移除快照");
-                }
-            }
-            Console.WriteLine();
-        }
-
-        // ---------- 1. 默认空 ----------
-        static void TestDefault()
-        {
-            Console.WriteLine("--- 1. 默认值 ---");
-            Settings s = Settings.Load(NewRoot());
-            Check(s.PinnedCommon != null, "★pinnedCommon 默认不是 null");
-            Check(s.PinnedCommon != null && s.PinnedCommon.Count == 0, "★pinnedCommon 默认为空");
-            Console.WriteLine();
-        }
-
-        // ---------- 2. 写盘往返 ----------
-        static void TestRoundTrip()
-        {
-            Console.WriteLine("--- 2. 保存 / 重新加载往返 ---");
-            string root = NewRoot();
-
-            Settings s = Settings.Load(root);
-            s.PinnedCommon.Add(@"C:\Apps\wechat.exe");
-            s.PinnedCommon.Add(@"C:\Apps\code.exe");
-            string store = @"shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App";
-            s.PinnedCommon.Add(store);
-            s.Save();
-
-            Settings back = Settings.Load(root);
-            Check(back.PinnedCommon.Count == 3, "★重新加载后仍是 3 条", "实际 " + back.PinnedCommon.Count);
-            Check(back.PinnedCommon.Contains(@"C:\Apps\wechat.exe"), "★内容保持（wechat）");
-            Check(back.PinnedCommon.Contains(@"C:\Apps\code.exe"), "★内容保持（code）");
-            Check(back.PinnedCommon.Contains(store), "★商店应用 shell:AppsFolder 路径可往返");
-
-            // 清空后也要能保存成空列表（不是"读不到键就用默认"）
-            back.PinnedCommon.Clear();
-            back.Save();
-            Settings empty = Settings.Load(root);
-            Check(empty.PinnedCommon.Count == 0, "★清空后保存 → 重新加载仍为空",
-                "实际 " + empty.PinnedCommon.Count);
-            Console.WriteLine();
-        }
-
-        // ---------- 3. 合并去重 + 大小写 ----------
-        static void TestDedupAndCase()
-        {
-            Console.WriteLine("--- 3. 合并规则（去重 / 大小写 / 顺序）---");
-
-            // 模拟 CommonApps() 的合并逻辑（与生产代码同规则）
-            //   · catalog = 全部已扫描应用（固定项也在这里找，不限于使用榜）
-            //   · usage   = 有使用记录的路径
-            List<string> catalog = new List<string> {
-                @"C:\Apps\wechat.exe",      // 有使用记录
-                @"C:\Apps\code.exe",        // 只在固定名单，Usage 为 0
-                @"C:\Apps\chrome.exe",      // 有使用记录
-                @"C:\Apps\other.exe"        // 既没固定也没使用 → 不出现
-            };
-            HashSet<string> used = new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
-                @"C:\Apps\wechat.exe", @"C:\Apps\chrome.exe"
-            };
-
-            List<string> pinned = new List<string> {
-                @"C:\Apps\WeChat.exe",      // 与 catalog 同一程序，大小写不同
-                @"C:\Apps\code.exe",        // 只在固定名单
-                @"C:\Apps\gone.exe"         // 已卸载，catalog 里没有
-            };
-
-            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            List<string> merged = new List<string>();
-
-            // 1. 固定项：在 catalog 里找（忽略大小写），找不到=已卸载 → 跳过
-            foreach (string p in pinned)
-            {
-                string hit = null;
-                foreach (string c in catalog)
-                    if (string.Equals(c, p, StringComparison.OrdinalIgnoreCase)) { hit = c; break; }
-                if (hit == null) continue;      // 已卸载 → 跳过
-                if (seen.Add(hit)) merged.Add(hit);
-            }
-            // 2. 使用榜
-            foreach (string c in catalog)
-            {
-                if (!used.Contains(c)) continue;
-                if (seen.Add(c)) merged.Add(c);
-            }
-
-            Check(merged.Count == 3, "★去重后 3 条（wechat/code/chrome）", "实际 " + merged.Count + "：" + string.Join(" | ", merged.ToArray()));
-            Check(merged.Contains(@"C:\Apps\wechat.exe"), "★wechat 只出现一次（大小写视为同一程序）");
-            Check(merged.Contains(@"C:\Apps\code.exe"), "★固定项 code 在列（Usage 为 0 也要出现）");
-            Check(!merged.Contains(@"C:\Apps\gone.exe"), "★已卸载的 gone 被跳过");
-            Console.WriteLine();
-        }
-
-        // ---------- 4. 无上限（核心回归） ----------
-        static void TestNoCap()
-        {
-            Console.WriteLine("--- 4. 常用不设上限（回归：原实现截断前 12 个）---");
-
-            List<string> apps = new List<string>();
-            for (int i = 0; i < 40; i++) apps.Add(@"C:\Apps\app" + i + ".exe");
-
-            // 生产实现里已无 GetRange(0, 12)，此处断言 40 条全部保留
-            List<string> list = new List<string>(apps);
-            Check(list.Count == 40, "★40 个常用项全部保留（无 12 个截断）", "实际 " + list.Count);
-
-            // 源码级断言：CommonApps() 里不得再出现截断
-            string src = ReadSource();
-            if (src == null)
-            {
-                Console.WriteLine("  （跳过源码检查：找不到 PanelWindow partial 源码）");
-            }
-            else
-            {
-                int start = src.IndexOf("List<AppItem> CommonApps()");
-                if (start < 0)
-                {
-                    Check(false, "★找得到 CommonApps()", "源码里没有该方法");
-                }
-                else
-                {
-                    int end = src.IndexOf("\n        }", start);
-                    string body = end > start ? src.Substring(start, end - start) : src.Substring(start);
-                    Check(!body.Contains("GetRange(0, 12)"), "★CommonApps() 不再截断 12 个");
-                    Check(body.Contains("PinnedCommon"), "★CommonApps() 读入人工固定名单");
-                }
-            }
-            Console.WriteLine();
-        }
-
-        static string ReadSource()
-        {
-            // 先看环境变量（测试产物可能在 temp，不在仓库树里），再看可执行文件向上找
-            List<string> starts = new List<string>();
-            try
-            {
-                string env = Environment.GetEnvironmentVariable("CLOVER_REPO_ROOT");
-                if (!string.IsNullOrEmpty(env)) starts.Add(env);
-            }
-            catch { }
-            try { starts.Add(Directory.GetCurrentDirectory()); } catch { }
-            try { starts.Add(AppDomain.CurrentDomain.BaseDirectory); } catch { }
-
-            foreach (string start in starts)
-            {
-                try
-                {
-                    string d = start;
-                    for (int i = 0; i < 8 && d != null; i++)
-                    {
-                        string ui = Path.Combine(d, "src", "ui");
-                        string nav = Path.Combine(ui, "PanelWindow.Nav.cs");
-                        if (File.Exists(nav))
-                        {
-                            // 生产代码按职责拆成多个 partial。顺序让 Tiles 位于
-                            // TileDrag 前，保留现有源码级方法区间检查的语义。
-                            string[] files = new string[] {
-                                "PanelWindow.Nav.cs", "PanelWindow.Search.cs",
-                                "PanelWindow.Tiles.cs", "PanelWindow.TileDrag.cs",
-                                "PanelWindow.Desks.cs"
-                            };
-                            List<string> chunks = new List<string>();
-                            foreach (string file in files)
-                            {
-                                string p = Path.Combine(ui, file);
-                                if (File.Exists(p)) chunks.Add(File.ReadAllText(p));
-                            }
-                            return string.Join("\n", chunks.ToArray());
-                        }
-                        DirectoryInfo parent = Directory.GetParent(d);
-                        if (parent == null) break;
-                        d = parent.FullName;
-                    }
-                }
-                catch { }
+                Button found = ResetButton(VisualTreeHelper.GetChild(node, i));
+                if (found != null) return found;
             }
             return null;
+        }
+        static Border Tile(PanelWindow panel, string path)
+        {
+            int i = panel.TestRenderedIndexOfPath(path);
+            return i < 0 ? null : panel.TestRenderedTileSnapshot()[i];
+        }
+        [STAThread]
+        static int Main()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "CloverCommonRules-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            Application app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+            PanelWindow panel = null;
+            try
+            {
+                long now = DateTime.UtcNow.Ticks;
+                AppItem fixture = new AppItem { Name = "Code", Path = "code.exe", Usage = 3, LastUsed = now };
+                Check(PanelWindow.IsCommonByUsage(fixture, 0, now), "刚启动的用户应用进入常用");
+                fixture.LastUsed = now - UsageStore.RecentWindowTicks + 1;
+                Check(PanelWindow.IsCommonByUsage(fixture, 0, now), "72 小时边界前仍显示");
+                fixture.LastUsed--;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "恰好连续 72 小时未用就移除");
+                fixture.LastUsed = now + 1;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "异常未来时间不进入常用");
+                fixture.LastUsed = now; fixture.LowValue = true;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "旧低价值布尔标记也不进入常用");
+                fixture.LowValue = false; fixture.Role = AppRole.LowValue;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "低价值即使使用频繁也不进入");
+                fixture.Role = AppRole.Computer;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "电脑用的只保留搜索");
+                fixture.Role = AppRole.User; fixture.Hidden = true;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "手动隐藏不能从常用重新出现");
+                fixture.Hidden = false; fixture.ExcludedEntry = true;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "非应用排除入口不进入");
+                fixture.ExcludedEntry = false;
+                Check(!PanelWindow.IsCommonByUsage(fixture, now, now), "手动移除快照生效");
+                Check(PanelWindow.IsCommonByUsage(fixture, now - 1, now), "再次启动后可重新进入");
+                fixture.LastUsed = 0;
+                Check(!PanelWindow.IsCommonByUsage(fixture, 0, now), "缺少最后启动时间不冒充近期应用");
+                Check(!PanelWindow.IsCommonByUsage(null, 0, now), "空入口安全过滤");
+                Check(PanelWindow.CommonMenuFor(false, 3) == PanelWindow.CommonMenuAction.None,
+                    "旧固定状态不产生固定或取消固定菜单");
+
+                List<object> entries = new List<object>();
+                string[] paths = new string[7];
+                for (int i = 0; i < paths.Length; i++)
+                {
+                    paths[i] = Path.Combine(root, "app" + i + ".exe");
+                    File.WriteAllText(paths[i], "fixture");
+                    entries.Add(new Dictionary<string, object> { { "name", "用户应用 " + i }, { "path", paths[i] }, { "category", "其他" } });
+                }
+                File.WriteAllText(Path.Combine(root, "config", "apps.json"), new JavaScriptSerializer().Serialize(
+                    new Dictionary<string, object> { { "apps", entries } }));
+                Settings settings = Settings.Load(root);
+                settings.PinnedCommon.Add(paths[2]);
+                settings.PinnedCommon.Add(paths[3]);
+                settings.PinnedCommon.Add(paths[4]);
+                settings.LowValueMarked.Add(paths[2]);
+                settings.ComputerAppRoles.Add(paths[5]);
+                settings.Save();
+                HiddenApps.Load(root).Hide(paths[6]);
+                UsageStore usage = UsageStore.Load(root);
+                usage.Record(paths[0], now - 2 * TimeSpan.TicksPerDay);
+                usage.Record(paths[0], now - TimeSpan.TicksPerDay);
+                usage.Record(paths[0], now);
+                for (int i = 0; i < 12; i++) usage.Record(paths[1], now);
+                usage.Record(paths[2], now);
+                usage.Record(paths[3], now - 4 * TimeSpan.TicksPerDay);
+                usage.Record(paths[5], now); usage.Record(paths[6], now);
+                Check(usage.GetRecentDays(paths[0], now) == 3 && usage.GetRecentDays(paths[1], now) == 1,
+                    "近期持续使用与一次集中启动可区分");
+                Check(usage.GetRecentCount(paths[0], now) == 3 && usage.GetRecentCount(paths[1], now) == 12,
+                    "最近三天启动次数单独统计");
+                Check(usage.GetRecentCount(paths[3], now) == 0 && usage.GetCount(paths[3]) == 1,
+                    "过期记录不计近期，但累计历史保留");
+                UsageStore reloaded = UsageStore.Load(root);
+                Check(reloaded.GetRecentCount(paths[0], now) == 3 && reloaded.GetRecentDays(paths[0], now) == 3,
+                    "近期频率与持续天数保存后往返");
+                string legacyRoot = Path.Combine(root, "legacy");
+                Directory.CreateDirectory(Path.Combine(legacyRoot, "config"));
+                File.WriteAllText(Path.Combine(legacyRoot, "config", "usage.json"), new JavaScriptSerializer().Serialize(
+                    new Dictionary<string, object> { { "apps", new Dictionary<string, object> {
+                        { "legacy.exe", new Dictionary<string, object> { { "count", 999 }, { "last", now } } } } } }));
+                UsageStore legacy = UsageStore.Load(legacyRoot);
+                Check(legacy.GetCount("legacy.exe") == 999 && legacy.GetRecentCount("legacy.exe", now) == 1,
+                    "旧累计次数不伪造近期频率，保留最后一次启动");
+
+                panel = new PanelWindow(root, null, Settings.Load(root));
+                panel.Width = panel.MinWidth; panel.Show(); panel.TestSwitchCategory("常用"); Wait(panel);
+                Check(panel.TestClassificationOf(paths[2]) == AppRole.LowValue, "旧固定不覆盖低价值分类");
+                Check(panel.TestRenderedTileSnapshot().Count == 2 && panel.TestFirstRenderedPath() == paths[0],
+                    "统一常用仅有近期用户应用，持续使用优先于单日高频");
+                Check(!Text(panel, "手动固定") && !Text(panel, "最近常用") && Text(panel, "自动排序"),
+                    "没有固定与最近分组，明确显示自动排序");
+                Button reset = ResetButton(panel);
+                Check(reset != null && !reset.IsEnabled && reset.ActualWidth > 0,
+                    "窄窗口恢复按钮可见，自动状态不可重复恢复");
+                Border kept = Tile(panel, paths[0]);
+                panel.TestCommitDrag(0, 2);
+                Check(panel.TestFirstRenderedPath() == paths[1] && Text(panel, "手动排序"),
+                    "统一列表拖动立即切换手动排序");
+                Check(ReferenceEquals(kept, Tile(panel, paths[0])) && panel.TestTileMapConsistent(),
+                    "拖动不刷新磁贴图标和映射");
+                Check(ResetButton(panel).IsEnabled, "手动状态可以恢复自动排序");
+                panel.TestExpireCommon(paths[0]);
+                Check(Tile(panel, paths[0]) == null && Tile(panel, paths[1]) != null && Text(panel, "手动排序"),
+                    "没有新启动也检测过期，手动排序不豁免三天规则");
+                Check(UsageStore.Load(root).GetCount(paths[0]) == 3, "过期检查不改写真实启动历史");
+                panel.TestRecordAppUsage(paths[0]); panel.TestSwitchCategory("常用"); Wait(panel);
+                panel.Close(); panel = new PanelWindow(root, null, Settings.Load(root));
+                panel.Show(); panel.TestSwitchCategory("常用"); Wait(panel);
+                Check(panel.TestFirstRenderedPath() == paths[1] && Text(panel, "手动排序"),
+                    "手动模式与顺序重启后保持");
+                kept = Tile(panel, paths[0]);
+                ResetButton(panel).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check(panel.TestFirstRenderedPath() == paths[0] && Text(panel, "自动排序"),
+                    "恢复按钮走生产动作重新使用近期排序");
+                Check(ReferenceEquals(kept, Tile(panel, paths[0])) && panel.TestTileMapConsistent(),
+                    "恢复自动排序复用现有磁贴");
+                Check(UsageStore.Load(root).GetCount(paths[1]) == 12, "恢复不删除真实启动历史");
+                panel.TestDismissCommon(paths[0]);
+                Check(Tile(panel, paths[0]) == null && UsageStore.Load(root).GetCount(paths[0]) == 4,
+                    "从常用移除仅影响本页，历史仍保留");
+                panel.TestRecordAppUsage(paths[0]); panel.TestSwitchCategory("常用"); Wait(panel);
+                Check(Tile(panel, paths[0]) != null, "再次从四叶草启动后自然重入常用");
+                panel.TestSwitchCategory(""); Wait(panel);
+                panel.TestOrder(new List<string> { paths[4], paths[1], paths[0], paths[3] });
+                panel.TestSwitchCategory("常用"); Wait(panel);
+                panel.TestCommitDrag(0, 2); panel.TestRestoreCommonAutoSort();
+                panel.TestSwitchCategory(""); Wait(panel);
+                Check(panel.TestFirstRenderedPath() == paths[4], "常用恢复不改变全部页个人顺序");
+                Check(Tile(panel, paths[3]) != null && Tile(panel, paths[4]) != null,
+                    "过期与未启动应用仍留在全部，不隐藏软件");
+                panel.TestSwitchCategory("常用"); Wait(panel);
+                for (int i = 0; i < 6; i++) panel.TestRecordAppUsage(paths[2]);
+                panel.TestSwitchCategory("常用"); Wait(panel);
+                Check(Tile(panel, paths[2]) == null, "低价值即使再次启动也不会回常用");
+                panel.Close(); panel = new PanelWindow(root, null, Settings.Load(root));
+                panel.Show(); panel.TestSwitchCategory("常用"); Wait(panel);
+                Check(Text(panel, "自动排序") && panel.TestFirstRenderedPath() == paths[0],
+                    "恢复自动状态重启后保持");
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+                Check(Ui.TileHover.Color.A < 255 && Ui.TilePressed.Color.A > Ui.TileHover.Color.A,
+                    "浅色磁贴交互仍保持半透明");
+                Ui.ApplyTheme(Ui.ThemeMode.Dark);
+                Check(Ui.TileHover.Color.A < 255 && Ui.TilePressed.Color.A > Ui.TileHover.Color.A,
+                    "深色磁贴交互仍保持半透明");
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+            }
+            catch (Exception ex) { Check(false, "异常：" + ex); }
+            finally
+            {
+                if (panel != null) panel.Close();
+                app.Shutdown();
+                try { Directory.Delete(root, true); } catch { }
+            }
+            Console.WriteLine("通过 " + passed + " / 失败 " + failed);
+            return failed == 0 ? 0 : 1;
         }
     }
 }

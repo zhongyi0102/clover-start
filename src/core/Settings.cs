@@ -58,6 +58,9 @@ namespace Clover
         /// </summary>
         public string Theme = "system";
 
+        /// <summary>自动适配壁纸；手动外观参数保留，自动结果不写盘。</summary>
+        public bool AutoAppearance = true;
+
         /// <summary>
         /// 毛玻璃背景浓度（0-100）。0 = 关闭。
         ///
@@ -222,13 +225,7 @@ namespace Clover
         public bool CollapseLowValue = false;
 
         /// <summary>
-        /// **手动固定到「常用」**的应用路径（右键「手动固定到常用」写入）。
-        ///
-        /// 为什么不直接给 usage.json 加计数：
-        ///   · 计数会被「常用」按使用次数排序挤下去，用户点了可能看不见变化
-        ///   · 会污染「使用次数」的真实语义（没启动却 +1）
-        /// 这里是一份独立的人工名单：命中的应用**必定**出现在「常用」，
-        /// 且不占用使用榜的名额。
+        /// 旧固定名单仅兼容读写，不再参与显示、分类或搜索排序。
         /// </summary>
         public List<string> PinnedCommon = new List<string>();
 
@@ -237,15 +234,26 @@ namespace Clover
         ///
         /// 这里不删除 usage.json：启动次数和最近使用时间仍是真实历史。只有当应用
         /// 再次启动、LastUsed 晚于该时间戳时，它才会重新进入「最近常用」。
-        /// 固定项不受此表影响。
+        /// 所有常用应用遵守同一规则，无固定例外。
         /// </summary>
         public Dictionary<string, long> CommonDismissed =
             new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+
+        // 应用角色与显示状态独立；明确指定主动使用优先于自动建议。
+        public List<string> ActiveAppRoles = new List<string>();
+        public List<string> AuxiliaryAppRoles = new List<string>();
+        public List<string> ComputerAppRoles = new List<string>();
+        public bool CollapseAuxiliaryApps = false;
 
         // ========== 桌面保持无快捷方式 ==========
 
         /// <summary>总开关：桌面快捷方式自动移到回收站。默认关闭。</summary>
         public bool DesktopCleanEnabled = false;
+
+        // 新的统一桌面策略不继承旧的“只清应用快捷方式”授权。
+        public bool DesktopKeepEmptyEnabled = false;
+        public List<string> DesktopKeepPaths = new List<string>();
+        public List<object> DesktopMoves = new List<object>();
 
         /// <summary>
         /// 子选项：开启时是否立即清理桌面上**现有**的快捷方式。
@@ -376,6 +384,7 @@ namespace Clover
                 if (d.TryGetValue("safeMode", out v) && v != null) s.SafeMode = Convert.ToBoolean(v);
                 if (d.TryGetValue("navCollapsed", out v) && v != null) s.NavCollapsed = Convert.ToBoolean(v);
                 if (d.TryGetValue("theme", out v) && v != null) s.Theme = Convert.ToString(v);
+                s.AutoAppearance = ReadBool(d, "autoAppearance", s.AutoAppearance);
                 if (d.TryGetValue("glassOpacity", out v) && v != null) s.GlassOpacity = Convert.ToInt32(v);
                 if (d.TryGetValue("glassMode", out v) && v != null) s.GlassMode = Convert.ToString(v);
                 // ---- 外观参数（越界/格式错 → 回退默认 + 写日志，不崩溃）----
@@ -417,9 +426,16 @@ namespace Clover
                 s.CollapseLowValue = ReadBool(d, "collapseLowValue", false);
                 s.PinnedCommon = ReadStringList(d, "pinnedCommon");
                 s.CommonDismissed = ReadLongDictionary(d, "commonDismissed");
+                s.ActiveAppRoles = ReadStringList(d, "activeAppRoles");
+                s.AuxiliaryAppRoles = ReadStringList(d, "auxiliaryAppRoles");
+                s.ComputerAppRoles = ReadStringList(d, "computerAppRoles");
+                s.CollapseAuxiliaryApps = ReadBool(d, "collapseAuxiliaryApps", false);
 
                 // ---- 桌面保持无快捷方式 ----
                 s.DesktopCleanEnabled = ReadBool(d, "desktopCleanEnabled", false);
+                s.DesktopKeepEmptyEnabled = ReadBool(d, "desktopKeepEmptyEnabled", false);
+                s.DesktopKeepPaths = ReadStringList(d, "desktopKeepPaths");
+                s.DesktopMoves = ReadObjectList(d, "desktopMoves");
                 s.DesktopCleanExisting = ReadBool(d, "desktopCleanExisting", false);
                 s.DesktopEnabledAt = ReadString(d, "desktopEnabledAt", "", null);
                 s.DesktopLastScan = ReadString(d, "desktopLastScan", "", null);
@@ -468,6 +484,7 @@ namespace Clover
                 d["safeMode"] = SafeMode;
                 d["navCollapsed"] = NavCollapsed;
                 d["theme"] = Theme;
+                d["autoAppearance"] = AutoAppearance;
                 d["glassOpacity"] = GlassOpacity;
                 d["glassMode"] = GlassMode;
                 d["glassPreset"] = GlassPreset;
@@ -491,7 +508,14 @@ namespace Clover
                 d["collapseLowValue"] = CollapseLowValue;
                 d["pinnedCommon"] = PinnedCommon;
                 d["commonDismissed"] = CommonDismissed;
+                d["activeAppRoles"] = ActiveAppRoles;
+                d["auxiliaryAppRoles"] = AuxiliaryAppRoles;
+                d["computerAppRoles"] = ComputerAppRoles;
+                d["collapseAuxiliaryApps"] = CollapseAuxiliaryApps;
                 d["desktopCleanEnabled"] = DesktopCleanEnabled;
+                d["desktopKeepEmptyEnabled"] = DesktopKeepEmptyEnabled;
+                d["desktopKeepPaths"] = DesktopKeepPaths;
+                d["desktopMoves"] = DesktopMoves;
                 d["desktopCleanExisting"] = DesktopCleanExisting;
                 d["desktopEnabledAt"] = DesktopEnabledAt;
                 d["desktopLastScan"] = DesktopLastScan;

@@ -385,6 +385,19 @@ namespace Clover
                 Check(r.ReturnTruncated, "★ReturnTruncated = true");
                 Check(r.FilteredCount == 520, "FilteredCount = 520", Convert.ToString(r.FilteredCount));
                 Check(r.Notice != null && r.Notice.IndexOf("500") >= 0, "★Notice 提到 500", r.Notice ?? "null");
+                FileScanner.Result snapshot = FileScanner.ScanMany(new List<string> { root, root }, FileScanner.SortKey.Name, true);
+                Check(snapshot.Items.Count == 520 && snapshot.ScannedCount == 520 && !snapshot.ReturnTruncated,
+                    "快照保留全部已扫描项，重复来源不消耗预算");
+                Check(FileScanner.Filter(snapshot.Items, "f0519").Count == 1,
+                    "搜索找到旧 500 项截断之外的文件");
+                FileScanner.Result partial = FileScanner.ScanMany(new List<string> { root, Path.Combine(root, "missing") },
+                    FileScanner.SortKey.Name, true);
+                Check(partial.Error == null && partial.Items.Count == 520 && !string.IsNullOrEmpty(partial.Warning),
+                    "部分来源失败保留成功结果并明确提示");
+                int checks = 0;
+                FileScanner.Result cancelled = FileScanner.ScanMany(new List<string> { root }, FileScanner.SortKey.Name, true,
+                    delegate { return ++checks > 12; });
+                Check(cancelled.ScannedCount < 520 && checks <= 13, "取消过期扫描及时停止，不继续读取整个来源");
             }
             finally { Clean(root); }
             Console.WriteLine();
@@ -411,6 +424,23 @@ namespace Clover
                 Check(r.Items.Count == FileScanner.MaxReturn, "返回仍是 500 上限",
                     Convert.ToString(r.Items.Count));
                 Check(r.Notice != null && r.Notice.IndexOf("过大") >= 0, "★Notice 提到目录过大", r.Notice ?? "null");
+                FileScanner.Result snapshot = FileScanner.ScanMany(new List<string> { root }, FileScanner.SortKey.Name, true);
+                Check(snapshot.Items.Count == FileScanner.MaxEnumerate && snapshot.EnumerateTruncated,
+                    "元数据快照保留 5000 项并明确枚举截断");
+                FileScanner.Result combined = FileScanner.ScanMany(new List<string> { root, Path.Combine(root, "missing") },
+                    FileScanner.SortKey.Name, true);
+                Check(combined.ScannedCount == FileScanner.MaxEnumerate && combined.Items.Count <= FileScanner.MaxEnumerate,
+                    "多来源共用总扫描预算，不按每个来源额外扫描5000项");
+            }
+            finally { Clean(root); }
+            root = NewRoot();
+            try
+            {
+                for (int i = 0; i <= FileScanner.MaxEnumerate; i++)
+                    MakeFile(root, "skipped" + i.ToString("D5") + ".tmp", 1);
+                FileScanner.Result skipped = FileScanner.ScanMany(new List<string> { root }, FileScanner.SortKey.Name, true);
+                Check(skipped.Items.Count == 0 && skipped.ScannedCount == FileScanner.MaxEnumerate
+                    && skipped.EnumerateTruncated, "排除的临时文件也消耗扫描预算，不因过滤而无界枚举");
             }
             finally { Clean(root); }
             Console.WriteLine();
@@ -631,6 +661,19 @@ namespace Clover
                 "KeepEntry(null 集合) 文件夹关 → false");
             Check(FileExtGroups.KeepEntry(false, ".txt", false, null, builtin, custom),
                 "KeepEntry(null 集合) 文件 → true");
+            Check(FileExtGroups.KeepEntry(true, "", FileExtGroups.EntryMode.All, empty, builtin, custom)
+                && FileExtGroups.KeepEntry(false, ".txt", FileExtGroups.EntryMode.All, empty, builtin, custom),
+                "明确全部模式默认同时显示文件与文件夹");
+            Check(!FileExtGroups.KeepEntry(true, "", FileExtGroups.EntryMode.Files, empty, builtin, custom)
+                && FileExtGroups.KeepEntry(false, ".txt", FileExtGroups.EntryMode.Files, empty, builtin, custom),
+                "明确文件模式排除文件夹");
+            Check(FileExtGroups.KeepEntry(true, "", FileExtGroups.EntryMode.Folders, docOnly, builtin, custom)
+                && !FileExtGroups.KeepEntry(false, ".docx", FileExtGroups.EntryMode.Folders, docOnly, builtin, custom),
+                "文件夹模式不受后缀影响且不混入文件");
+            Check(FileExtGroups.KeepEntry(true, "", FileExtGroups.EntryMode.All, docOnly, builtin, custom)
+                && FileExtGroups.KeepEntry(false, ".docx", FileExtGroups.EntryMode.All, docOnly, builtin, custom)
+                && !FileExtGroups.KeepEntry(false, ".pdf", FileExtGroups.EntryMode.All, docOnly, builtin, custom),
+                "全部模式后缀只影响文件，文件夹始终保留");
 
             Console.WriteLine();
         }

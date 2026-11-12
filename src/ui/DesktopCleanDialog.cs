@@ -32,23 +32,25 @@ namespace Clover
         readonly Settings settings;
         readonly AppWatcher watcher;
         readonly Action onChanged;
+        readonly PanelWindow panel;
 
         CheckBox chkEnabled;
-        CheckBox chkExisting;
         StackPanel keepList;
         StackPanel removedList;
+        StackPanel movesList;
         Border pendingBox;
         TextBlock pendingText;
 
         /// <summary>页面内容（由外壳放进 ContentControl）。</summary>
         public FrameworkElement Content { get; private set; }
 
-        public DesktopCleanPage(Window host, Settings settings, AppWatcher watcher, Action onChanged)
+        public DesktopCleanPage(Window host, Settings settings, AppWatcher watcher, Action onChanged, PanelWindow panel = null)
         {
             this.dlg = host;
             this.settings = settings;
             this.watcher = watcher;
             this.onChanged = onChanged;
+            this.panel = panel;
 
             BuildUi();
         }
@@ -63,14 +65,14 @@ namespace Clover
             col.Orientation = Orientation.Vertical;
 
             // ---- 标题 ----
-            TextBlock title = Ui.T("桌面保持无快捷方式", 15, Ui.Fg);
+            TextBlock title = Ui.T("自动保持桌面空", 15, Ui.Fg);
             title.FontWeight = FontWeights.SemiBold;
             title.Margin = new Thickness(0, 0, 0, Ui.S.Md);
             col.Children.Add(title);
 
             TextBlock hint = Ui.T(
-                "开启后，桌面上的 .lnk / .url 会被自动移到回收站。"
-                + "文件、文件夹、文档、图片一律不动。",
+                "开启后，用户桌面的稳定文档与网页入口移入桌面收纳；确认面板已有的应用快捷方式移到回收站。"
+                + "软件本体不删除。例外、临时文件、文件夹、公共桌面与无法确认的入口保留，使用收纳桌面手动处理。",
                 11, Ui.Sub);
             hint.TextWrapping = TextWrapping.Wrap;
             hint.Margin = new Thickness(0, 0, 0, Ui.S.Lg);
@@ -78,35 +80,25 @@ namespace Clover
 
             // ---- 1. 开关 ----
             chkEnabled = new CheckBox();
-            chkEnabled.Content = "启用（桌面不显示快捷方式）";
-            chkEnabled.IsChecked = settings.DesktopCleanEnabled;
+            chkEnabled.Content = "自动保持桌面空（默认关闭）";
+            chkEnabled.IsChecked = settings.DesktopKeepEmptyEnabled;
             chkEnabled.Foreground = Ui.Fg;
             chkEnabled.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
             chkEnabled.Checked += delegate { OnToggle(true); };
             chkEnabled.Unchecked += delegate { OnToggle(false); };
             col.Children.Add(chkEnabled);
 
-            chkExisting = new CheckBox();
-            chkExisting.Content = "同时清理桌面现有的快捷方式";
-            chkExisting.IsChecked = settings.DesktopCleanExisting;
-            chkExisting.Foreground = Ui.Fg;
-            chkExisting.Margin = new Thickness(20, 0, 0, Ui.S.Lg);
-            chkExisting.IsEnabled = settings.DesktopCleanEnabled;
-            chkExisting.Checked += delegate { SaveExisting(); };
-            chkExisting.Unchecked += delegate { SaveExisting(); };
-            col.Children.Add(chkExisting);
-
             // ---- 2. 保留名单 ----
-            col.Children.Add(SectionHeader("保留名单", "名单里的快捷方式永远不被移除"));
+            col.Children.Add(SectionHeader("桌面例外", "主动放回或恢复的项目保留，取消例外后可再次处理"));
 
             StackPanel keepBar = new StackPanel();
             keepBar.Orientation = Orientation.Horizontal;
             keepBar.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
 
-            Border addBtn = SmallButton("手动添加…", delegate { AddKeepManually(); });
+            Button addBtn = SmallButton("手动添加…", delegate { AddKeepManually(); });
             keepBar.Children.Add(addBtn);
 
-            Border pruneBtn = SmallButton("清理失效项", delegate { PruneKeep(); });
+            Button pruneBtn = SmallButton("清理失效项", delegate { PruneKeep(); });
             pruneBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
             keepBar.Children.Add(pruneBtn);
 
@@ -115,6 +107,10 @@ namespace Clover
             keepList = new StackPanel();
             keepList.Orientation = Orientation.Vertical;
             col.Children.Add(keepList);
+
+            col.Children.Add(SectionHeader("移动记录", "只还原所选记录，同名不覆盖；与快捷方式回收记录分开"));
+            movesList = new StackPanel();
+            col.Children.Add(movesList);
 
             // ---- 3. 已移除 ----
             col.Children.Add(SectionHeader("已移除", "点「恢复」会同时加入保留名单，以后不再移除"));
@@ -131,9 +127,7 @@ namespace Clover
             pendingBox.CornerRadius = new CornerRadius(Ui.R.Sm);
             pendingBox.Padding = new Thickness(Ui.S.Sm);
             pendingBox.Margin = new Thickness(0, Ui.S.Lg, 0, 0);
-            pendingBox.Cursor = System.Windows.Input.Cursors.Hand;
             pendingBox.Visibility = Visibility.Collapsed;
-            pendingBox.MouseLeftButtonUp += delegate { ProcessPending(); };
 
             pendingText = Ui.T("", 11, Ui.Accent);
             pendingText.TextWrapping = TextWrapping.Wrap;
@@ -153,20 +147,15 @@ namespace Clover
         {
             try
             {
-                chkExisting.IsEnabled = on;
-
                 if (on)
                 {
                     // ★ 说明弹窗：默认焦点在「取消」
-                    string msg =
-                        "开启后，桌面上的快捷方式会被自动移到回收站"
-                        + "（可在「已移除」里恢复）。\r\n\r\n"
-                        + (settings.DesktopCleanExisting
-                            ? "当前的「同时清理现有的」已勾选 —— 现有的快捷方式会立即被清理。"
-                            : "当前的「同时清理现有的」未勾选 —— 现有的快捷方式保留，只处理之后新出现的。");
+                    string msg = "将自动处理用户桌面现有及以后新增的稳定文件：\r\n"
+                        + "文档与网页入口移入桌面收纳；面板已有的应用快捷方式移到回收站。\r\n\r\n"
+                        + "不删除软件本体；例外、临时、占用及未知项目保留。文件夹与公共桌面需手动收纳确认。";
 
                     MessageBoxResult r = MessageBox.Show(dlg, msg,
-                        "四叶草 · 桌面快捷方式",
+                        "四叶草 · 自动保持桌面空",
                         MessageBoxButton.OKCancel, MessageBoxImage.Warning,
                         MessageBoxResult.Cancel);   // ★ 默认焦点在「取消」
 
@@ -178,7 +167,8 @@ namespace Clover
                     }
                 }
 
-                settings.DesktopCleanEnabled = on;
+                settings.DesktopKeepEmptyEnabled = on;
+                settings.DesktopCleanEnabled = false;
 
                 if (watcher != null) watcher.SetDesktopClean(on);
                 else settings.Save();
@@ -187,17 +177,6 @@ namespace Clover
                 Notify();
             }
             catch (Exception ex) { Ui.LogError(ex, "切换桌面清理开关"); }
-        }
-
-        void SaveExisting()
-        {
-            try
-            {
-                settings.DesktopCleanExisting = chkExisting.IsChecked == true;
-                settings.Save();
-                Notify();
-            }
-            catch (Exception ex) { Ui.LogError(ex, "保存子选项"); }
         }
 
         // ========== 保留名单 ==========
@@ -209,7 +188,7 @@ namespace Clover
                 keepList.Children.Clear();
 
                 List<string> list = settings.DesktopKeepTargets ?? new List<string>();
-                if (list.Count == 0)
+                if (list.Count == 0 && settings.DesktopKeepPaths.Count == 0)
                 {
                     keepList.Children.Add(Ui.T("（空）", 11, Ui.Sub));
                     return;
@@ -218,6 +197,23 @@ namespace Clover
                 foreach (string key in list)
                 {
                     keepList.Children.Add(MakeKeepRow(key));
+                }
+                foreach (string path in settings.DesktopKeepPaths.ToArray())
+                {
+                    Grid row = new Grid();
+                    row.ColumnDefinitions.Add(new ColumnDefinition());
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    TextBlock text = Ui.T(PathName(path), 10.5, Ui.Fg);
+                    text.TextTrimming = TextTrimming.CharacterEllipsis;
+                    text.ToolTip = path;
+                    row.Children.Add(text);
+                    string capturedPath = path;
+                    Button cancel = SmallButton("取消例外", delegate {
+                        lock (settings) { settings.DesktopKeepPaths.Remove(capturedPath); settings.Save(); }
+                        RefreshKeepList(); Notify();
+                    });
+                    Grid.SetColumn(cancel, 1); row.Children.Add(cancel);
+                    keepList.Children.Add(row);
                 }
             }
             catch (Exception ex) { Ui.LogError(ex, "刷新保留名单"); }
@@ -244,7 +240,7 @@ namespace Clover
             g.Children.Add(t);
 
             string captured = key;
-            Border del = SmallButton("删除", delegate
+            Button del = SmallButton("取消例外", delegate
             {
                 try
                 {
@@ -266,7 +262,7 @@ namespace Clover
             try
             {
                 string s = TextPromptDialog.Ask(dlg, "手动添加保留项",
-                    "输入目标路径（或 name:文件名.url）：", "");
+                    "输入要保留在桌面的项目完整路径：", "");
                 if (string.IsNullOrWhiteSpace(s)) return;
 
                 string key = s.Trim();
@@ -275,8 +271,7 @@ namespace Clover
 
                 if (string.IsNullOrEmpty(key)) return;
 
-                DesktopKeep.AddKey(settings.DesktopKeepTargets, key);
-                settings.Save();
+                DesktopWorkspace.Keep(settings, key);
                 RefreshKeepList();
                 Notify();
             }
@@ -288,6 +283,7 @@ namespace Clover
             try
             {
                 int n = DesktopKeep.Prune(settings.DesktopKeepTargets);
+                n += settings.DesktopKeepPaths.RemoveAll(p => !System.IO.File.Exists(p) && !System.IO.Directory.Exists(p));
                 settings.Save();
                 RefreshKeepList();
                 Notify();
@@ -345,7 +341,7 @@ namespace Clover
             Grid.SetColumn(t, 0);
             g.Children.Add(t);
 
-            Border restore = SmallButton("恢复", delegate { RestoreOne(d); });
+            Button restore = SmallButton("恢复", delegate { RestoreOne(d); });
             Grid.SetColumn(restore, 1);
             g.Children.Add(restore);
 
@@ -361,8 +357,7 @@ namespace Clover
 
                 // ★ 顺序：先加入保留名单，再还原
                 //   反过来的话 watcher 会在还原瞬间把它当新快捷方式移走
-                DesktopKeep.Add(settings.DesktopKeepTargets, path);
-                settings.Save();
+                DesktopWorkspace.Keep(settings, path);
 
                 int n = UndoBar.RestoreFromRecycleBin(new List<string> { path });
                 if (n > 0)
@@ -398,52 +393,10 @@ namespace Clover
                     return;
                 }
 
-                pendingText.Text = "有 " + n + " 个公共桌面快捷方式需要管理员权限，点此处理";
+                pendingText.Text = "有 " + n + " 个公共桌面快捷方式曾因权限保留。请在收纳预览中确认；本程序不提供永久删除。";
                 pendingBox.Visibility = Visibility.Visible;
             }
             catch { }
-        }
-
-        void ProcessPending()
-        {
-            try
-            {
-                int n = settings.DesktopPendingAdmin == null ? 0 : settings.DesktopPendingAdmin.Count;
-                if (n == 0) return;
-
-                // ★ 提权删除是永久删除，必须写明；默认焦点在「取消」
-                string msg =
-                    "将以管理员身份永久删除 " + n + " 项。\r\n\r\n"
-                    + "注意：提权删除将永久删除，不进回收站。";
-
-                MessageBoxResult r = MessageBox.Show(dlg, msg,
-                    "四叶草 · 需要管理员权限",
-                    MessageBoxButton.OKCancel, MessageBoxImage.Warning,
-                    MessageBoxResult.Cancel);   // ★ 默认焦点在「取消」
-
-                if (r != MessageBoxResult.OK) return;
-
-                if (watcher == null || watcher.DesktopCleaner == null)
-                {
-                    MessageBox.Show(dlg, "桌面清理器未初始化。", "四叶草",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                int failed;
-                int ok = watcher.DesktopCleaner.ProcessPendingAdmin(out failed);
-
-                RefreshLists();
-                Notify();
-
-                if (failed > 0)
-                {
-                    MessageBox.Show(dlg,
-                        "提权删除完成 " + ok + " 项，失败 " + failed + " 项。",
-                        "四叶草 · 删除", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            catch (Exception ex) { Ui.LogError(ex, "处理待提权项"); }
         }
 
         // ========== 通用 ==========
@@ -452,8 +405,44 @@ namespace Clover
         {
             RefreshKeepList();
             RefreshRemovedList();
+            RefreshMoves();
             RefreshPending();
         }
+
+        void RefreshMoves()
+        {
+            movesList.Children.Clear();
+            foreach (object item in settings.DesktopMoves.ToArray())
+            {
+                Dictionary<string, object> record = item as Dictionary<string, object>;
+                if (record == null) continue;
+                string from = Str(record, "from"), to = Str(record, "to");
+                Grid row = new Grid();
+                row.ColumnDefinitions.Add(new ColumnDefinition());
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                TextBlock text = Ui.T(Str(record, "action") + " · " + PathName(to) + " · " + Str(record, "time"), 10.5, Ui.Fg);
+                text.TextTrimming = TextTrimming.CharacterEllipsis;
+                text.ToolTip = from + " → " + to;
+                row.Children.Add(text);
+                Button restore = SmallButton("还原移动", delegate
+                {
+                    if (!TextPromptDialog.Confirm(dlg, "还原移动", "将此项目移回原位置？同名不覆盖，桌面项目将加入例外。\r\n" + from, "还原移动")) return;
+                    string parent = System.IO.Path.GetDirectoryName(from);
+                    if (!System.IO.Directory.Exists(parent)) { MessageBox.Show(dlg, "原目录已不存在，未移动。请先确认位置。", "四叶草"); return; }
+                    string target = DeskCollector.MakeUniqueTarget(parent, System.IO.Path.GetFileName(from), System.IO.Directory.Exists(to));
+                    if (DeskCollector.DesktopDirs().Exists(p => string.Equals(p, parent, StringComparison.OrdinalIgnoreCase))) DesktopWorkspace.Keep(settings, target);
+                    VerifiedFileMove.Result result = VerifiedFileMove.Move(to, target);
+                    if (result.Ok) { settings.DesktopMoves.Remove(record); settings.Save(); RefreshMoves(); RefreshKeepList(); Notify(); }
+                    else MessageBox.Show(dlg, "未还原：" + result.Message, "四叶草");
+                });
+                restore.IsEnabled = System.IO.File.Exists(to) || System.IO.Directory.Exists(to);
+                Grid.SetColumn(restore, 1); row.Children.Add(restore);
+                movesList.Children.Insert(0, row);
+            }
+            if (movesList.Children.Count == 0) movesList.Children.Add(Ui.T("（空）", 11, Ui.Sub));
+        }
+
+        static string PathName(string path) { try { return System.IO.Path.GetFileName(path); } catch { return path; } }
 
         void Notify()
         {
@@ -480,11 +469,12 @@ namespace Clover
             return t;
         }
 
-        static Border SmallButton(string label, Action onClick)
+        static Button SmallButton(string label, Action onClick)
         {
-            Border b = new Border();
-            b.CornerRadius = new CornerRadius(10);
+            Button b = new Button();
+            b.Template = PanelWindow.MakeButtonTemplate(10);
             b.Padding = new Thickness(10, 2, 10, 2);
+            b.MinHeight = 26;
             b.Cursor = System.Windows.Input.Cursors.Hand;
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
@@ -492,11 +482,14 @@ namespace Clover
 
             TextBlock t = Ui.T(label, 10.5, Ui.Fg);
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            t.Margin = new Thickness(10, 2, 10, 2);
+            b.Content = t;
 
             b.MouseEnter += delegate { b.Background = Ui.Hover; };
             b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
-            b.MouseLeftButtonUp += delegate
+            b.GotKeyboardFocus += delegate { b.Background = Ui.AccentSoft; b.BorderBrush = Ui.Accent; };
+            b.LostKeyboardFocus += delegate { b.Background = Ui.SearchBg; b.BorderBrush = Ui.Line; };
+            b.Click += delegate
             {
                 try { if (onClick != null) onClick(); }
                 catch (Exception ex) { Ui.LogError(ex, "设置按钮"); }

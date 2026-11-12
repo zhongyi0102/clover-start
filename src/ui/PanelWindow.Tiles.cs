@@ -20,49 +20,35 @@ namespace Clover
     partial class PanelWindow
     {
         /// <summary>
-        /// 「常用」页的条目：使用榜 + 人工固定名单。
+        /// 「常用」只包含最近 72 小时启动过的用户应用，无固定名单、无数量上限。
         ///
         /// **不设上限**：早期版本截断到前 12 个，导致右键「添加到常用」在
         /// 使用榜已满时点了没反应 —— 用户看不到任何变化，以为功能坏了。
         /// 现在全部列出，靠磁贴区自身滚动承载。
         ///
-        /// 人工固定（`settings.PinnedCommon`）的条目**必定**在列表里，
-        /// 哪怕 Usage 为 0；两者按路径去重。
+        /// 旧固定记录不参与显示、分类或排序；不删除真实启动记录。
         ///
-        /// **两条分支都必须过滤 `Hidden`**：隐藏的语义是「不在任何分类里显示」
-        /// （见 HideReason），只在其中一条分支过滤，会让"隐藏但有使用记录"的
-        /// 应用重新出现在常用页上 —— 用户刚把它藏起来，它却还在。
+        /// Hidden、低价值与电脑入口始终过滤，启动记录不能覆盖分类。
         /// </summary>
         List<AppItem> CommonApps()
         {
-            List<AppItem> pinned = new List<AppItem>();
             List<AppItem> recent = new List<AppItem>();
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // ---- 1. 人工固定的（右键「添加到常用」）----
-            if (settings != null && settings.PinnedCommon != null && settings.PinnedCommon.Count > 0)
-            {
-                foreach (string p in settings.PinnedCommon)
-                {
-                    if (string.IsNullOrEmpty(p)) continue;
-                    AppItem hit = FindAppByPath(p);
-                    if (hit == null || hit.Hidden) continue;   // 已卸载 / 已隐藏 → 跳过
-                    if (seen.Add(hit.Path)) pinned.Add(hit);
-                }
-            }
-
-            // ---- 2. 使用榜（Usage > 0）----
+            long nowTicks = DateTime.UtcNow.Ticks;
             foreach (AppItem a in catalog.Apps)
             {
-                if (!IsCommonByUsage(a, CommonDismissedAt(a.Path))) continue;
+                if (!IsCommonByUsage(a, CommonDismissedAt(a.Path), nowTicks)) continue;
                 if (seen.Add(a.Path)) recent.Add(a);
             }
-
-            // 手动固定保留用户名单顺序；最近常用按频率与最近时间排序。
-            recent.Sort(RenderCompare);
-            List<AppItem> list = new List<AppItem>(pinned);
-            list.AddRange(recent);
-            return list;
+            // 近三天有持续使用的优先，再比较近期启动次数与最后启动时间。
+            recent.Sort(delegate(AppItem a, AppItem b)
+            {
+                int c = usage == null ? 0 : usage.GetRecentDays(b.Path, nowTicks).CompareTo(usage.GetRecentDays(a.Path, nowTicks));
+                if (c == 0 && usage != null) c = usage.GetRecentCount(b.Path, nowTicks).CompareTo(usage.GetRecentCount(a.Path, nowTicks));
+                if (c == 0) c = b.LastUsed.CompareTo(a.LastUsed);
+                return c != 0 ? c : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+            });
+            return recent;
         }
 
 
@@ -72,7 +58,7 @@ namespace Clover
         ///
         /// 抽成静态纯函数是为了能被测试直接调用 —— 这里曾经漏掉 `Hidden` 判断，
         /// 导致"隐藏但有使用记录"的应用重新出现在常用页上（用户刚藏起来，它却还在）。
-        /// 判定与「人工固定」分支必须一致：已隐藏的一律不进。
+        /// 三天未用只退出常用，不隐藏软件。
         /// </summary>
         internal static bool IsCommonByUsage(AppItem a)
         {
@@ -86,12 +72,17 @@ namespace Clover
         /// </summary>
         internal static bool IsCommonByUsage(AppItem a, long dismissedAt)
         {
+            return IsCommonByUsage(a, dismissedAt, DateTime.UtcNow.Ticks);
+        }
+
+        internal static bool IsCommonByUsage(AppItem a, long dismissedAt, long nowTicks)
+        {
             if (a == null) return false;
-            if (a.Hidden) return false;                       // 已隐藏 → 不进
+            if (a.Hidden || a.ExcludedEntry || a.Role != AppRole.User || a.LowValue) return false;
             if (a.Usage <= 0) return false;                   // 没有使用记录 → 不进
-            if (string.IsNullOrEmpty(a.Path)) return false;   // 无路径 → 无法去重/固定
+            if (string.IsNullOrEmpty(a.Path)) return false;   // 无路径 → 无法记录/去重
             if (dismissedAt > 0 && a.LastUsed <= dismissedAt) return false;
-            return true;
+            return a.LastUsed > nowTicks - UsageStore.RecentWindowTicks && a.LastUsed <= nowTicks;
         }
 
 
@@ -112,35 +103,6 @@ namespace Clover
         }
 
 
-        /// <summary>该应用是否已被手动固定到「常用」。</summary>
-        bool IsPinnedCommon(AppItem a)
-        {
-            try
-            {
-                if (a == null || settings == null || settings.PinnedCommon == null) return false;
-                if (string.IsNullOrEmpty(a.Path)) return false;
-                foreach (string p in settings.PinnedCommon)
-                {
-                    if (string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase)) return true;
-                }
-            }
-            catch { }
-            return false;
-        }
-
-
-        bool IsPinnedCommonPath(string path)
-        {
-            if (string.IsNullOrEmpty(path) || settings == null || settings.PinnedCommon == null)
-                return false;
-            foreach (string p in settings.PinnedCommon)
-            {
-                if (string.Equals(p, path, StringComparison.OrdinalIgnoreCase)) return true;
-            }
-            return false;
-        }
-
-
         long CommonDismissedAt(string path)
         {
             long at;
@@ -148,77 +110,6 @@ namespace Clover
                 return 0;
             return settings.CommonDismissed.TryGetValue(path, out at) ? at : 0;
         }
-
-
-
-        void SyncRunningDot(AppItem a, Grid iconBox)
-        {
-            try
-            {
-                if (a == null || iconBox == null) return;
-
-                bool shouldShow = RunningApps.IsRunningCached(a.Path);
-
-                // 末尾是不是已经有圆点了
-                Border existing = null;
-                int n = iconBox.Children.Count;
-                if (n > 0) existing = iconBox.Children[n - 1] as Border;
-                bool hasDot = existing != null && Math.Abs(existing.Width - 8) < 0.1;
-
-                if (shouldShow == hasDot) return;   // 状态没变，不碰
-
-                if (shouldShow)
-                {
-                    Border dot = new Border();
-                    dot.Width = 8;
-                    dot.Height = 8;
-                    dot.CornerRadius = new CornerRadius(4);   // 正圆
-                    dot.Background = Ui.Accent;
-                    dot.HorizontalAlignment = HorizontalAlignment.Right;
-                    dot.VerticalAlignment = VerticalAlignment.Top;
-                    // 略微外扩到图标边框上，像"贴在角上"而不是"压在图标里"
-                    dot.Margin = new Thickness(0, -1, -1, 0);
-                    dot.ToolTip = a.Name + " 正在运行";
-                    iconBox.Children.Add(dot);
-                }
-                else
-                {
-                    iconBox.Children.Remove(existing);
-                }
-            }
-            catch { }
-        }
-
-
-        /// <summary>
-        /// 就地刷新所有已画磁贴的小圆点。
-        ///
-        /// 由运行状态定时器（1.5 秒）调用。两件事会需要它：
-        ///   1. 后台预热完成后，缓存从"没热"变成"热"，原先没画上的点要补上
-        ///   2. 面板开着期间应用启动了/退出了
-        /// 只查表 + 增删一个小 Border，不触发布局、不重建磁贴。
-        /// </summary>
-        void RefreshRunningDots()
-        {
-            try
-            {
-                if (tileIconBoxes.Count == 0) return;
-                if (renderedApps == null) return;
-                if (!IsVisible) return;   // 面板没显示，没人看，省掉
-
-                RunningApps.Refresh();   // 内部 1.5 秒节流
-
-                foreach (AppItem a in renderedApps)
-                {
-                    if (a == null) continue;
-                    Grid box;
-                    if (!tileIconBoxes.TryGetValue(a.Path, out box)) continue;
-                    SyncRunningDot(a, box);
-                }
-            }
-            catch { }
-        }
-
 
         /// <summary>
         /// 内容没变就不重建磁贴。避免“每次打开面板都销毁并重建全部控件”，
@@ -228,13 +119,14 @@ namespace Clover
         {
             try
             {
+                RefreshNavCountsInPlace();
                 string sig = CurrentContentSig();
                 if (sig == renderedSig && !tileRenderPending && pendingRenderApps == null)
                 {
                     MarkFirstContentReady();
                     return;
                 }
-                RenderApps();
+                if (current != "常用" || !TryRefreshCurrentTilesInPlace()) RenderApps();
             }
             catch (Exception ex)
             {
@@ -315,16 +207,21 @@ namespace Clover
                 List<string> order;
                 if (!customOrders.TryGetValue(current, out order)) order = null;
                 string orderSig = PathListSignature(order);
-                string pinnedSig = PathListSignature(settings == null ? null : settings.PinnedCommon);
+                // 时间跨过 72 小时边界也必须使签名变化，不依赖新的启动或扫描。
+                string commonSig = current == "常用" ? PathListSignature(CommonApps().ConvertAll(a => a.Path)) : "";
                 // 隐藏数进签名：隐藏/取消隐藏会改变内容，但 Apps.Count 不变，
                 // 不带上它的话「按需渲染」会误判成"没变化"而跳过重建。
                 int hiddenCount = catalog == null ? 0 : catalog.HiddenItems().Count;
                 // 折叠状态进签名：它是纯 UI 状态，不改 Apps/顺序，
                 // 不带上的话「展开→切走→切回」会因签名相同而跳过重建，状态看起来丢了
                 string collapseSig = (settings != null && settings.CollapseLowValue) ? "1" : "0";
+                collapseSig += settings != null && settings.CollapseAuxiliaryApps ? "A" : "a";
+                collapseSig += PathListSignature(settings.ActiveAppRoles) + PathListSignature(settings.AuxiliaryAppRoles)
+                    + PathListSignature(settings.ComputerAppRoles) + PathListSignature(settings.LowValueMarked)
+                    + PathListSignature(settings.LowValueUnmarked);
                 string dismissedSig = LongMapSignature(settings == null ? null : settings.CommonDismissed);
                 return current + "\u0001" + q + "\u0001" + catalog.Apps.Count +
-                       "\u0001" + orderSig + "\u0001" + hiddenCount + "\u0001" + pinnedSig +
+                       "\u0001" + orderSig + "\u0001" + hiddenCount + "\u0001" + commonSig +
                        "\u0001" + collapseSig + "\u0001" + dismissedSig + "\u0001" + usageRevision;
             }
             catch
@@ -407,7 +304,7 @@ namespace Clover
             // ---- 「文件」标签：走完全独立的渲染路径 ----
             //
             // 文件标签与应用磁贴是两套东西：
-            //   · 磁贴：AppItem、可拖动排序、有运行中圆点
+            //   · 磁贴：AppItem、可拖动排序
             //   · 文件：FileScanner.Entry、只读浏览、点击打开
             // 混在一条渲染路径里会让"拖动换位"试图去拖一个文件。
             if (current == FilesCategory)
@@ -431,9 +328,6 @@ namespace Clover
             int contentGeneration = firstContentGeneration;
 
             tilePanel.Children.Clear();
-            // 磁贴被丢掉了，旧的图标容器引用（指向已移除的控件）也要一起清，
-            // 否则 RefreshRunningDots 会去改已经不存在的控件
-            tileIconBoxes.Clear();
             tileIconStates.Clear();
             tileIconStatesByTile.Clear();
             // 映射表与 Children 同步清空：Children 是渲染容器，映射表才是索引真相
@@ -477,7 +371,7 @@ namespace Clover
                 foreach (AppItem a in catalog.Apps)
                 {
                     // 支持中文/英文直接匹配，也支持全拼（weixin）和首字母（wx）
-                    if (SearchRanking.Matches(a.Name, q))
+                    if (!a.Hidden && !a.ExcludedEntry && SearchRanking.Matches(a.Name, q))
                         list.Add(a);
                 }
                 list.Sort(RenderCompare);
@@ -513,26 +407,13 @@ namespace Clover
 
             ApplyCustomOrder(list);
 
-            // 旧 order.json 可能把固定项和最近项交叉排列。新界面分成两个明确分组，
-            // 因而这里做稳定分区：保留各组内部的人工顺序，但固定项始终在最近项前。
-            if (showingCommon) RegroupCommonSections(list);
-
-            pendingShowCommonSections = showingCommon;
-            pendingPinnedCount = 0;
-            if (pendingShowCommonSections)
-            {
-                while (pendingPinnedCount < list.Count && IsPinnedCommon(list[pendingPinnedCount]))
-                    pendingPinnedCount++;
-            }
-            pendingRecentCount = pendingShowCommonSections ? list.Count - pendingPinnedCount : 0;
+            // 常用只有一套顺序；全部仍保持角色与商店稳定分区。
+            if (current == "") RegroupAllSections(list);
 
             // ---- 低价值段：在 ApplyCustomOrder **之后**切分 ----
             //
-            // 顺序很重要：ApplyCustomOrder 会把拖动过的顺序整体覆盖，
-            // 包括把低价值项拖回中间（当前既有行为，本次**不改变**）。
-            // 所以分段必须在它之后算 —— 否则节标题会出现在一个
-            // 与实际排列不一致的位置上（例如标题说"以下 N 项是低价值"，
-            // 而中间还夹着正常应用）。
+            // 先保留各区内部的人工顺序，再按真实标记分区；
+            // 不能把第一个低价值之后的正常应用算作低价值。
             bool collapseLow = (current == "" && settings != null && settings.CollapseLowValue);
             List<AppItem> normalPart;
             List<AppItem> lowPart;
@@ -547,8 +428,15 @@ namespace Clover
             pendingRenderApps = new List<AppItem>(normalPart);
             pendingRenderApps.AddRange(lowPart);
             pendingNormalCount = normalPart.Count;
+            pendingActiveCount = current == "" ? CountActiveRole(normalPart) : 0;
+            pendingAuxiliaryCount = current == "" ? normalPart.Count - pendingActiveCount : 0;
             // 收起态不会把低价值项放进 lowPart，但入口仍要显示真实数量。
             pendingLowCount = collapseLow ? (list.Count - normalPart.Count) : lowPart.Count;
+            if (current == "" && settings.CollapseAuxiliaryApps)
+            {
+                pendingRenderApps.RemoveAll(a => !a.LowValue && IsAuxiliaryRole(a));
+                pendingNormalCount = pendingActiveCount;
+            }
             pendingCollapseLow = collapseLow;
             pendingQuery = q;
             pendingSearching = searching;
@@ -571,19 +459,88 @@ namespace Clover
         }
 
 
-        void RegroupCommonSections(List<AppItem> list)
+        const string TileSectionActiveTag = "app-role-active";
+        const string TileSectionAuxiliaryTag = "app-role-auxiliary";
+        int pendingActiveCount;
+        int pendingAuxiliaryCount;
+
+        bool IsAuxiliaryRole(AppItem app)
         {
-            if (list == null || list.Count < 2) return;
-            List<AppItem> pinned = new List<AppItem>();
-            List<AppItem> recent = new List<AppItem>();
-            foreach (AppItem a in list)
+            // 旧辅助区域已经合并进低价值，保留接缝兼容已有拖动代码。
+            return false;
+        }
+
+        int CountActiveRole(List<AppItem> list)
+        {
+            int count = 0;
+            foreach (AppItem app in list) if (!app.LowValue && !IsAuxiliaryRole(app)) count++;
+            return count;
+        }
+
+        void RegroupAllSections(List<AppItem> list)
+        {
+            List<AppItem> active = new List<AppItem>();
+            List<AppItem> auxiliary = new List<AppItem>();
+            List<AppItem> low = new List<AppItem>();
+            foreach (AppItem app in list)
             {
-                if (IsPinnedCommon(a)) pinned.Add(a);
-                else recent.Add(a);
+                if (app == null || app.Hidden || app.ExcludedEntry || app.Role == AppRole.Computer) continue;
+                if (app.LowValue) low.Add(app);
+                else if (IsAuxiliaryRole(app)) auxiliary.Add(app);
+                else active.Add(app);
             }
+            // 在各角色内集中普通入口和商店入口；稳定分区保留组内人工顺序。
+            GroupStoreApps(active);
+            GroupStoreApps(auxiliary);
+            GroupStoreApps(low);
             list.Clear();
-            list.AddRange(pinned);
-            list.AddRange(recent);
+            list.AddRange(active);
+            list.AddRange(auxiliary);
+            list.AddRange(low);
+        }
+
+        static bool HasStoreLabel(AppItem app)
+        {
+            return app != null && app.Source == AppPaths.SourceStore && !string.IsNullOrEmpty(app.Name);
+        }
+
+        static void GroupStoreApps(List<AppItem> list)
+        {
+            List<AppItem> ordinary = new List<AppItem>();
+            List<AppItem> store = new List<AppItem>();
+            foreach (AppItem app in list)
+                if (HasStoreLabel(app)) store.Add(app); else ordinary.Add(app);
+            list.Clear();
+            list.AddRange(ordinary);
+            list.AddRange(store);
+        }
+
+        Border MakeRoleSectionHeader(bool auxiliary, int count)
+        {
+            string title = auxiliary ? "低价值" : "用户用的";
+            Border header = MakeCommonSectionHeader(title, count,
+                auxiliary ? "配套配置与维护入口" : "正常使用的应用；新应用默认在这里，可拖动排序");
+            header.Tag = auxiliary ? TileSectionAuxiliaryTag : TileSectionActiveTag;
+            if (auxiliary)
+            {
+                Grid row = header.Child as Grid;
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                Button toggle = MakeDeskToolButton(settings.CollapseAuxiliaryApps ? "展开" : "收起",
+                    "只折叠辅助配套，不改变低价值或隐藏状态", delegate
+                    {
+                        settings.CollapseAuxiliaryApps = !settings.CollapseAuxiliaryApps;
+                        settings.Save();
+                        if (!TryRefreshCurrentTilesInPlace()) RenderApps();
+                    });
+                Grid.SetColumn(toggle, 2);
+                row.Children.Add(toggle);
+            }
+            return header;
+        }
+
+        void SetAppRole(AppItem app, bool auxiliary)
+        {
+            SetClassification(app, auxiliary ? AppRole.LowValue : AppRole.User);
         }
 
 
@@ -592,21 +549,21 @@ namespace Clover
             if (panelClosed || generation != tileRenderGeneration || pendingRenderApps == null) return;
 
             int start = renderedApps.Count;
-            if (pendingShowCommonSections)
+            if (current == "" && !pendingSearching)
             {
-                if (start == 0 && pendingPinnedCount > 0)
-                    tilePanel.Children.Add(MakeCommonSectionHeader("手动固定", pendingPinnedCount,
-                        "固定项始终保留，可拖动调整组内顺序"));
-                if (start == pendingPinnedCount && pendingRecentCount > 0)
-                    tilePanel.Children.Add(MakeCommonSectionHeader("最近常用", pendingRecentCount,
-                        "按使用频率与最近启动时间排列"));
+                if (start == 0 && pendingActiveCount > 0)
+                    tilePanel.Children.Add(MakeRoleSectionHeader(false, pendingActiveCount));
+                if (start == pendingActiveCount && pendingAuxiliaryCount > 0)
+                    tilePanel.Children.Add(MakeRoleSectionHeader(true, pendingAuxiliaryCount));
             }
+            if (showingCommon && start == 0)
+                tilePanel.Children.Add(MakeCommonListHeader(originalListCount));
             if (start == pendingNormalCount && pendingLowCount > 0 && !pendingCollapseLow)
                 tilePanel.Children.Add(MakeLowValueSectionHeader(pendingLowCount));
 
             int end = Math.Min(pendingRenderApps.Count, start + TileRenderBatchSize);
-            if (pendingShowCommonSections && start < pendingPinnedCount && end > pendingPinnedCount)
-                end = pendingPinnedCount;
+            if (current == "" && start < pendingActiveCount && end > pendingActiveCount)
+                end = pendingActiveCount;
             // 不跨越分段点：标题必须在正常段之后、第一块低价值磁贴之前。
             if (start < pendingNormalCount && end > pendingNormalCount) end = pendingNormalCount;
 
@@ -629,7 +586,6 @@ namespace Clover
             Border b = new Border();
             // 拖动排序改为复用现有磁贴原地换位后，不能再靠 RenderApps 重建分组。
             // 给标题一个稳定标识，原地重排时把同一个标题控件放回正确边界。
-            b.Tag = title == "手动固定" ? TileSectionPinnedTag : TileSectionRecentTag;
             b.Margin = new Thickness(2, renderedApps.Count == 0 ? Ui.S.Xs : Ui.S.Md, 2, Ui.S.Xs);
             b.Padding = new Thickness(0, 0, 0, Ui.S.Xs);
             b.BorderBrush = Ui.Line;
@@ -668,10 +624,84 @@ namespace Clover
             return b;
         }
 
+        bool CommonManualSort()
+        {
+            List<string> order;
+            return customOrders.TryGetValue("常用", out order) && order != null && order.Count > 0;
+        }
+
+        Border MakeCommonListHeader(int count)
+        {
+            string mode = CommonManualSort() ? "手动排序" : "自动排序";
+            string hint = mode + " · 3 天未使用自动移除";
+            Border header = MakeCommonSectionHeader("常用", count, hint);
+            header.Tag = TileSectionCommonTag;
+            Grid row = header.Child as Grid;
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Button reset = MakeDeskToolButton("恢复自动排序", "只恢复常用排序，不删除启动记录，也不影响全部页", RestoreCommonAutoSort);
+            reset.IsEnabled = CommonManualSort();
+            reset.Opacity = reset.IsEnabled ? 1 : 0.55;
+            Grid.SetColumn(reset, 2);
+            row.Children.Add(reset);
+            return header;
+        }
+
+        void UpdateCommonListHeader()
+        {
+            if (!showingCommon || tilePanel == null) return;
+            for (int i = 0; i < tilePanel.Children.Count; i++)
+            {
+                Border header = tilePanel.Children[i] as Border;
+                if (header == null || !Equals(header.Tag, TileSectionCommonTag)) continue;
+                tilePanel.Children.RemoveAt(i);
+                tilePanel.Children.Insert(i, MakeCommonListHeader(renderedApps.Count));
+                break;
+            }
+        }
+
+        void RestoreCommonAutoSort()
+        {
+            if (current != "常用" || !CommonManualSort()) return;
+            CancelTileDrag();
+            customOrders.Remove("常用");
+            SaveCustomOrders();
+            if (!TryRefreshCurrentTilesInPlace()) RenderApps();
+            ShowToast("已恢复自动排序，启动记录已保留");
+        }
+
+        internal void TestRestoreCommonAutoSort() { RestoreCommonAutoSort(); }
+        internal void TestRecordAppUsage(string path) { RecordAppUsage(path); }
+        internal void TestDismissCommon(string path) { DismissRecentCommon(FindAppByPath(path)); }
+        internal void TestExpireCommon(string path)
+        {
+            AppItem item = FindAppByPath(path);
+            if (item != null) item.LastUsed = DateTime.UtcNow.Ticks - UsageStore.RecentWindowTicks;
+            RenderAppsIfNeeded();
+        }
+
+        DispatcherTimer commonExpiryTimer;
+        void StartCommonExpiryTimer()
+        {
+            if (commonExpiryTimer != null) return;
+            commonExpiryTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher);
+            commonExpiryTimer.Interval = TimeSpan.FromSeconds(30);
+            commonExpiryTimer.Tick += delegate
+            {
+                if (panelClosed || !IsVisible || Mouse.LeftButton == MouseButtonState.Pressed || dragSourceApp != null) return;
+                RefreshNavCountsInPlace();
+                if (current == "常用" && (searchBox == null || searchBox.Text.Length == 0)) RenderAppsIfNeeded();
+            };
+            commonExpiryTimer.Start();
+        }
+
 
         void CompleteTileRendering(int generation, int originalListCount, int contentGeneration)
         {
             if (panelClosed || generation != tileRenderGeneration) return;
+            if (current == "" && settings.CollapseAuxiliaryApps && pendingAuxiliaryCount > 0
+                && pendingRenderApps != null && pendingRenderApps.Count == pendingActiveCount
+                && renderedApps.Count == pendingActiveCount)
+                tilePanel.Children.Add(MakeRoleSectionHeader(true, pendingAuxiliaryCount));
             tileRenderPending = false;
 
             if (pendingLowCount > 0 && pendingCollapseLow)
@@ -732,73 +762,7 @@ namespace Clover
                 tilePanel.Children.Add(empty);
             }
 
-            // 底部计数：隐藏项不该算进"应用总数"，否则数字对不上眼前的磁贴
-            int visible = catalog.Apps.Count - catalog.HiddenItems().Count;
-            // 搜索时计数改成"已找到多少条系统结果" ——
-            // 原先显示"共 61 个应用"，但页面显示的是搜索结果，数字与内容无关。
-            // SearchResultList 暴露 ShownCount；系统搜索还没出结果时显示"搜索中"。
-            if (pendingSearching)
-            {
-                int n = searchResults != null ? searchResults.ShownCount : 0;
-                footerCount.Text = n > 0
-                    ? "找到 " + n + " 条结果"
-                    : "搜索中…";
-            }
-            else
-            {
-                // ★ 两个可点入口共用一行：
-                //   · 「已隐藏 M 个」 → 打开「整理与隐藏」窗口并定位到标签二
-                //   · 「K 个低价值」 → 打开低价值清单窗口，可批量取消标记
-                int hiddenCount = catalog.HiddenItems().Count;
-                // 低价值只在「全部」页显示：「常用」页不受沉底影响，提它只会让人困惑
-                int lowCount = (current == "") ? CountLowValueVisible() : 0;
-
-                footerCount.Inlines.Clear();
-
-                Run head = new Run("共 " + visible + " 个应用");
-                head.Foreground = Ui.Sub;
-                footerCount.Inlines.Add(head);
-
-                if (hiddenCount > 0)
-                {
-                    Run sep = new Run("，");
-                    sep.Foreground = Ui.Sub;
-                    footerCount.Inlines.Add(sep);
-
-                    Hyperlink link = new Hyperlink();
-                    link.Inlines.Add(new Run("已隐藏 " + hiddenCount + " 个"));
-                    link.Foreground = Ui.Accent;
-                    link.TextDecorations = null;
-                    link.Cursor = System.Windows.Input.Cursors.Hand;
-                    link.ToolTip = "点击查看并恢复已隐藏的应用";
-                    link.Click += delegate
-                    {
-                        try { ShowHiddenItems(); }
-                        catch (Exception ex) { Ui.LogError(ex, "打开整理与隐藏窗口"); }
-                    };
-                    footerCount.Inlines.Add(link);
-                }
-
-                if (lowCount > 0)
-                {
-                    Run sep2 = new Run(hiddenCount > 0 ? "，" : "，其中 ");
-                    sep2.Foreground = Ui.Sub;
-                    footerCount.Inlines.Add(sep2);
-
-                    Hyperlink lowLink = new Hyperlink();
-                    lowLink.Inlines.Add(new Run(lowCount + " 个低价值"));
-                    lowLink.Foreground = Ui.Accent;
-                    lowLink.TextDecorations = null;
-                    lowLink.Cursor = System.Windows.Input.Cursors.Hand;
-                    lowLink.ToolTip = "点击查看低价值清单，可批量取消标记";
-                    lowLink.Click += delegate
-                    {
-                        try { ShowLowValueList(); }
-                        catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
-                    };
-                    footerCount.Inlines.Add(lowLink);
-                }
-            }
+            RefreshFooterCount(pendingSearching);
 
             // 守卫：映射表必须与 renderedApps 等长。失败只记日志、不抛 ——
             // 渲染出问题不该让面板崩掉，但要让日志里能查到。
@@ -809,6 +773,71 @@ namespace Clover
             RestoreScrollOffset();
             pendingRenderApps = null;
             MarkFirstContentReady(contentGeneration);
+        }
+
+
+        /// <summary>刷新底部计数与两个可点击入口，不触碰磁贴或其它界面结构。</summary>
+        void RefreshFooterCount(bool searching)
+        {
+            if (footerCount == null || catalog == null) return;
+
+            int visible = VisibleAppCount();
+            if (searching)
+            {
+                int n = searchResults != null ? searchResults.ShownCount : 0;
+                footerCount.Text = n > 0 ? "找到 " + n + " 条结果" : "搜索中…";
+                return;
+            }
+
+            int hiddenCount = HiddenSnapshot().Count;
+            int lowCount = CountLowValueVisible();
+            footerCount.Inlines.Clear();
+
+            Run head = new Run("共 " + visible + " 个应用");
+            head.Foreground = Ui.Sub;
+            footerCount.Inlines.Add(head);
+
+            if (hiddenCount > 0)
+            {
+                Run sep = new Run("，");
+                sep.Foreground = Ui.Sub;
+                footerCount.Inlines.Add(sep);
+
+                Hyperlink link = new Hyperlink();
+                link.Focusable = true;
+                link.Inlines.Add(new Run("收起/隐藏 " + hiddenCount + " 个"));
+                link.Foreground = Ui.AccentText;
+                link.TextDecorations = null;
+                link.Cursor = System.Windows.Input.Cursors.Hand;
+                link.ToolTip = "点击查看并恢复已隐藏的应用";
+                link.Click += delegate
+                {
+                    try { ShowHiddenItems(); }
+                    catch (Exception ex) { Ui.LogError(ex, "打开整理与隐藏窗口"); }
+                };
+                footerCount.Inlines.Add(link);
+            }
+
+            if (lowCount > 0)
+            {
+                Run sep = new Run(hiddenCount > 0 ? "，" : "，其中 ");
+                sep.Foreground = Ui.Sub;
+                footerCount.Inlines.Add(sep);
+
+                Hyperlink lowLink = new Hyperlink();
+                lowLink.Focusable = true;
+                lowLink.Inlines.Add(new Run(lowCount + " 个低价值"));
+                lowLink.Foreground = Ui.AccentText;
+                lowLink.TextDecorations = null;
+                lowLink.Cursor = System.Windows.Input.Cursors.Hand;
+                lowLink.ToolTip = "点击查看低价值清单，可批量取消标记";
+                lowLink.Click += delegate
+                {
+                    try { ShowLowValueList(); }
+                    catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
+                };
+                footerCount.Inlines.Add(lowLink);
+            }
         }
 
 
@@ -829,21 +858,192 @@ namespace Clover
             // 只把已经存在对应 Border 的条目暴露给键盘、拖动与测试路径，
             // 因而分批期间也始终维持 tiles == apps 的不变式。
             renderedApps.Add(a);
-            Grid box;
+            Grid box = FindTileIconBox(tile);
             TileIconState state;
-            if (a != null && tileIconBoxes.TryGetValue(a.Path, out box) &&
-                box != null && tileIconStates.TryGetValue(box, out state))
+            if (box != null && tileIconStates.TryGetValue(box, out state))
                 tileIconStatesByTile[tile] = state;
             ScheduleViewportIconRefresh();
+        }
+
+        static Grid FindTileIconBox(Border tile)
+        {
+            try
+            {
+                StackPanel stack = tile == null ? null : tile.Child as StackPanel;
+                if (stack == null) return null;
+                foreach (UIElement child in stack.Children)
+                {
+                    Grid box = child as Grid;
+                    if (box != null) return box;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+
+        /// <summary>
+        /// 用当前 Border/Image 控件协调「常用 / 全部」的最新列表。
+        ///
+        /// 右键操作通常只影响一个应用；全量 RenderApps 会销毁所有磁贴，造成
+        /// 整页闪动、滚动/焦点丢失和重复图标请求。这里复用仍存在的磁贴，只为
+        /// 真正新增的应用创建控件，并只移除已经不该显示的控件。
+        /// </summary>
+        bool TryRefreshCurrentTilesInPlace()
+        {
+            try
+            {
+                if (tilePanel == null || catalog == null) return false;
+                if (tileRenderPending || pendingRenderApps != null) return false;
+                if (renderedApps == null || renderedApps.Count != renderedTiles.Count) return false;
+                if (searchBox != null && searchBox.Text.Trim().Length > 0) return false;
+
+                bool common = current == "常用";
+                if (!common && current != "") return false;
+
+                List<AppItem> ordered = common ? CommonApps() : AllAppsSorted();
+                // 「常用」为空时生产渲染会切回「全部」；这是页面切换，不属于
+                // 单条磁贴更新，交回完整渲染路径处理。
+                if (ordered.Count == 0 && common) return false;
+
+                ApplyCustomOrder(ordered);
+                if (!common) RegroupAllSections(ordered);
+
+                bool collapseLow = !common && settings != null && settings.CollapseLowValue;
+                List<AppItem> normalPart;
+                List<AppItem> lowPart;
+                if (common)
+                {
+                    normalPart = new List<AppItem>(ordered);
+                    lowPart = new List<AppItem>();
+                }
+                else
+                {
+                    SplitLowValueSegment(ordered, collapseLow, out normalPart, out lowPart);
+                }
+
+                List<AppItem> desired = new List<AppItem>(normalPart);
+                desired.AddRange(lowPart);
+                int lowSectionCount = collapseLow
+                    ? ordered.Count - normalPart.Count
+                    : lowPart.Count;
+                int auxiliaryCount = common ? 0 : normalPart.Count - CountActiveRole(normalPart);
+                if (!common && settings.CollapseAuxiliaryApps)
+                {
+                    normalPart.RemoveAll(a => IsAuxiliaryRole(a));
+                    desired = new List<AppItem>(normalPart);
+                    desired.AddRange(lowPart);
+                }
+
+                Dictionary<AppItem, Border> oldTiles = new Dictionary<AppItem, Border>();
+                for (int i = 0; i < renderedApps.Count; i++)
+                {
+                    AppItem app = renderedApps[i];
+                    Border tile = renderedTiles[i];
+                    if (app == null || tile == null || oldTiles.ContainsKey(app)) return false;
+                    oldTiles[app] = tile;
+                }
+
+                List<Border> desiredTiles = new List<Border>();
+                HashSet<Border> kept = new HashSet<Border>();
+                foreach (AppItem app in desired)
+                {
+                    Border tile;
+                    if (!oldTiles.TryGetValue(app, out tile))
+                    {
+                        tile = MakeTile(app, tileRenderGeneration);
+                        Grid box = FindTileIconBox(tile);
+                        TileIconState iconState;
+                        if (box != null && tileIconStates.TryGetValue(box, out iconState))
+                            tileIconStatesByTile[tile] = iconState;
+                    }
+                    UpdateTilePresentation(tile, app);
+                    desiredTiles.Add(tile);
+                    kept.Add(tile);
+                }
+
+                foreach (Border oldTile in renderedTiles)
+                {
+                    if (kept.Contains(oldTile)) continue;
+                    TileIconState state;
+                    if (tileIconStatesByTile.TryGetValue(oldTile, out state))
+                    {
+                        tileIconStatesByTile.Remove(oldTile);
+                        if (state != null)
+                        {
+                            state.WantsImage = false;
+                            if (state.Box != null) tileIconStates.Remove(state.Box);
+                        }
+                    }
+                    if (ReferenceEquals(oldTile, selectedTile)) selectedTile = null;
+                }
+
+                double scrollBefore = contentScroll == null ? 0 : contentScroll.VerticalOffset;
+                showingCommon = common;
+                tilePanel.Children.Clear();
+
+                int activeCount = common ? 0 : CountActiveRole(normalPart);
+                if (common) tilePanel.Children.Add(MakeCommonListHeader(desiredTiles.Count));
+
+                for (int i = 0; i < desiredTiles.Count; i++)
+                {
+                    if (!common && i == 0 && activeCount > 0)
+                        tilePanel.Children.Add(MakeRoleSectionHeader(false, activeCount));
+                    if (!common && i == activeCount && auxiliaryCount > 0)
+                        tilePanel.Children.Add(MakeRoleSectionHeader(true, auxiliaryCount));
+                    if (!common && !collapseLow && lowSectionCount > 0 && i == normalPart.Count)
+                        tilePanel.Children.Add(MakeLowValueSectionHeader(lowSectionCount));
+                    tilePanel.Children.Add(desiredTiles[i]);
+                }
+                if (!common && desiredTiles.Count == activeCount && auxiliaryCount > 0)
+                    tilePanel.Children.Add(MakeRoleSectionHeader(true, auxiliaryCount));
+                if (!common && collapseLow && lowSectionCount > 0)
+                    tilePanel.Children.Add(MakeLowValueCollapsedRow(lowSectionCount));
+
+                renderedApps = new List<AppItem>(desired);
+                renderedTiles.Clear();
+                renderedTiles.AddRange(desiredTiles);
+                tileAppIndex.Clear();
+                for (int i = 0; i < renderedTiles.Count; i++)
+                    tileAppIndex[renderedTiles[i]] = i;
+
+                selectedIndex = selectedTile == null ? -1 : renderedTiles.IndexOf(selectedTile);
+                RefreshNavCountsInPlace();
+                RefreshFooterCount(false);
+                renderedSig = CurrentContentSig();
+                tilePanel.InvalidateMeasure();
+                if (contentScroll != null)
+                {
+                    contentScroll.UpdateLayout();
+                    contentScroll.ScrollToVerticalOffset(scrollBefore);
+                }
+                ScheduleViewportIconRefresh();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Ui.LogError(ex, "就地刷新应用磁贴");
+                return false;
+            }
+        }
+
+
+        static void UpdateTilePresentation(Border tile, AppItem app)
+        {
+            if (tile == null) return;
+            tile.ToolTip = TileToolTipOf(app);
+            bool low = app != null && app.LowValue;
+            tile.Opacity = low && !Ui.HasAutomaticPalette ? 0.45 : 1.0;
+            Grid box = FindTileIconBox(tile);
+            if (box != null) box.Opacity = low && Ui.HasAutomaticPalette ? 0.45 : 1.0;
         }
 
 
         /// <summary>
         /// 把已排序好的列表切成「正常段 + 低价值段」。
         ///
-        /// 切分点取**第一个低价值项**：AllAppsSorted 已保证低价值整体沉底，
-        /// 但如果用户拖动过（ApplyCustomOrder 覆盖顺序），低价值项可能回到中间 ——
-        /// 此时仍然以第一个低价值项为界，标题写"以下 N 项"，语义不会说谎。
+        /// 逐项按真实标记稳定分区，保留两区内部人工顺序。
+        /// 新应用即使位于旧人工排序末尾，也必须留在正常段。
         ///
         /// collapseLow = true 时低价值段**不渲染磁贴**（lowPart 留空、计数另算），
         /// 只保留一行可点击的展开行。
@@ -855,17 +1055,11 @@ namespace Clover
             lowPart = new List<AppItem>();
             if (list == null) return;
 
-            int cut = list.Count;
-            for (int i = 0; i < list.Count; i++)
+            foreach (AppItem app in list)
             {
-                if (list[i] != null && list[i].LowValue) { cut = i; break; }
-            }
-
-            for (int i = 0; i < cut; i++) normalPart.Add(list[i]);
-            for (int i = cut; i < list.Count; i++)
-            {
-                // 收起时低价值磁贴不渲染（不建 Border，省掉图标解析的代价）
-                if (!collapseLow) lowPart.Add(list[i]);
+                if (app == null || app.Hidden || app.ExcludedEntry || app.Role == AppRole.Computer) continue;
+                if (!app.LowValue) normalPart.Add(app);
+                else if (!collapseLow) lowPart.Add(app);
             }
         }
 
@@ -914,15 +1108,8 @@ namespace Clover
 
             // 右侧的「收起」入口：与底部统计的低价值链接打开同一个清单窗口之外，
             // 这里只做收起动作（列表里能批量取消标记，语义不同，不混在一起）
-            TextBlock toggle = Ui.T("收起", 10.5, Ui.Accent);
-            toggle.VerticalAlignment = VerticalAlignment.Center;
-            toggle.Cursor = System.Windows.Input.Cursors.Hand;
-            toggle.ToolTip = "收起低价值段，只留一行入口";
-            toggle.MouseLeftButtonUp += delegate
-            {
-                try { SetCollapseLowValue(true); }
-                catch (Exception ex) { Ui.LogError(ex, "收起低价值段"); }
-            };
+            Button toggle = MakeDeskToolButton("收起", "收起低价值段，只留一行入口", delegate { SetCollapseLowValue(true); });
+            AutomationProperties.SetName(toggle, "收起低价值");
             Grid.SetColumn(toggle, 1);
             g.Children.Add(toggle);
 
@@ -961,13 +1148,13 @@ namespace Clover
             StackPanel sp = new StackPanel();
             sp.Orientation = Orientation.Horizontal;
 
-            TextBlock glyph = Ui.T("\uE70D", 10.5, Ui.Accent);   // 向下箭头
+            TextBlock glyph = Ui.T("\uE70D", 10.5, Ui.AccentText);   // 向下箭头
             glyph.FontFamily = Ui.Mdl;
             glyph.VerticalAlignment = VerticalAlignment.Center;
             glyph.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
             sp.Children.Add(glyph);
 
-            TextBlock label = Ui.T("低价值 " + lowCount + " 项（点击展开）", 11, Ui.Accent);
+            TextBlock label = Ui.T("低价值 " + lowCount + " 项（点击展开）", 11, Ui.AccentText);
             label.VerticalAlignment = VerticalAlignment.Center;
             sp.Children.Add(label);
 
@@ -998,10 +1185,8 @@ namespace Clover
                 settings.CollapseLowValue = collapsed;
                 settings.Save();
 
-                // 折叠状态影响渲染内容，签名必须跟着变，
-                // 否则 RenderAppsIfNeeded 会认为"没变化"而跳过重建
-                renderedSig = CurrentContentSig();
-                RenderApps();
+                // 正常磁贴保持原对象；只增删低价值段及其标题。
+                if (!TryRefreshCurrentTilesInPlace()) RenderApps();
             }
             catch (Exception ex) { Ui.LogError(ex, "切换低价值段折叠"); }
         }
@@ -1019,7 +1204,7 @@ namespace Clover
                 int total = 0;
                 foreach (AppItem a in catalog.Apps)
                 {
-                    if (a == null || a.Hidden) continue;
+                    if (a == null || a.Hidden || a.ExcludedEntry || a.Role == AppRole.Computer) continue;
                     total++;
                 }
                 int low = CountLowValueVisible();
@@ -1046,7 +1231,7 @@ namespace Clover
                 if (catalog == null) return 0;
                 foreach (AppItem a in catalog.Apps)
                 {
-                    if (a == null || a.Hidden) continue;   // 隐藏项不计
+                    if (a == null || a.Hidden || a.ExcludedEntry || a.Role == AppRole.Computer) continue;
                     if (a.LowValue) low++;
                 }
                 return low;
@@ -1071,7 +1256,7 @@ namespace Clover
 
                 foreach (AppItem a in catalog.Apps)
                 {
-                    if (a == null || a.Hidden) continue;
+                    if (a == null || a.Hidden || a.ExcludedEntry || a.Role == AppRole.Computer) continue;
 
                     string key = a.Path ?? "";
                     if (key.Length > 0 && !seenPath.Add(key)) continue;   // 已见过同路径 → 跳过
@@ -1094,6 +1279,9 @@ namespace Clover
                     // 低价值在后（这一条优先于名称排序）
                     if (x.LowValue != y.LowValue) return x.LowValue ? 1 : -1;
 
+                    int sourceOrder = HasStoreLabel(x).CompareTo(HasStoreLabel(y));
+                    if (sourceOrder != 0) return sourceOrder;
+
                     int c = string.Compare(
                         Pinyin.SortKey(x.Name), Pinyin.SortKey(y.Name), StringComparison.Ordinal);
                     if (c != 0) return c;
@@ -1113,24 +1301,6 @@ namespace Clover
         bool IsLowValueApp(AppItem a)
         {
             return ExplainLowValue(a).IsLowValue;
-        }
-
-
-        /// <summary>测试用：按路径走生产固定逻辑；找不到应用返回 false。</summary>
-        internal bool TestSetPinnedCommon(string path, bool pinned)
-        {
-            try
-            {
-                AppItem a = FindAppByPath(path);
-                if (a == null) return false;
-                SetPinnedCommon(a, pinned);
-                return IsPinnedCommon(a) == pinned;
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "测试：设置常用固定");
-                return false;
-            }
         }
 
 
@@ -1165,7 +1335,7 @@ namespace Clover
         {
             try
             {
-                List<AppItem> list = AllAppsSorted();
+                List<AppItem> list = renderedApps;
                 bool seenLow = false;
                 foreach (AppItem a in list)
                 {
@@ -1301,6 +1471,62 @@ namespace Clover
         }
 
 
+        /// <summary>测试用：取当前列表中第一个正常应用路径。</summary>
+        internal string TestFirstNormalRenderedPath()
+        {
+            try
+            {
+                if (renderedApps == null) return null;
+                foreach (AppItem a in renderedApps)
+                    if (a != null && !a.LowValue && !string.IsNullOrEmpty(a.Path)) return a.Path;
+            }
+            catch { }
+            return null;
+        }
+
+
+        internal int TestRenderedIndexOfPath(string path)
+        {
+            try
+            {
+                if (renderedApps == null || string.IsNullOrEmpty(path)) return -1;
+                for (int i = 0; i < renderedApps.Count; i++)
+                    if (renderedApps[i] != null &&
+                        string.Equals(renderedApps[i].Path, path, StringComparison.OrdinalIgnoreCase))
+                        return i;
+            }
+            catch { }
+            return -1;
+        }
+
+
+        /// <summary>测试用：按路径走真实低价值标记入口。</summary>
+        internal bool TestSetLowValueByPath(string path, bool low)
+        {
+            try
+            {
+                AppItem a = FindAppByPath(path);
+                if (a == null) return false;
+                SetLowValue(a, low);
+                return a.LowValue == low;
+            }
+            catch { return false; }
+        }
+
+        internal void TestRole(string path, bool auxiliary) { SetAppRole(FindAppByPath(path), auxiliary); }
+        internal bool TestAuxiliary(string path) { return IsAuxiliaryRole(FindAppByPath(path)); }
+        internal void TestCollapseAuxiliary(bool collapsed)
+        {
+            settings.CollapseAuxiliaryApps = collapsed;
+            if (!TryRefreshCurrentTilesInPlace()) RenderApps();
+        }
+        internal void TestOrder(List<string> paths)
+        {
+            customOrders[current] = paths;
+            if (!TryRefreshCurrentTilesInPlace()) RenderApps();
+        }
+
+
         /// <summary>测试用：磁贴区是否可见。</summary>
         internal bool TestTilePanelVisible()
         {
@@ -1343,7 +1569,7 @@ namespace Clover
             {
                 if (a == null) return "";
                 string name = a.Name ?? "";
-                if (a.Source == AppPaths.SourceStore && !string.IsNullOrEmpty(name))
+                if (HasStoreLabel(a))
                     return name + " ·商店";
                 return name;
             }
@@ -1396,7 +1622,7 @@ namespace Clover
 
             // ★ 低价值条目变淡（沉底排序在 AllAppsSorted 里做）
             // 0.45 足够看出"这个不太重要"，又不至于看不清名字
-            if (a != null && a.LowValue) b.Opacity = 0.45;
+            if (a != null && a.LowValue && !Ui.HasAutomaticPalette) b.Opacity = 0.45;
 
             StackPanel sp = new StackPanel();
             sp.VerticalAlignment = VerticalAlignment.Center;
@@ -1424,9 +1650,7 @@ namespace Clover
             iconVisual.RenderTransformOrigin = new Point(0.5, 0.5);
             iconVisual.RenderTransform = iconTrans;
 
-            // 图标外面套一层 Grid，好在右上角叠"运行中"小圆点。
-            // 用叠加而不是改图标本身：图标来自系统缓存、可能被多块磁贴共享，
-            // 不能往上画东西。
+            // 图标外面套一层固定尺寸 Grid，保证占位图与真实图标切换时不改布局。
             Grid iconBox = new Grid();
             iconBox.Width = IconSizePx;
             iconBox.Height = IconSizePx;
@@ -1434,8 +1658,6 @@ namespace Clover
             iconBox.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
             iconBox.Children.Add(iconVisual);
 
-            // 记下容器，供 RefreshRunningDots 就地增删小圆点
-            tileIconBoxes[a.Path] = iconBox;
             tileIconStates[iconBox] = new TileIconState
             {
                 App = a,
@@ -1445,12 +1667,8 @@ namespace Clover
                 Generation = generation
             };
 
-            // 建磁贴时只读缓存（IsRunningCached 不解析 lnk）：
-            // 首次解析 112 个快捷方式要 239 ms，那代价必须留在后台预热里。
-            // 缓存还没热的话这里先不画点，等 RefreshRunningDots 补上。
-            SyncRunningDot(a, iconBox);
-
             sp.Children.Add(iconBox);
+            iconBox.Opacity = a != null && a.LowValue && Ui.HasAutomaticPalette ? 0.45 : 1.0;
 
             TextBlock name = new TextBlock();
             name.Text = DisplayNameOf(a);
@@ -1499,6 +1717,7 @@ namespace Clover
             };
             b.MouseLeftButtonDown += delegate(object s, MouseButtonEventArgs e)
             {
+                CancelTileDrag();
                 downPt = e.GetPosition(tilePanel);
                 tileDrag = false;
                 downClickCount = e.ClickCount;
@@ -1517,13 +1736,17 @@ namespace Clover
             };
             b.MouseMove += delegate(object s, MouseEventArgs e)
             {
-                if (e.LeftButton != MouseButtonState.Pressed) return;
+                if (e.LeftButton != MouseButtonState.Pressed || !b.IsMouseCaptured) return;
                 Point p = e.GetPosition(tilePanel);
 
-                // 拖动阈值 6px：低于这个距离算点击（避免手抖变成拖动）
-                if (!tileDrag && (Math.Abs(p.X - downPt.X) > 6 || Math.Abs(p.Y - downPt.Y) > 6))
+                // 使用 Windows 的系统拖动阈值，尊重用户鼠标设置并避免轻微手抖误拖。
+                if (!tileDrag &&
+                    (Math.Abs(p.X - downPt.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+                     Math.Abs(p.Y - downPt.Y) >= SystemParameters.MinimumVerticalDragDistance))
                 {
                     tileDrag = true;
+                    dragSourceApp = a;
+                    dragSourceTile = b;
                     b.Opacity = 0.25;          // 原位磁贴变淡，当"占位幽灵"
                     b.Cursor = Cursors.SizeAll;
                     // 拖动时取消悬停放大，否则原位磁贴又大又淡，很怪
@@ -1533,7 +1756,7 @@ namespace Clover
 
                     // 抓取点：鼠标相对磁贴左上角的偏移，
                     // 这样浮层不会在开始拖动瞬间"跳"到鼠标中心
-                    Point local = e.GetPosition(b);
+                    Point local = tilePanel.TranslatePoint(downPt, b);
                     dragGrabOffset = local;
 
                     BeginDragVisual();
@@ -1551,8 +1774,11 @@ namespace Clover
             };
             b.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
             {
+                bool releasedDrag = tileDrag;
+                if (releasedDrag) UpdateDragPreview(e.GetPosition(tilePanel));
+                tileDrag = false;
                 try { b.ReleaseMouseCapture(); } catch { }
-                b.Opacity = 1.0;
+                if (!releasedDrag) UpdateTilePresentation(b, a);
                 b.Cursor = Cursors.Hand;
                 // 松开：回到悬停态（鼠标还在磁贴上），而不是透明 ——
                 // 否则刚点完会闪一下，像"点完就灭了"
@@ -1565,13 +1791,12 @@ namespace Clover
                 //   排序根本做不成。现在与桌面图标、资源管理器一致 ——
                 //   单击只选中（键盘方向键从这里接着走），双击才启动。
                 //   判定逻辑在 core 的 TileClickAction 里，可单测穷举。
-                TileClickAction.Action act = TileClickAction.Resolve(tileDrag, downClickCount);
+                TileClickAction.Action act = TileClickAction.Resolve(releasedDrag, downClickCount);
 
                 if (act == TileClickAction.Action.Drop)
                 {
                     tileDrag = false;
-                    // 顺序很重要：先取 insertIndex（要用它算落点），
-                    // 再让浮层飞过去，最后提交 + 重建。
+                    // 先取 insertIndex，再同步提交排列并让浮层落入最终格。
                     //
                     // 第一版写反了 —— EndDragVisual 把 insertIndex 重置成 -1，
                     // CommitDrag 拿到的永远是 -1，拖拽完全不生效（实测日志
@@ -1581,7 +1806,7 @@ namespace Clover
                     // 收起插入标记，但**保留浮层**做一次落入动画
                     EndDragVisualKeepGhost();
 
-                    // 浮层平滑飞到目标格 → 完成后提交并原地换位
+                    // 松手即提交；浮层与周围磁贴同时衔接到最终排列
                     DropDragGhost(a, target);
                 }
                 else if (act == TileClickAction.Action.Launch)
@@ -1591,6 +1816,13 @@ namespace Clover
                 // else：单击只保留选中态。按下时 SelectTile 已经做过了，
                 // 这里不需要再做任何事 —— 也**不要**去清 selectedTile，
                 // 否则单击完键盘方向键就没有起点了。
+            };
+            b.LostMouseCapture += delegate
+            {
+                if (!tileDrag) return;
+                tileDrag = false;
+                downClickCount = 0;
+                CancelTileDrag();
             };
             b.MouseRightButtonUp += delegate { ShowTileMenu(a, b); };
             return b;
@@ -1932,31 +2164,8 @@ namespace Clover
 
         void SetLowValue(AppItem a, bool low)
         {
-            try
-            {
-                if (a == null || settings == null || string.IsNullOrEmpty(a.Path)) return;
-
-                if (settings.LowValueMarked == null) settings.LowValueMarked = new List<string>();
-                if (settings.LowValueUnmarked == null) settings.LowValueUnmarked = new List<string>();
-
-                // 先从两个列表里都清掉（避免互斥冲突）
-                settings.LowValueMarked.RemoveAll(delegate(string p)
-                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
-                settings.LowValueUnmarked.RemoveAll(delegate(string p)
-                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
-
-                if (low) settings.LowValueMarked.Add(a.Path);
-                else settings.LowValueUnmarked.Add(a.Path);
-
-                settings.Save();
-
-                // 立即重算 + 重渲染（排序会变）
-                a.LowValue = low;
-                RenderApps();
-            }
-            catch (Exception ex) { Ui.LogError(ex, "设置低价值标记"); }
+            SetClassification(a, low ? AppRole.LowValue : AppRole.User);
         }
-
 
         /// <summary>
         /// 收集「全部」页里被判为低价值的应用（带原因），供清单窗口显示。
@@ -1972,7 +2181,7 @@ namespace Clover
                 if (catalog == null) return list;
                 foreach (AppItem a in catalog.Apps)
                 {
-                    if (a == null || a.Hidden) continue;   // 隐藏语义：不在任何列表里显示
+                    if (a == null || a.Hidden || a.ExcludedEntry || a.Role == AppRole.Computer) continue;
                     if (a.LowValue) list.Add(a);
                 }
             }
@@ -1984,7 +2193,7 @@ namespace Clover
         /// 打开「低价值清单」窗口；用户勾选并确认后，批量写入 LowValueUnmarked。
         ///
         /// 为什么批量写一次 Save 而不是逐个调 SetLowValue：
-        /// SetLowValue 每次都 Save + RenderApps，勾 9 项就是 9 次磁盘写 + 9 次
+        /// SetLowValue 每次都 Save + 局部协调，勾 9 项就是 9 次磁盘写 + 9 次
         /// 全量重建（每次约 100+ 个磁贴）。这里攒完一次写、一次渲染。
         /// </summary>
         void ShowLowValueList()
@@ -2008,123 +2217,51 @@ namespace Clover
                 {
                     if (a == null || string.IsNullOrEmpty(a.Path)) continue;
 
-                    // 互斥：取消标记时从 Marked 里移除、加入 Unmarked
-                    settings.LowValueMarked.RemoveAll(delegate(string p)
-                    { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
-
-                    bool already = settings.LowValueUnmarked.Exists(delegate(string p)
-                    { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
-                    if (!already) settings.LowValueUnmarked.Add(a.Path);
-
-                    a.LowValue = false;
-                    a.LowValueReason = LowValueReason.None;
-                    a.LowValueDetail = "";
+                    SetClassification(a, AppRole.User, false);
                 }
 
                 settings.Save();
                 Ui.Log("批量取消低价值标记: " + chosen.Count + " 项");
-                RenderApps();
+                if (!TryRefreshCurrentTilesInPlace()) RenderApps();
             }
             catch (Exception ex) { Ui.LogError(ex, "打开低价值清单"); }
         }
 
 
         /// <summary>
-        /// 决定磁贴右键菜单该显示哪个「常用」动作。
-        ///
-        /// 抽成纯静态函数是为了能被测试直接调用 —— 这里曾经用
-        /// `inCommon = pinned || Usage > 0` 当门控，导致「全部」页里
-        /// **任何用过一次**的应用都既不显示「添加到常用」也不显示别的
-        /// （不在常用页 + 未固定 → 三个分支全不命中），
-        /// 而绝大多数应用都被启动过，于是这个功能形同不存在。
-        ///
-        /// 判定规则：
-        ///   · 已手动固定                → Unpin（只取消固定，保留使用记录）
-        ///   · 在「常用」页的最近项      → DismissRecent（保留历史，暂时隐藏）
-        ///   · 其他未固定项              → Add（无论有没有使用记录，都能加）
+        /// 常用页仅提供暂时移除，不再提供固定或手动添加。
         /// </summary>
-        internal static CommonMenuAction CommonMenuFor(bool showingCommon, bool pinned, int usage)
+        internal static CommonMenuAction CommonMenuFor(bool showingCommon, int usage)
         {
-            if (pinned) return CommonMenuAction.Unpin;
             if (showingCommon && usage > 0) return CommonMenuAction.DismissRecent;
-            return CommonMenuAction.Add;
+            return CommonMenuAction.None;
         }
 
 
         /// <summary>
-        /// 同步「常用」页的人工排序。
-        ///
-        /// 新固定项放到第一个：此前固定名单虽然保存成功，但旧 order.json
-        /// 会把所有老条目排在前面，新条目只能落到末尾，看起来就像没有添加。
-        /// 取消固定时移除排序记录；若它仍有使用记录，CommonApps() 仍会让它
-        /// 留在常用页，只是不再享受人工置顶。
+        /// 从人工顺序移除路径，不改变其它应用的个人顺序。
         /// </summary>
-        internal static bool UpdateCommonOrder(List<string> order, string path, bool pinned)
+        internal static bool UpdateCommonOrder(List<string> order, string path)
         {
             if (order == null || string.IsNullOrEmpty(path)) return false;
 
             int removed = order.RemoveAll(delegate(string p)
             { return string.Equals(p, path, StringComparison.OrdinalIgnoreCase); });
 
-            if (pinned)
-            {
-                order.Insert(0, path);
-                return true;
-            }
-
             return removed > 0;
         }
 
 
-        /// <summary>把固定状态同步到「常用」人工排序并按需存盘。</summary>
-        void SyncCommonOrder(string path, bool pinned)
+        /// <summary>从常用移除时同步人工顺序并按需存盘。</summary>
+        void SyncCommonOrder(string path)
         {
             List<string> order;
             if (!customOrders.TryGetValue("常用", out order) || order == null)
             {
-                if (!pinned) return;
-                order = new List<string>();
-                customOrders["常用"] = order;
+                return;
             }
 
-            if (UpdateCommonOrder(order, path, pinned)) SaveCustomOrders();
-        }
-
-
-        /// <summary>
-        /// 固定 / 取消固定到「常用」（右键「添加到常用」/「取消固定到常用」）。
-        /// 写入 `settings.json` 的 `pinnedCommon`，然后立即重渲染。
-        /// </summary>
-        void SetPinnedCommon(AppItem a, bool pinned)
-        {
-            try
-            {
-                if (a == null || settings == null || string.IsNullOrEmpty(a.Path)) return;
-                if (settings.PinnedCommon == null) settings.PinnedCommon = new List<string>();
-
-                // 先清掉旧记录（避免重复 / 大小写不同的重复项）
-                settings.PinnedCommon.RemoveAll(delegate(string p)
-                { return string.Equals(p, a.Path, StringComparison.OrdinalIgnoreCase); });
-
-                if (pinned)
-                {
-                    settings.PinnedCommon.Add(a.Path);
-                    // 用户明确固定后，旧的「最近项移除」标记不再有意义。
-                    if (settings.CommonDismissed != null)
-                        settings.CommonDismissed.Remove(a.Path);
-                }
-                settings.Save();
-                SyncCommonOrder(a.Path, pinned);
-
-                Ui.Log((pinned ? "添加到常用: " : "取消固定到常用: ") + a.Name);
-
-                RebuildNav();
-                RenderApps();
-                ShowToast(pinned
-                    ? ("已添加到常用并排在最前：" + a.Name)
-                    : ("已取消固定到常用：" + a.Name));
-            }
-            catch (Exception ex) { Ui.LogError(ex, "设置常用固定"); }
+            if (UpdateCommonOrder(order, path)) SaveCustomOrders();
         }
 
 
@@ -2145,11 +2282,11 @@ namespace Clover
                 if (last <= 0) last = DateTime.UtcNow.Ticks;
                 settings.CommonDismissed[a.Path] = last;
                 settings.Save();
-                SyncCommonOrder(a.Path, false);
+                SyncCommonOrder(a.Path);
 
-                RebuildNav();
-                RenderApps();
-                ShowToast("已从最近常用移除，启动记录已保留：" + a.Name);
+                RefreshNavCountsInPlace();
+                if (!TryRefreshCurrentTilesInPlace()) RenderApps();
+                ShowToast("已从常用移除，启动记录已保留：" + a.Name);
             }
             catch (Exception ex) { Ui.LogError(ex, "从最近常用移除"); }
         }
@@ -2188,50 +2325,29 @@ namespace Clover
                 cm.Items.Add(hide);
             }
 
-            // ---- 常用名单：手动固定 / 取消固定 / 从最近常用移除 ----
-            //
-            // 「添加到常用」必须在**任何分类**都出现（包括「全部」页）：
-            // 用户是在「全部」里翻到某个应用，才想起来"这个我要常用"。
-            //
-            // ★ 这里曾用 `inCommon = pinned || a.Usage > 0` 做门控，结果
-            //   「全部」页里**任何用过一次**的应用都落进 inCommon，却又不在
-            //   「常用」页、也没固定 —— 三个分支全不命中，菜单项直接消失。
-            //   绝大多数应用都被启动过，于是「添加到常用」基本看不到。
-            //   正确做法：按状态判定，不用"是否在常用"当门。
-            bool pinned = IsPinnedCommon(a);
-            switch (CommonMenuFor(showingCommon, pinned, a.Usage))
+            MenuItem role = new MenuItem { Header = "应用分类" };
+            MenuItem active = new MenuItem { Header = "用户用的", IsCheckable = true,
+                IsChecked = a.Role == AppRole.User };
+            active.Click += delegate { SetClassification(a, AppRole.User); };
+            MenuItem auxiliary = new MenuItem { Header = "低价值", IsCheckable = true,
+                IsChecked = a.Role == AppRole.LowValue };
+            auxiliary.Click += delegate { SetClassification(a, AppRole.LowValue); };
+            MenuItem computer = new MenuItem { Header = "电脑用的（仅搜索显示）", IsCheckable = true,
+                IsChecked = a.Role == AppRole.Computer };
+            computer.Click += delegate { SetClassification(a, AppRole.Computer); };
+            role.Items.Add(active);
+            role.Items.Add(auxiliary);
+            role.Items.Add(computer);
+            cm.Items.Add(role);
+
+            // 常用仅基于真实启动，保留暂时移除，不提供固定入口。
+            switch (CommonMenuFor(showingCommon, a.Usage))
             {
-                case CommonMenuAction.Add:
-                    cm.Items.Add(new Separator());
-
-                    MenuItem add = new MenuItem();
-                    add.Header = "手动固定到常用";
-                    add.ToolTip = "加入「手动固定」分组，并排在该组最前";
-                    add.Click += delegate { SetPinnedCommon(a, true); };
-                    cm.Items.Add(add);
-                    break;
-
-                case CommonMenuAction.Unpin:
-                    // 这里只取消固定、**不清使用记录**（与「从最近常用移除」刻意不同）：
-                    // 取消固定是"别再替我钉住了"，不是"我不用它了"。
-                    // 有使用记录时它仍会留在常用页，所以文案必须如实说明，
-                    // 否则用户点了发现它还在，会认为按钮失效。
-                    cm.Items.Add(new Separator());
-
-                    MenuItem unpin = new MenuItem();
-                    unpin.Header = "取消手动固定";
-                    unpin.ToolTip = a.Usage > 0
-                        ? "保留启动记录；取消后会归入「最近常用」"
-                        : "取消固定后不再出现在「常用」页（无使用记录）";
-                    unpin.Click += delegate { SetPinnedCommon(a, false); };
-                    cm.Items.Add(unpin);
-                    break;
-
                 case CommonMenuAction.DismissRecent:
                     cm.Items.Add(new Separator());
 
                     MenuItem rm = new MenuItem();
-                    rm.Header = "从最近常用移除";
+                    rm.Header = "从常用移除";
                     rm.ToolTip = "保留启动次数；下次从四叶草启动后会重新出现";
                     rm.Click += delegate { DismissRecentCommon(a); };
                     cm.Items.Add(rm);
@@ -2428,7 +2544,7 @@ namespace Clover
 
         /// <summary>
         /// 隐藏 / 取消隐藏一个应用。
-        /// 写入 hidden-apps.json，标记内存中的条目，然后刷新界面。
+        /// 写入 hidden-apps.json，标记内存中的条目，然后只移除受影响的磁贴。
         /// </summary>
         void SetAppHidden(AppItem a, bool hidden)
         {
@@ -2437,7 +2553,9 @@ namespace Clover
                 if (a == null || string.IsNullOrEmpty(a.Path)) return;
                 if (hiddenApps == null) hiddenApps = HiddenApps.Load(baseDir);
 
-                bool changed = hidden ? hiddenApps.Hide(a.Path) : hiddenApps.Show(a.Path);
+                bool changed = hidden ? hiddenApps.Hide(a.Path)
+                    : hiddenApps.ReasonOf(a.Path).RetainOnRestore
+                        ? hiddenApps.ShowWithException(a.Path) : hiddenApps.Show(a.Path);
                 if (!changed) return;
 
                 // 就地改标记即可，不必全量重载目录：
@@ -2453,8 +2571,7 @@ namespace Clover
                     SaveLastCategory();
                 }
 
-                RebuildNav();
-                RenderApps();
+                RefreshHiddenDisplay();
 
                 // 单个隐藏后弹轻提示（不抢焦点）
                 if (hidden) ShowHiddenTip(a);

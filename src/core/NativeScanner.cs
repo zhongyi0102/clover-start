@@ -111,9 +111,10 @@ namespace Clover
                             // 只拦卸载，不拦名字含 install/setup/update 的正常入口
                             // （Visual Studio Installer / Windows Update 等要能用）
                             if (PortableScanner.IsUninstallEntry(name, null)) continue;
+                            if (!IsLiveLnk(file)) continue;
+                            if (DesktopContentRules.Classify(file) == DesktopContentKind.NonApplication) continue;
                             if (!seenPaths.Add(file)) continue;
                             if (!seenNames.Add(name.ToLowerInvariant())) continue;
-                            if (!IsLiveLnk(file)) continue;
 
                             string folder = "";
                             try

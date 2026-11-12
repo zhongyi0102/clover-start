@@ -19,10 +19,15 @@ namespace Clover
     partial class PanelWindow
     {
         // 分组标题只用于识别既有控件；拖动后会复用并重新安放，不创建新控件。
-        const string TileSectionPinnedTag = "tile-section:pinned";
-        const string TileSectionRecentTag = "tile-section:recent";
+        const string TileSectionCommonTag = "tile-section:common";
         const string TileSectionLowValueTag = "tile-section:low-value";
         const string TileSectionLowValueCollapsedTag = "tile-section:low-value-collapsed";
+        readonly List<Rect> dragTileBounds = new List<Rect>();
+        AppItem dragSourceApp;
+        Border dragSourceTile;
+        int dragDropGeneration;
+        int dragNearestRow = -1;
+        readonly List<Border> animatedDragTiles = new List<Border>();
 
         /// <summary>
         /// 拖拽开始：记录实际列数，供插入标记和松手落点使用。
@@ -32,10 +37,18 @@ namespace Clover
             try
             {
                 if (tilePanel == null) return;
+                ClearTileMoveAnimations();
+                dragNearestRow = -1;
                 if (insertCanvas != null) insertCanvas.Visibility = Visibility.Visible;
 
                 // 磁贴实际列数 = 面板宽度 / 磁贴宽度
                 tileColumns = Math.Max(1, (int)(tilePanel.ActualWidth / (TileWidthPx + 4)));
+                dragTileBounds.Clear();
+                foreach (Border tile in renderedTiles)
+                {
+                    Point point = tile.TranslatePoint(new Point(0, 0), tilePanel);
+                    dragTileBounds.Add(new Rect(point, new Size(tile.ActualWidth, tile.ActualHeight)));
+                }
             }
             catch { }
         }
@@ -73,7 +86,15 @@ namespace Clover
                 StackPanel sp = new StackPanel();
                 sp.VerticalAlignment = VerticalAlignment.Center;
 
-                ImageSource icon = AppIcons.Get(a.Path);
+                // 已挂载的图标直接复用；不在开始拖动时同步读盘/解码。
+                ImageSource icon = null;
+                TileIconState iconState;
+                if (dragSourceTile != null && tileIconStatesByTile.TryGetValue(dragSourceTile, out iconState)
+                    && iconState.Box != null && iconState.Box.Children.Count > 0)
+                {
+                    Image image = iconState.Box.Children[0] as Image;
+                    if (image != null) icon = image.Source;
+                }
                 if (icon != null)
                 {
                     Image img = new Image();
@@ -148,8 +169,7 @@ namespace Clover
                 // 初始位置：让鼠标正好落在"抓取点"上（不跳）
                 Canvas.SetLeft(ghost, 0);
                 Canvas.SetTop(ghost, 0);
-                dragGhostPos.X = p.X - dragGrabOffset.X;
-                dragGhostPos.Y = p.Y - dragGrabOffset.Y;
+                MoveDragGhost(p);
             }
             catch (Exception ex)
             {
@@ -164,8 +184,9 @@ namespace Clover
             try
             {
                 if (dragGhost == null || dragGhostPos == null) return;
-                dragGhostPos.X = p.X - dragGrabOffset.X;
-                dragGhostPos.Y = p.Y - dragGrabOffset.Y;
+                Point overlay = tilePanel.TranslatePoint(p, insertCanvas);
+                dragGhostPos.X = overlay.X - dragGrabOffset.X;
+                dragGhostPos.Y = overlay.Y - dragGrabOffset.Y;
             }
             catch { }
         }
@@ -191,7 +212,7 @@ namespace Clover
         /// <summary>
         /// 拖动中：只更新插入标记位置，周围磁贴保持静止。
         ///
-        /// 落点用**网格坐标**（列/行）算，不遍历子元素边界。
+        /// 落点使用拖动开始时缓存的磁贴矩形，包含分组标题占用的空间。
         /// 原实现用 `Mouse.GetPosition` 逐个判断 `p.X >= tl.X && p.X <= tl.X+width`，
         /// 有两个致命问题：
         ///   · 空状态时 tilePanel.Children[0] 是 StackPanel 不是磁贴，index 对不上
@@ -208,37 +229,112 @@ namespace Clover
                 if (tilePanel == null || insertCanvas == null || insertMarker == null) return;
                 if (renderedApps == null || renderedApps.Count == 0) return;
 
-                double cellW = TileWidthPx + 4;    // 磁贴宽 + 左右 Margin
-                double cellH = TileHeightPx + 4;
-                int cols = Math.Max(1, tileColumns);
-
                 // 用浮层的**中心**判断落点，而不是鼠标位置 ——
                 // 鼠标可能抓在磁贴边角，用中心更符合"这块磁贴会掉到哪"的直觉
                 double cx = p.X - dragGrabOffset.X + TileWidthPx / 2.0;
                 double cy = p.Y - dragGrabOffset.Y + TileHeightPx / 2.0;
 
-                int col = (int)Math.Floor(Math.Max(0, cx) / cellW);
-                int row = (int)Math.Floor(Math.Max(0, cy) / cellH);
-                if (col < 0) col = 0;
-                if (col >= cols) col = cols - 1;
-                if (row < 0) row = 0;
-
-                int idx = row * cols + col;
-                if (idx > renderedApps.Count) idx = renderedApps.Count;
+                // 分组标题会占满一行；只在拖动开始读取布局，移动时使用缓存矩形。
+                if (dragTileBounds.Count != renderedApps.Count) return;
+                // 先选行，再选列；纵向距离与横向距离不能混成一个分数。
+                int row = 0;
+                double best = double.MaxValue;
+                for (int i = 0; i < dragTileBounds.Count; i++)
+                {
+                    Rect bounds = dragTileBounds[i];
+                    double distance = Math.Abs(cy - (bounds.Top + bounds.Height / 2));
+                    if (distance < best) { best = distance; row = i; }
+                }
+                // 行边界保留少量迟滞，指针手抖不会让插入线反复上下跳。
+                if (dragNearestRow >= 0 && dragNearestRow < dragTileBounds.Count)
+                {
+                    Rect previous = dragTileBounds[dragNearestRow];
+                    if (Math.Abs(cy - (previous.Top + previous.Height / 2)) <= best + Ui.S.Sm) row = dragNearestRow;
+                }
+                dragNearestRow = row;
+                int idx = row;
+                best = double.MaxValue;
+                for (int i = 0; i < dragTileBounds.Count; i++)
+                {
+                    Rect bounds = dragTileBounds[i];
+                    if (Math.Abs(bounds.Top - dragTileBounds[row].Top) > 1) continue;
+                    double distance = Math.Abs(cx - (bounds.Left + bounds.Width / 2));
+                    if (distance < best) { best = distance; idx = i; }
+                }
+                Rect nearest = dragTileBounds[idx];
+                if (cx >= nearest.Left + nearest.Width / 2 - 0.1) idx++;
+                idx = ClampDragInsertion(dragSourceApp, idx);
+                idx = Math.Min(idx, renderedApps.Count);
                 if (idx == insertIndex) return;    // 没变化就不重画，省开销
 
                 insertIndex = idx;
 
                 // ---- 插入标记位置（胶囊竖条）----
-                double mx = col * cellW - 2;
-                double my = row * cellH + 6;
-                Canvas.SetLeft(insertMarker, mx);
-                Canvas.SetTop(insertMarker, my);
+                Point marker = DragInsertionPoint(idx);
+                Point overlayPoint = tilePanel.TranslatePoint(new Point(marker.X - 4, marker.Y + 4), insertCanvas);
+                Canvas.SetLeft(insertMarker, overlayPoint.X);
+                Canvas.SetTop(insertMarker, overlayPoint.Y);
                 insertMarker.Height = Math.Max(24, TileHeightPx - 12);
                 insertMarker.Visibility = Visibility.Visible;
 
             }
             catch { }
+        }
+
+        Point DragInsertionPoint(int index)
+        {
+            if (dragTileBounds.Count == 0) return new Point();
+            if (dragSourceApp != null && index > 0 && index <= dragTileBounds.Count
+                && SameDragGroup(dragSourceApp, renderedApps[index - 1])
+                && (index == renderedApps.Count || !SameDragGroup(dragSourceApp, renderedApps[index])))
+            {
+                Rect edge = dragTileBounds[index - 1];
+                return new Point(edge.Right + 4, edge.Top);
+            }
+            if (index < dragTileBounds.Count)
+            {
+                Rect bounds = dragTileBounds[Math.Max(0, index)];
+                return bounds.TopLeft;
+            }
+            Rect last = dragTileBounds[dragTileBounds.Count - 1];
+            return new Point(last.Right + 4, last.Top);
+        }
+
+        bool SameDragGroup(AppItem a, AppItem b)
+        {
+            if (showingCommon) return true;
+            return a.LowValue == b.LowValue && HasStoreLabel(a) == HasStoreLabel(b);
+        }
+
+        int ClampDragInsertion(AppItem app, int index)
+        {
+            if (app == null || renderedApps == null) return index;
+            int source = renderedApps.IndexOf(app);
+            if (source < 0) return index;
+            int first = source, last = source;
+            while (first > 0 && SameDragGroup(app, renderedApps[first - 1])) first--;
+            while (last + 1 < renderedApps.Count && SameDragGroup(app, renderedApps[last + 1])) last++;
+            return Math.Max(first, Math.Min(last + 1, index));
+        }
+
+        void RestoreDragSource()
+        {
+            if (dragSourceTile != null)
+            {
+                UpdateTilePresentation(dragSourceTile, dragSourceApp);
+                dragSourceTile.Cursor = Cursors.Hand;
+            }
+            dragSourceTile = null;
+            dragSourceApp = null;
+        }
+
+        void CancelTileDrag()
+        {
+            dragDropGeneration++;
+            RestoreDragSource();
+            EndDragVisual();
+            ClearTileMoveAnimations();
+            try { Mouse.Capture(null); } catch { }
         }
 
 
@@ -275,12 +371,12 @@ namespace Clover
 
 
         /// <summary>
-        /// 松手后：浮层平滑飞到目标格，落地后提交排序并原地换位。
+        /// 松手即提交排序；周围磁贴同时让位，浮层落到实际最终格。
         ///
         /// 为什么要有这一步：如果松手瞬间直接换位，浮层消失与磁贴换位在
         /// 同一帧发生，视觉上会像“啪”地跳过去。
-        /// 让浮层先飞 200ms 到目标位置，用户看到的是"图标落进格子里"，
-        /// 之后重建时磁贴已经在正确位置，看不出切换。
+        /// 松手即变更实际排列，周围可见磁贴与浮层同步用 200ms 位移衔接。
+        /// 只测量一次前后位置，再用 RenderTransform 呈现，不逐帧重排。
         ///
         /// 落点无效（target &lt; 0）时直接取消，浮层飞回原位。
         /// </summary>
@@ -288,12 +384,16 @@ namespace Clover
         {
             try
             {
+                int generation = ++dragDropGeneration;
+                Border source = dragSourceTile;
+                CommitDrag(a, target, true);
+                tilePanel.UpdateLayout();
                 if (dragGhost == null || dragGhostPos == null || insertCanvas == null)
                 {
                     // 没有浮层（异常情况）：直接提交
                     HideDragGhost();
                     if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
-                    CommitDrag(a, target);
+                    RestoreDragSource();
                     return;
                 }
 
@@ -301,23 +401,22 @@ namespace Clover
                 {
                     HideDragGhost();
                     if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
-                    CommitDrag(a, target);
+                    RestoreDragSource();
                     return;
                 }
 
-                // 目标格的中心坐标（tilePanel 坐标系）
-                double cellW = TileWidthPx + 4;
-                double cellH = TileHeightPx + 4;
-                int cols = Math.Max(1, tileColumns);
+                // 按实际磁贴位置落下，不能忽略分组标题占用的空间。
                 double dstX = 0, dstY = 0;
-                if (target >= 0 && renderedApps != null)
+                int finalIndex = renderedApps == null ? -1 : renderedApps.IndexOf(a);
+                if (finalIndex >= 0 && finalIndex < renderedTiles.Count)
                 {
-                    int t = target;
-                    if (t > renderedApps.Count) t = renderedApps.Count;
-                    int col = t % cols;
-                    int row = t / cols;
-                    dstX = col * cellW + 2;    // +2 = 磁贴 Margin
-                    dstY = row * cellH + 2;
+                    Border finalTile = renderedTiles[finalIndex];
+                    Point destination = finalTile.TranslatePoint(new Point(), insertCanvas);
+                    TranslateTransform offset = finalTile.RenderTransform as TranslateTransform;
+                    if (offset != null) { destination.X -= offset.X; destination.Y -= offset.Y; }
+                    dstX = destination.X;
+                    dstY = destination.Y;
+                    if (source != null) source.Opacity = 0;
                 }
                 else
                 {
@@ -345,15 +444,16 @@ namespace Clover
                     dragGhostScale.BeginAnimation(ScaleTransform.ScaleYProperty, sy);
                 }
 
-                // 落地后：移除浮层 → 复用现有磁贴原地换位。
-                // 不再 RenderApps，避免图标、文字和滚动位置一起闪烁。
+                // 顺序已经提交；完成回调只移除本轮浮层并恢复源磁贴。
+                // generation 阻止连续拖动时旧回调清除新浮层。
                 ay.Completed += delegate
                 {
                     try
                     {
+                        if (generation != dragDropGeneration) return;
+                        RestoreDragSource();
                         HideDragGhost();
                         if (insertCanvas != null) insertCanvas.Visibility = Visibility.Collapsed;
-                        CommitDrag(a, target);
                     }
                     catch { }
                 };
@@ -364,8 +464,7 @@ namespace Clover
             catch (Exception ex)
             {
                 Ui.LogError(ex, "拖动落入动画");
-                HideDragGhost();
-                CommitDrag(a, target);
+                CancelTileDrag();
             }
         }
 
@@ -377,7 +476,7 @@ namespace Clover
         ///
         /// target 由调用方传入（在 EndDragVisual 重置之前取好的值）。
         /// </summary>
-        void CommitDrag(AppItem a, int target)
+        void CommitDrag(AppItem a, int target, bool animate = false)
         {
             try
             {
@@ -407,20 +506,28 @@ namespace Clover
 
                 newOrder.Insert(target, moved);
 
-                // 「常用」始终保持“手动固定 / 最近常用”两个分组；旧实现重渲染时
-                // 会在 RenderAppsCore 里做同样的稳定分区。原地换位也保持该语义。
-                if (showingCommon) RegroupCommonSections(newOrder);
+                // 常用一套顺序；全部仍保持角色与商店分区。
+                if (current == "") RegroupAllSections(newOrder);
 
+                Dictionary<Border, Point> positions = animate && !Ui.ReducedMotion ? CaptureTilePositions() : null;
+                ClearTileMoveAnimations();
                 if (!ApplyTileOrderInPlace(newOrder))
                 {
                     Ui.Log("CommitDrag 已取消：磁贴映射不完整");
                     return;
                 }
+                if (positions != null) AnimateTileMoves(positions, dragSourceTile);
 
                 List<string> paths = new List<string>();
                 foreach (AppItem it in newOrder) paths.Add(it.Path);
+                // 折叠区未渲染的条目不能从人工顺序中丢失。
+                List<string> savedOrder;
+                if (customOrders.TryGetValue(current, out savedOrder))
+                    foreach (string path in savedOrder)
+                        if (!paths.Exists(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase))) paths.Add(path);
                 customOrders[current] = paths;
                 SaveCustomOrders();
+                UpdateCommonListHeader();
                 // 排序已经反映在当前控件树里；同步签名，下一次打开面板不会把它
                 // 误判成外部内容变化而再次重建。
                 renderedSig = CurrentContentSig();
@@ -431,11 +538,53 @@ namespace Clover
             }
         }
 
+        Dictionary<Border, Point> CaptureTilePositions()
+        {
+            Dictionary<Border, Point> positions = new Dictionary<Border, Point>();
+            foreach (Border tile in renderedTiles) positions[tile] = tile.TranslatePoint(new Point(), tilePanel);
+            return positions;
+        }
+
+        void ClearTileMoveAnimations()
+        {
+            foreach (Border tile in animatedDragTiles)
+            {
+                TranslateTransform move = tile.RenderTransform as TranslateTransform;
+                if (move == null) continue;
+                move.BeginAnimation(TranslateTransform.XProperty, null);
+                move.BeginAnimation(TranslateTransform.YProperty, null);
+                move.X = move.Y = 0;
+            }
+            animatedDragTiles.Clear();
+        }
+
+        void AnimateTileMoves(Dictionary<Border, Point> before, Border dragged)
+        {
+            tilePanel.UpdateLayout();
+            foreach (Border tile in renderedTiles)
+            {
+                Point previous;
+                if (tile == dragged || !before.TryGetValue(tile, out previous)) continue;
+                Point next = tile.TranslatePoint(new Point(), tilePanel);
+                Vector delta = previous - next;
+                if (delta.Length < 0.1) continue;
+                Point viewport = tile.TranslatePoint(new Point(), contentScroll);
+                if (viewport.Y < -TileHeightPx || viewport.Y > contentScroll.ActualHeight + TileHeightPx) continue;
+                TranslateTransform move = new TranslateTransform();
+                tile.RenderTransform = move;
+                animatedDragTiles.Add(tile);
+                move.BeginAnimation(TranslateTransform.XProperty, new DoubleAnimation(delta.X, 0, TimeSpan.FromMilliseconds(DragDropMs))
+                    { EasingFunction = FrozenCubic(), FillBehavior = FillBehavior.Stop });
+                move.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(delta.Y, 0, TimeSpan.FromMilliseconds(DragDropMs))
+                    { EasingFunction = FrozenCubic(), FillBehavior = FillBehavior.Stop });
+            }
+        }
+
 
         /// <summary>
         /// 使用当前 Border/Image 控件重建排列，不重新创建磁贴、不重新请求图标。
         /// Children.Clear/Add 都发生在同一个 UI 调度周期，用户只看到最终换位，
-        /// 不会看到中间空白，也不会丢失滚动位置、选中态或运行中圆点。
+        /// 不会看到中间空白，也不会丢失滚动位置或选中态。
         /// </summary>
         bool ApplyTileOrderInPlace(List<AppItem> newOrder)
         {
@@ -460,10 +609,11 @@ namespace Clover
                     newTiles.Add(tile);
                 }
 
-                Border pinnedHeader = null;
-                Border recentHeader = null;
+                Border commonHeader = null;
                 Border lowHeader = null;
                 Border collapsedLowRow = null;
+                Border activeHeader = null;
+                Border auxiliaryHeader = null;
                 List<UIElement> extras = new List<UIElement>();
                 List<UIElement> oldChildren = new List<UIElement>();
                 foreach (UIElement child in tilePanel.Children) oldChildren.Add(child);
@@ -472,17 +622,13 @@ namespace Clover
                     Border border = child as Border;
                     if (border != null && renderedTiles.Contains(border)) continue;
                     string tag = border == null ? null : border.Tag as string;
-                    if (tag == TileSectionPinnedTag) pinnedHeader = border;
-                    else if (tag == TileSectionRecentTag) recentHeader = border;
+                    if (tag == TileSectionCommonTag) commonHeader = border;
                     else if (tag == TileSectionLowValueTag) lowHeader = border;
                     else if (tag == TileSectionLowValueCollapsedTag) collapsedLowRow = border;
+                    else if (tag == TileSectionActiveTag) activeHeader = border;
+                    else if (tag == TileSectionAuxiliaryTag) auxiliaryHeader = border;
                     else extras.Add(child);
                 }
-
-                int pinnedCount = 0;
-                if (showingCommon)
-                    while (pinnedCount < newOrder.Count && IsPinnedCommon(newOrder[pinnedCount]))
-                        pinnedCount++;
 
                 int firstLow = -1;
                 if (current == "")
@@ -500,16 +646,21 @@ namespace Clover
                 // 一次性重新挂接同一批控件。没有 MakeTile、没有图标解码，也没有
                 // Dispatcher 分批重建，因此只是一次普通 WrapPanel 重新布局。
                 tilePanel.Children.Clear();
+                int activeCount = current == "" ? CountActiveRole(newOrder) : 0;
                 for (int i = 0; i < newTiles.Count; i++)
                 {
-                    if (showingCommon && i == 0 && pinnedCount > 0 && pinnedHeader != null)
-                        tilePanel.Children.Add(pinnedHeader);
-                    if (showingCommon && i == pinnedCount && pinnedCount < newTiles.Count && recentHeader != null)
-                        tilePanel.Children.Add(recentHeader);
+                    if (current == "" && i == 0 && activeHeader != null)
+                        tilePanel.Children.Add(activeHeader);
+                    if (current == "" && i == activeCount && auxiliaryHeader != null)
+                        tilePanel.Children.Add(auxiliaryHeader);
+                    if (showingCommon && i == 0 && commonHeader != null)
+                        tilePanel.Children.Add(commonHeader);
                     if (i == firstLow && lowHeader != null)
                         tilePanel.Children.Add(lowHeader);
                     tilePanel.Children.Add(newTiles[i]);
                 }
+                if (auxiliaryHeader != null && activeCount == newTiles.Count)
+                    tilePanel.Children.Add(auxiliaryHeader);
                 if (collapsedLowRow != null) tilePanel.Children.Add(collapsedLowRow);
                 foreach (UIElement extra in extras) tilePanel.Children.Add(extra);
 
@@ -538,6 +689,17 @@ namespace Clover
             return new List<Border>(renderedTiles);
         }
 
+        internal int TestAuxiliaryHeaderCount()
+        {
+            int count = 0;
+            foreach (UIElement child in tilePanel.Children)
+            {
+                Border header = child as Border;
+                if (header != null && string.Equals(header.Tag as string, TileSectionAuxiliaryTag, StringComparison.Ordinal)) count++;
+            }
+            return count;
+        }
+
 
         /// <summary>验收用：走真实提交路径；target 语义与拖动插入线一致。</summary>
         internal void TestCommitDrag(int from, int target)
@@ -545,6 +707,35 @@ namespace Clover
             if (renderedApps == null || from < 0 || from >= renderedApps.Count) return;
             CommitDrag(renderedApps[from], target);
         }
+
+        internal int TestDragHit(int from, int tile, double xFraction, double yFraction)
+        {
+            CancelTileDrag();
+            dragSourceApp = renderedApps[from];
+            BeginDragVisual();
+            dragGrabOffset = new Point(TileWidthPx / 2, TileHeightPx / 2);
+            Rect bounds = dragTileBounds[tile];
+            UpdateDragPreview(new Point(bounds.Left + bounds.Width * xFraction, bounds.Top + bounds.Height * yFraction));
+            int result = insertIndex;
+            CancelTileDrag();
+            return result;
+        }
+
+        internal void TestAnimatedDragDrop(int from, int target)
+        {
+            CancelTileDrag();
+            dragSourceApp = renderedApps[from];
+            dragSourceTile = renderedTiles[from];
+            BeginDragVisual();
+            dragGrabOffset = new Point(TileWidthPx / 2, TileHeightPx / 2);
+            Point start = dragTileBounds[from].TopLeft;
+            ShowDragGhost(dragSourceApp, new Point(start.X + TileWidthPx / 2, start.Y + TileHeightPx / 2));
+            DropDragGhost(dragSourceApp, ClampDragInsertion(dragSourceApp, target));
+        }
+
+        internal int TestAnimatedDragTileCount() { return animatedDragTiles.Count; }
+        internal bool TestDragGhostVisible() { return dragGhost != null; }
+        internal void TestCancelTileDrag() { CancelTileDrag(); }
 
 
         /// <summary>验收用：拖动预览只移动插入线，不给任何磁贴附加位移。</summary>
@@ -554,19 +745,17 @@ namespace Clover
             try
             {
                 BeginDragVisual();
-                dragGrabOffset = new Point(0, 0);
+                dragGrabOffset = new Point(TileWidthPx / 2, TileHeightPx / 2);
                 insertIndex = -1;
 
-                double cellW = TileWidthPx + 4;
-                double cellH = TileHeightPx + 4;
-                int cols = Math.Max(1, tileColumns);
                 int bounded = Math.Max(0, Math.Min(target, renderedApps.Count));
-                int col = bounded % cols;
-                int row = bounded / cols;
-                Point p = new Point(col * cellW + 1, row * cellH + 1);
+                Point point = DragInsertionPoint(bounded);
+                Point p = bounded < dragTileBounds.Count ? point : new Point(point.X + 1, point.Y);
                 UpdateDragPreview(p);
 
                 if (insertIndex != bounded) return false;
+                Point expected = tilePanel.TranslatePoint(new Point(point.X - 4, point.Y + 4), insertCanvas);
+                if (Math.Abs(Canvas.GetTop(insertMarker) - expected.Y) > 0.1) return false;
                 foreach (Border tile in renderedTiles)
                 {
                     FrameworkElement content = tile == null ? null : tile.Child as FrameworkElement;

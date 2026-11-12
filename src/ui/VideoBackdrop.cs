@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
 namespace Clover
@@ -68,6 +69,23 @@ namespace Clover
 
         /// <summary>播放失败回调（让上层回退固定图）。</summary>
         public Action OnFailed;
+
+        internal byte[] SampleFrame()
+        {
+            try
+            {
+                if (!InUse || media.ActualWidth <= 0 || media.ActualHeight <= 0) return null;
+                DrawingVisual visual = new DrawingVisual();
+                using (DrawingContext dc = visual.RenderOpen())
+                    dc.DrawRectangle(new VisualBrush(media) { Stretch = Stretch.Fill }, null, new Rect(0, 0, 64, 40));
+                RenderTargetBitmap bitmap = new RenderTargetBitmap(64, 40, 96, 96, PixelFormats.Pbgra32);
+                bitmap.Render(visual);
+                byte[] pixels = new byte[64 * 40 * 4];
+                bitmap.CopyPixels(pixels, 64 * 4, 0);
+                return pixels;
+            }
+            catch { return null; }
+        }
 
         public VideoBackdrop(Window owner, Panel host)
         {

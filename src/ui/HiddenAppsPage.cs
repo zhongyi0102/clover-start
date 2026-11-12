@@ -136,7 +136,14 @@ namespace Clover
 
             searchWrap.Child = sg;
             Grid.SetRow(searchWrap, 0);
-            layout.Children.Add(searchWrap);
+            StackPanel searchArea = new StackPanel();
+            searchArea.Children.Add(searchWrap);
+            TextBlock classificationHint = Ui.T("这里只管理已隐藏的应用；手动隐藏不参与搜索。电脑类可在面板搜索，不列在这里。", 11, Ui.Sub);
+            classificationHint.TextWrapping = TextWrapping.Wrap;
+            classificationHint.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, Ui.S.Sm);
+            searchArea.Children.Add(classificationHint);
+            Grid.SetRow(searchArea, 0);
+            layout.Children.Add(searchArea);
 
             // ---- 列表 ----
             scroll = new ScrollViewer();
@@ -200,15 +207,15 @@ namespace Clover
             btns.Orientation = Orientation.Horizontal;
             btns.HorizontalAlignment = HorizontalAlignment.Right;
 
-            Border restoreSel = Chip("恢复所选", true, delegate { RestoreSelected(); });
+            Button restoreSel = Chip("恢复所选", true, delegate { RestoreSelected(); });
             btns.Children.Add(restoreSel);
 
-            Border restoreAll = Chip("全部恢复", false, delegate { RestoreAll(); });
+            Button restoreAll = Chip("全部恢复", false, delegate { RestoreAll(); });
             restoreAll.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
             btns.Children.Add(restoreAll);
 
             // 「隐藏用不到的」：原右键菜单的级联子菜单迁移至此，做成一个按钮
-            Border hideTools = Chip("隐藏用不到的…", false, delegate { ShowHideTools(); });
+            Button hideTools = Chip("隐藏用不到的…", false, delegate { ShowHideTools(); });
             hideTools.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
             btns.Children.Add(hideTools);
 
@@ -225,6 +232,7 @@ namespace Clover
             {
                 try
                 {
+                    if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.ButtonBase) return;
                     if (e.Key == Key.Down) { MoveSelection(1); e.Handled = true; }
                     else if (e.Key == Key.Up) { MoveSelection(-1); e.Handled = true; }
                     else if (e.Key == Key.Enter) { RestoreCurrent(); e.Handled = true; }
@@ -415,7 +423,7 @@ namespace Clover
             g.Children.Add(left);
 
             // 「恢复本组」
-            Border restoreGroup = Chip("恢复本组", false, delegate { RestoreGroup(gk); });
+            Button restoreGroup = Chip("恢复本组", false, delegate { RestoreGroup(gk); });
             restoreGroup.Height = 22;
             restoreGroup.Padding = new Thickness(10, 0, 10, 0);
             Grid.SetColumn(restoreGroup, 1);
@@ -512,7 +520,7 @@ namespace Clover
 
                 // 恢复按钮
                 AppItem captured = a;
-                Border restore = Chip("恢复", false, delegate { RestoreOne(captured); });
+                Button restore = Chip("恢复", false, delegate { RestoreOne(captured); });
                 restore.Height = 24;
                 restore.Padding = new Thickness(10, 0, 10, 0);
                 Grid.SetColumn(restore, 2);
@@ -780,7 +788,7 @@ namespace Clover
                 // ★ 确认框，默认焦点在「取消」
                 MessageBoxResult r = MessageBox.Show(dlg,
                     "将恢复全部 " + n + " 个被隐藏的应用。\r\n\r\n"
-                    + "（批量隐藏的例外名单会保留，下次批量隐藏仍会跳过它们）",
+                    + "（批量 / 建议 / 自动隐藏项会加入保留例外，下次不会再隐藏）",
                     "四叶草 · 全部恢复",
                     MessageBoxButton.OKCancel, MessageBoxImage.Question,
                     MessageBoxResult.Cancel);
@@ -847,13 +855,13 @@ namespace Clover
 
                     TextBlock t = Ui.T(key, 10, Ui.Sub);
                     t.TextTrimming = TextTrimming.CharacterEllipsis;
-                    t.ToolTip = key;
+                    t.ToolTip = "保留例外：批量隐藏和建议隐藏都会跳过。\n" + key;
                     t.VerticalAlignment = VerticalAlignment.Center;
                     Grid.SetColumn(t, 0);
                     g.Children.Add(t);
 
                     string captured = key;
-                    Border del = Chip("取消", false, delegate
+                    Button del = Chip("取消", false, delegate
                     {
                         try
                         {
@@ -930,11 +938,11 @@ namespace Clover
 
         // ========== 小工具 ==========
 
-        static Border Chip(string label, bool primary, Action onClick)
+        static Button Chip(string label, bool primary, Action onClick)
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Height = 28;
-            b.CornerRadius = new CornerRadius(b.Height / 2);
+            b.Template = PanelWindow.MakeButtonTemplate(b.Height / 2);
             b.Padding = new Thickness(14, 0, 14, 0);
             b.Cursor = Cursors.Hand;
             b.Background = primary ? Ui.Accent : Ui.SearchBg;
@@ -944,11 +952,14 @@ namespace Clover
             TextBlock t = Ui.T(label, 11.5, primary ? Brushes.White : Ui.Fg,
                 primary ? FontWeights.SemiBold : FontWeights.Normal);
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            t.Margin = new Thickness(10, 0, 10, 0);
+            b.Content = t;
 
             b.MouseEnter += delegate { b.Opacity = 0.85; };
             b.MouseLeave += delegate { b.Opacity = 1.0; };
-            b.MouseLeftButtonUp += delegate(object s, MouseButtonEventArgs e)
+            b.GotKeyboardFocus += delegate { b.BorderBrush = Ui.Accent; b.BorderThickness = new Thickness(2); };
+            b.LostKeyboardFocus += delegate { b.BorderBrush = Ui.Line; b.BorderThickness = new Thickness(primary ? 0 : 1); };
+            b.Click += delegate(object s, RoutedEventArgs e)
             {
                 try
                 {

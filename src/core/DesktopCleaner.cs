@@ -6,11 +6,11 @@ using System.Runtime.InteropServices;
 namespace Clover
 {
     /// <summary>
-    /// 桌面保持无快捷方式：监听两个桌面目录，把新出现的 .lnk/.url 移到回收站。
+    /// 桌面保持无应用快捷方式：完整入口交接到面板后才移到回收站。
     ///
     /// ── 只处理 .lnk 和 .url ──
     ///
-    /// 文件、文件夹、文档、图片一律不碰。
+    /// 文件/文件夹快捷方式、网页链接、文档、图片和未知入口一律不碰。
     ///
     /// ── 保留名单优先 ──
     ///
@@ -65,6 +65,7 @@ namespace Clover
 
         /// <summary>移除后的回调（用于弹提示）。参数：成功的条目列表。</summary>
         public Action<List<Dictionary<string, object>>> OnRemoved;
+        public Func<string, bool> EnsureApplicationEntry;
 
         public DesktopCleaner(string baseDir, Settings settings)
         {
@@ -394,6 +395,15 @@ namespace Clover
             }
         }
 
+        // 显式收纳不依赖自动开关，但复用同样的身份核对与回收站安全路径。
+        public bool CleanManual(string path)
+        {
+            List<Dictionary<string, object>> removed = new List<Dictionary<string, object>>();
+            bool ok = ProcessOne(path, removed);
+            if (ok) { SaveSettings(); NotifyShell(); }
+            return ok;
+        }
+
         /// <summary>处理单个文件。返回是否真的移除了。</summary>
         bool ProcessOne(string path, List<Dictionary<string, object>> removedOk)
         {
@@ -406,9 +416,15 @@ namespace Clover
 
                 // ★ 保留名单：永远跳过
                 if (DesktopKeep.IsKept(settings.DesktopKeepTargets, path)) return false;
-
-                // 等文件写完（被占用时重试）
+                if (settings.DesktopKeepPaths.Exists(p => string.Equals(DesktopKeep.NormalizeKey(p),
+                    DesktopKeep.NormalizeKey(path), StringComparison.OrdinalIgnoreCase))) return false;
                 if (!WaitUnlocked(path)) return false;
+                if (DesktopContentRules.Classify(path) != DesktopContentKind.Application) return false;
+                string fingerprint = DesktopContentRules.Fingerprint(path);
+                if (string.IsNullOrEmpty(fingerprint)) return false;
+                // 桌面入口交接成功前绝不清理；未挂接登记器时安全地保留原处。
+                if (EnsureApplicationEntry == null || !EnsureApplicationEntry(path)) return false;
+                if (DesktopContentRules.Fingerprint(path) != fingerprint) return false;
 
                 string target = DesktopKeep.ResolveTarget(path);
                 bool isPublic = DesktopKeep.IsPublicDesktop(path);
@@ -743,6 +759,16 @@ namespace Clover
                     if (string.IsNullOrWhiteSpace(path)) continue;
 
                     string err;
+                    string fingerprint = DesktopContentRules.Fingerprint(path);
+                    if (DesktopContentRules.Classify(path) != DesktopContentKind.Application
+                        || string.IsNullOrEmpty(fingerprint)
+                        || EnsureApplicationEntry == null || !EnsureApplicationEntry(path)
+                        || DesktopContentRules.Fingerprint(path) != fingerprint)
+                    {
+                        stillFail.Add(o);
+                        failed++;
+                        continue;
+                    }
                     if (Elevation.DeleteAsAdmin(path, out err))
                     {
                         ok++;

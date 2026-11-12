@@ -43,6 +43,7 @@ namespace Clover
                 TestSingleClickSelectsOnly();
                 TestDragNeverLaunches();
                 TestOtherClicks();
+                TestRepeatedDoubleClickReachesThrottle();
                 TestMatrix();
                 TestProductionWiring();
             }
@@ -124,7 +125,22 @@ namespace Clover
             Console.WriteLine();
         }
 
-        // ---------- 5. 全矩阵 ----------
+        // ---------- 5. 连续双击必须进入统一启动入口 ----------
+        static void TestRepeatedDoubleClickReachesThrottle()
+        {
+            Console.WriteLine("--- 5. 连续双击进入重复启动保护 ---");
+
+            Check(TileClickAction.Resolve(false, 4) == TileClickAction.Action.Launch,
+                "★第 4 次点击完成第二组双击 → 再次发出启动请求，由节流器提醒");
+            Check(TileClickAction.Resolve(false, 6) == TileClickAction.Action.Launch,
+                "第 6 次点击完成第三组双击 → 仍走统一启动入口");
+            Check(TileClickAction.Resolve(false, 5) == TileClickAction.Action.Select,
+                "第 5 次点击未完成双击 → 只选中");
+
+            Console.WriteLine();
+        }
+
+        // ---------- 6. 全矩阵 ----------
         static void TestMatrix()
         {
             Console.WriteLine("--- 5. 24 种组合矩阵 ---");
@@ -142,7 +158,7 @@ namespace Clover
 
                     TileClickAction.Action expect;
                     if (dragged) expect = TileClickAction.Action.Drop;
-                    else if (c == 2) expect = TileClickAction.Action.Launch;
+                    else if (c >= 2 && c % 2 == 0) expect = TileClickAction.Action.Launch;
                     else expect = TileClickAction.Action.Select;
 
                     if (act != expect)
@@ -157,14 +173,14 @@ namespace Clover
             }
 
             Check(ok, "★24 种组合全部符合预期", firstBad);
-            // 12 种不拖动 × 只有 click=2 启动 → 恰好 1 种
-            Check(launches == 1, "★24 种组合里只有「不拖动 + 双击」会启动",
+            // 0..11 中完成双击的偶数计数为 2/4/6/8/10，共 5 种。
+            Check(launches == 5, "★24 种组合里只有「不拖动 + 完成一组双击」会启动",
                 "启动组合数=" + launches);
 
             Console.WriteLine();
         }
 
-        // ---------- 6. 生产代码真的接上了 ----------
+        // ---------- 7. 生产代码真的接上了 ----------
         static void TestProductionWiring()
         {
             Console.WriteLine("--- 6. 生产磁贴接线 ---");
@@ -183,8 +199,12 @@ namespace Clover
 
             Check(body.Length > 0, "找到 MakeTile 函数体");
 
-            Check(body.Contains("TileClickAction.Resolve(tileDrag, downClickCount)"),
+            Check(body.Contains("TileClickAction.Resolve(releasedDrag, downClickCount)"),
                 "★MakeTile 松手时调用 TileClickAction.Resolve");
+            Check(body.IndexOf("bool releasedDrag = tileDrag", StringComparison.Ordinal)
+                < body.IndexOf("b.ReleaseMouseCapture()", StringComparison.Ordinal)
+                && body.Contains("b.LostMouseCapture") && body.Contains("CancelTileDrag()"),
+                "★释放捕获前记住拖动状态，意外失去捕获可取消");
 
             Check(body.Contains("TileClickAction.Action.Launch")
                 && body.Contains("Launch(a)"),
@@ -202,6 +222,10 @@ namespace Clover
 
             Check(body.Contains("双击启动"),
                 "★ToolTip 写明「双击启动」（否则单击没反应像坏了）");
+
+            Check(body.Contains("SystemParameters.MinimumHorizontalDragDistance")
+                && body.Contains("SystemParameters.MinimumVerticalDragDistance"),
+                "★拖动使用 Windows 系统阈值，不再硬编码 6px");
 
             // 旧实现是 else { Launch(a); } —— 只要不是拖动就启动。
             // 这条断言防止有人把「无条件启动」改回来。

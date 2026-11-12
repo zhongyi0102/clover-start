@@ -38,6 +38,7 @@ namespace Clover
         }
         Settings settings;
         Catalog catalog;
+        AppClassification appClassification;
         string current = "";
         DateTime suppressDeactivate = DateTime.MinValue;
         /// <summary>程序内部清空搜索框时置 true，避免触发一次多余的全量重渲染。</summary>
@@ -74,9 +75,11 @@ namespace Clover
         /// </summary>
         double edgeMargin = 16;
         // 旧任务列表代码仍保留在 PanelWindow.Tasks.cs 供以后复用，但当前界面没有入口，
-        // 因此不创建 taskStack，也不再枚举系统窗口。这个定时器只刷新磁贴运行圆点。
+        // 因此不创建 taskStack，也不枚举系统窗口。
         StackPanel taskStack = null;
-        DispatcherTimer runningStateTimer;
+
+        /// <summary>同一应用在 2 秒内的重复启动请求会被拦截并提示。</summary>
+        readonly LaunchThrottle launchThrottle = new LaunchThrottle(2000);
 
         // ---- 拖放检测（防止拖拽中途被自动收起）----
         //
@@ -134,7 +137,7 @@ namespace Clover
         // ---- 「文件」标签（2-3）----
         StackPanel filesPanel;         // 整个文件标签的容器
         StackPanel filesChipRow;       // 来源胶囊行
-        StackPanel filesExtRow;        // 第二行：后缀筛选
+        WrapPanel filesExtRow;         // 第二行：后缀筛选，窄窗口自然换行
         StackPanel filesUndoHost;      // 底部撤销提示条容器
         TextBlock filesNotice;         // 提示行
         StackPanel filesListPanel;     // 文件列表
@@ -163,6 +166,8 @@ namespace Clover
         TextBlock searchHint;
         TextBlock footerHint;
         TextBlock footerCount;
+        Button rescanAppsButton;
+        Button refreshFilesButton;
 
         /// <summary>
         /// 分类栏容器（顶部横条）。
@@ -243,20 +248,6 @@ namespace Clover
         StackPanel searchResultPanel;
         /// <summary>搜索结果的逻辑控制（目录内存匹配 + 系统索引后台补充）。</summary>
         SearchResultList searchResults;
-
-        /// <summary>
-        /// 每块磁贴的图标容器（应用 → 容器），供就地刷新"运行中"小圆点用。
-        ///
-        /// 为什么不靠重渲染：一块磁贴约 6 个可视化元素，119 个就是 700+ 控件，
-        /// 而运行状态每 1.5 秒可能变一次。为了几颗 8px 的小点重建整棵树不值当。
-        /// 这里只增删一颗小圆点，代价是 O(应用数) 的字典查表，且不触发布局。
-        ///
-        /// 为什么记全部磁贴而不是只记"有小圆点的"：
-        /// 应用可能在面板开着期间**刚启动**（比如你点了 Chrome），
-        /// 这时需要**补画**圆点 —— 只记已有的就无法补。
-        /// </summary>
-        readonly Dictionary<string, Grid> tileIconBoxes =
-            new Dictionary<string, Grid>(StringComparer.OrdinalIgnoreCase);
 
         List<string> navCats = new List<string>();
         List<Button> navItems = new List<Button>();
@@ -341,6 +332,7 @@ namespace Clover
             // HideCategories 仍保留（通用 API + 有测试），但传空列表 = 不过滤。
             hiddenCats = new List<string>();
             catalog.ApplyUsage(usage);
+            ApplyAutomaticAppHiding();
             catalog.HideCategories(hiddenCats);
             layoutPath = Path.Combine(baseDir, "config", "layout.json");
             lastCatPath = Path.Combine(baseDir, "config", "last-category.json");
@@ -352,15 +344,6 @@ namespace Clover
             customTabs.Load();
 
             LoadLastCategory();
-
-            // 后台预热"应用是否在运行"要用的 .lnk 目标缓存。
-            //
-            // 首次解析 112 个快捷方式实测 239 ms（每个 1-3 ms 的 COM 调用）。
-            // 放在这里（而不是等用户打开面板）是因为：面板首次渲染时若缓存没热，
-            // 就只画不出小圆点，等预热完成由 1.5 秒的定时器补上 ——
-            // 用户看不到卡顿，最多第一眼少几个点。
-            // WarmUpAsync 内部起线程，不会阻塞构造函数。
-            WarmRunningCache();
 
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
@@ -398,6 +381,7 @@ namespace Clover
             // 背景应用可能涉及图片解码、Wallpaper Engine 包解析或 MediaElement。
             // 留到窗口首帧之后再做：用户先看到完整骨架，背景随后无缝补上。
             Loaded += delegate { SchedulePanelContentLoad(); };
+            Loaded += delegate { StartCommonExpiryTimer(); };
             IsVisibleChanged += delegate
             {
                 if (!IsVisible)
@@ -409,10 +393,14 @@ namespace Clover
             Closed += delegate
             {
                 panelClosed = true;
+                CancelTileDrag();
                 CancelVisibleContentLoad();
                 StopSmoothScroll(false);
+                if (deskView != null) deskView.Dispose();
+                if (filesView != null) filesView.Dispose();
+                if (localDesktopWorkspace != null) localDesktopWorkspace.Dispose();
                 try { if (viewportIconIdleTimer != null) viewportIconIdleTimer.Stop(); } catch { }
-                try { if (runningStateTimer != null) runningStateTimer.Stop(); } catch { }
+                if (commonExpiryTimer != null) commonExpiryTimer.Stop();
             };
 
             // 校正分类：last-category.json 里可能记着已删除的标签
@@ -491,6 +479,15 @@ namespace Clover
 
             PreviewKeyDown += delegate(object s, KeyEventArgs e)
             {
+                if (e.Key == Key.Escape && dragSourceApp != null)
+                {
+                    CancelTileDrag();
+                    e.Handled = true;
+                    return;
+                }
+                // 工具按钮与底部链接由自身处理键盘，不能被应用启动快捷键抢走。
+                if (e.Key != Key.Escape && (Keyboard.FocusedElement is Button
+                    || Keyboard.FocusedElement is System.Windows.Documents.Hyperlink)) return;
                 // ---- 「文件」标签优先接管键盘 ----
                 //
                 // 为什么放在最前：文件列表的 ↑↓/Enter/空格/Delete 语义与磁贴完全不同，
@@ -542,6 +539,21 @@ namespace Clover
                     }
                 }
 
+                if (IsDeskTab(current) && deskView != null)
+                {
+                    if (e.Key == Key.Escape && !deskView.IsInteracting && searchBox.Text.Length > 0)
+                    {
+                        searchBox.Text = "";
+                        e.Handled = true;
+                        return;
+                    }
+                    if ((!inSearchBox || e.Key == Key.Escape) && deskView.HandleKey(e.Key, Keyboard.Modifiers))
+                    {
+                        e.Handled = true;
+                        return;
+                    }
+                    if (e.Key != Key.Escape) return;
+                }
                 if (e.Key == Key.Escape)
                 {
                     HidePanel();
@@ -723,13 +735,14 @@ namespace Clover
 
             // 清空搜索框会触发 TextChanged -> OnSearchChanged -> RenderApps，
             // 所以先解除事件、清空、再重挂，避免每次打开面板都强制重建全部磁贴。
-            if (searchBox != null && searchBox.Text.Length > 0)
+            if (current != FilesCategory && searchBox != null && searchBox.Text.Length > 0)
             {
                 searchSuppress = true;
                 try { searchBox.Text = ""; }
                 finally { searchSuppress = false; }
             }
-            if (searchHint != null) searchHint.Visibility = Visibility.Visible;
+            if (searchHint != null) searchHint.Visibility = searchBox == null || searchBox.Text.Length == 0
+                ? Visibility.Visible : Visibility.Collapsed;
 
             if (!IsVisible)
             {
@@ -826,7 +839,6 @@ namespace Clover
                     }
 
                     RenderAppsIfNeeded();
-                    StartRunningStateTimer();
                     ScheduleDeferredPanelServices();
                 }));
             }
@@ -859,7 +871,7 @@ namespace Clover
         }
 
         /// <summary>
-        /// 不影响首帧的服务：外观背景与运行进程状态。
+        /// 不影响首帧的服务：外观背景。
         /// ApplicationIdle 低于磁贴批次的 Background，输入和绘制始终可以插队。
         /// </summary>
         void ScheduleDeferredPanelServices()
@@ -877,13 +889,6 @@ namespace Clover
                         catch (Exception ex) { Ui.LogError(ex, "首帧后应用背景设置"); }
                     }
 
-                    // MainModule 枚举实测约 50~75ms；现在不会再发生在 Show() 之前。
-                    try
-                    {
-                        RunningApps.Refresh();
-                        RefreshRunningDots();
-                    }
-                    catch (Exception ex) { Ui.LogError(ex, "首帧后刷新运行状态"); }
                 }));
             }
             catch (Exception ex) { Ui.LogError(ex, "安排首帧后服务"); }
@@ -1027,6 +1032,9 @@ namespace Clover
                 Border root = rootBorder;
                 if (root == null) return;
 
+                if (settings != null && settings.AutoAppearance)
+                { root.Background = Ui.Bg; return; }
+
                 int g = settings == null ? 0 : settings.GlassOpacity;
                 if (g <= 0)
                 {
@@ -1082,7 +1090,7 @@ namespace Clover
         {
             try
             {
-                if (glassBackdrop == null || settings == null || settings.GlassOpacity <= 0) return;
+                if (glassBackdrop == null || settings == null || EffectiveGlassOpacity <= 0) return;
                 if (!IsVisible) return;
 
                 if (reframeTimer == null)
@@ -1114,11 +1122,11 @@ namespace Clover
             try
             {
                 if (glassBackdrop == null) return;
-                if (settings == null || settings.GlassOpacity <= 0) return;
+                if (settings == null || EffectiveGlassOpacity <= 0) return;
 
                 // 外观参数必须在这里也注入 —— 否则启动后 blur/tint/brightness 全是默认值
                 InjectGlassParams();
-                glassBackdrop.OpacityPercent = settings.GlassOpacity;
+                glassBackdrop.OpacityPercent = EffectiveGlassOpacity;
                 glassBackdrop.CornerRadius = Ui.R.Lg;
                 ApplyGlassTint();
 
@@ -1162,6 +1170,7 @@ namespace Clover
                 {
                     if (!IsVisible) return;
                     if (taskMenuOpen) return;
+                    if (DeskTransferPending || (deskView != null && deskView.IsInteracting)) return;
                     if (DateTime.Now < suppressDeactivate) return;
                     if (trigger != null && trigger.IsActive) return;
                     if (!everActivated) return;
@@ -1232,6 +1241,7 @@ namespace Clover
 
                 // 面板重新激活 → 不收
                 if (IsActive) { Ui.Log("松手后面板已激活，不收起"); return; }
+                if (DeskTransferPending || (deskView != null && deskView.IsInteracting)) return;
 
                 // 鼠标仍在面板范围内 → 不收
                 if (IsMouseOverPanel()) { Ui.Log("松手后鼠标仍在面板内，不收起"); return; }
@@ -1267,10 +1277,11 @@ namespace Clover
                 // 只有「这一页真的会接收」时才点亮 DropHint。
                 // 否则在「常用」「全部」页拖文件进来，光标是禁止的、
                 // 却有个提示框在说"松开即可放入"—— 自相矛盾。
-                bool accepts = DropCursor.PageAcceptsDrop(current, IsDeskTab(current));
+                bool accepts = e.Effects != DragDropEffects.None;
                 if (!internalDrag && accepts && current == FilesCategory && filesView != null)
                     filesView.SetDropCue(true);
                 SetDropHighlight(!internalDrag && accepts);
+                UpdateDeskDragPreview(e, e.Effects);
 
                 e.Handled = true;
                 Ui.Log(internalDrag ? "DragEnter（内部拖出，不高亮）" : "DragEnter");
@@ -1290,7 +1301,8 @@ namespace Clover
                 DragDropEffects want = ResolveDropEffect(e, HasAnyInternalDrag(e));
                 if (e.Effects != want) e.Effects = want;
 
-                // 不重复 SetDropHighlight：那会启动动画，见 SetActive 的说明
+                SetDropHighlight(want != DragDropEffects.None);
+                UpdateDeskDragPreview(e, want);
                 e.Handled = true;
             }
             catch { }
@@ -1315,13 +1327,37 @@ namespace Clover
             {
                 bool hasFiles = HasFiles(e);
                 bool accepts = DropCursor.PageAcceptsDrop(current, IsDeskTab(current));
+                if (!internalDrag && hasFiles && IsDeskTab(current))
+                {
+                    string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+                    if (paths == null || paths.Length == 0 || DeskTransferPending) return DragDropEffects.None;
+                    foreach (string path in paths)
+                        if (!DeskImporter.IsFromDesktop(path)) return DragDropEffects.None;
+                    DropCursor.Effect desktopEffect = DropCursor.ResolveDesktop(true, DeskTransferPending,
+                        (e.KeyStates & DragDropKeyStates.ControlKey) != 0,
+                        (e.AllowedEffects & DragDropEffects.Copy) != 0,
+                        (e.AllowedEffects & DragDropEffects.Move) != 0);
+                    return desktopEffect == DropCursor.Effect.Move ? DragDropEffects.Move
+                        : desktopEffect == DropCursor.Effect.Copy ? DragDropEffects.Copy : DragDropEffects.None;
+                }
 
                 DropCursor.Effect eff = DropCursor.Resolve(internalDrag, hasFiles, accepts);
-                return eff == DropCursor.Effect.Copy
+                return eff == DropCursor.Effect.Copy && (e.AllowedEffects & DragDropEffects.Copy) != 0
                     ? DragDropEffects.Copy
                     : DragDropEffects.None;
             }
             catch { return DragDropEffects.None; }
+        }
+
+        void UpdateDeskDragPreview(DragEventArgs e, DragDropEffects effect)
+        {
+            if (!IsDeskTab(current) || footerHint == null) return;
+            if (effect == DragDropEffects.None) { UpdateContextChrome(); return; }
+            string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+            if (paths == null) return;
+            string text = (effect == DragDropEffects.Copy ? "复制到收纳" : "移入收纳")
+                + " · " + paths.Length + " 项，应用与未知入口会跳过 · Ctrl 复制";
+            if (footerHint.Text != text) footerHint.Text = text;
         }
 
         /// <summary>
@@ -1362,6 +1398,7 @@ namespace Clover
 
                 dragOverPanel = false;
                 SetDropHighlight(false);
+                UpdateContextChrome();
                 Ui.Log("DragLeave（真的离开）");
             }
             catch (Exception ex) { Ui.LogError(ex, "DragLeave"); }
@@ -1374,6 +1411,7 @@ namespace Clover
                 dragOverPanel = false;
                 StopDragWatch();
                 SetDropHighlight(false);
+                UpdateContextChrome();
 
                 if (!HasFiles(e)) { e.Handled = true; return; }
 
@@ -1425,6 +1463,14 @@ namespace Clover
                 try { paths = e.Data.GetData(DataFormats.FileDrop) as string[]; }
                 catch { }
                 if (paths == null || paths.Length == 0) { e.Handled = true; return; }
+                foreach (string path in paths)
+                {
+                    if (DeskImporter.IsFromDesktop(path)) continue;
+                    ShowToast("外部文件／文件夹来源请使用文件库；桌面收纳只与真实桌面转移内容");
+                    e.Handled = true;
+                    return;
+                }
+                if (DeskTransferPending) { e.Handled = true; return; }
 
                 EnsureVirtualDesks();
                 string dest = virtualDesks == null ? null : virtualDesks.FolderOf(current);
@@ -1440,14 +1486,24 @@ namespace Clover
                 }
                 catch { }
 
-                DeskImporter.Result r = DeskImporter.Import(paths, dest);
+                DragDropEffects effect = ResolveDropEffect(e, false);
+                if (effect == DragDropEffects.None) { e.Handled = true; return; }
+                e.Effects = effect;
+                bool copy = effect == DragDropEffects.Copy;
+                string dropDesk = current;
+                RunDeskTransfer(copy ? "复制到收纳" : "移入收纳", delegate
+                {
+                    return DeskImporter.Import(paths, dest, null,
+                        copy ? DeskImporter.ImportMode.Copy : DeskImporter.ImportMode.Move);
+                }, delegate(DeskImporter.Result r)
+                {
                 Ui.Log("Drop 导入: 成功 " + r.ImportedCount
                     + " / 跳过 " + r.SkippedCount
                     + " / 失败 " + r.Failed.Count);
 
                 if (r.AnyImported)
                 {
-                    deskView.ReloadAndPlace(current, r.Imported, dropX, dropY);
+                    deskView.ReloadAndPlace(dropDesk, r.Imported, dropX, dropY);
                     if (virtualDesks != null) virtualDesks.Save();
 
                 }
@@ -1475,7 +1531,13 @@ namespace Clover
                 // 只出现 3 个会以为程序坏了。现在告知，但不逐个列文件名 ——
                 // 拖 20 个快捷方式进来时逐条列会占满整屏。
                 ShowDropSkipTip(r);
+                SetDeskNotice((copy ? "已复制 " : "已移入 ") + r.ImportedCount + " 项"
+                    + (r.SkippedCount > 0 ? "；应用或无法识别的入口留在原处" : ""));
+                });
 
+                // 核对式搬运由本程序的后台任务完整负责。
+                // 不向拖出方返回 Move 承诺，否则它可能在核对完成前自行删除源。
+                e.Effects = DragDropEffects.None;
                 e.Handled = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "Drop"); }
@@ -1673,6 +1735,7 @@ namespace Clover
 
         public void HidePanel()
         {
+            CancelTileDrag();
             Ui.Log("HidePanel, visible=" + IsVisible);
             CancelVisibleContentLoad();
             if (!IsVisible) return;
@@ -1933,9 +1996,18 @@ namespace Clover
 
         void Launch(AppItem a)
         {
+            if (a == null || string.IsNullOrWhiteSpace(a.Path)) return;
             Ui.Log("Launch: " + a.Name + " path=" + a.Path);
             try
             {
+                string launchKey = AppPaths.Normalize(a.Path);
+                long launchAt = Stopwatch.GetTimestamp();
+                if (launchThrottle.IsBlocked(launchKey, launchAt))
+                {
+                    ShowLaunchNotice("已发送启动请求：" + (a.Name ?? "应用") + "，请稍候");
+                    return;
+                }
+
                 // ---- 商店应用：走 explorer.exe shell:AppsFolder\<AUMID> ----
                 //
                 // 为什么不能直接 Process.Start(shell:AppsFolder\xxx)：
@@ -1963,6 +2035,7 @@ namespace Clover
                     spsi.UseShellExecute = true;
                     Process.Start(spsi);
 
+                    launchThrottle.MarkSent(launchKey, Stopwatch.GetTimestamp());
                     RecordAppUsage(a.Path);
                     HidePanel();
                     return;
@@ -1971,6 +2044,7 @@ namespace Clover
                 ProcessStartInfo psi = new ProcessStartInfo(a.Path);
                 psi.UseShellExecute = true;
                 Process.Start(psi);
+                launchThrottle.MarkSent(launchKey, Stopwatch.GetTimestamp());
                 RecordAppUsage(a.Path);
                 HidePanel();
             }
@@ -1979,6 +2053,16 @@ namespace Clover
                 Ui.Log("Launch error: " + ex.Message);
                 MessageBox.Show("无法启动 " + a.Name + "\r\n" + ex.Message, "四叶草面板");
             }
+        }
+
+        void ShowLaunchNotice(string message)
+        {
+            try
+            {
+                UndoBar bar = EnsureGeneralUndoBar();
+                if (bar != null) bar.Show(message, null, 1500);
+            }
+            catch { }
         }
 
 
