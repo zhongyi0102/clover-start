@@ -36,9 +36,9 @@ $staging = Join-Path $dist ($packageName + '.staging-' + [guid]::NewGuid().ToStr
 New-Item -ItemType Directory -Path $staging | Out-Null
 $resources = @('brand.png','brand.ico','brand-light.png','brand-dark.png','brand.svg','clover.png','clover.ico','background-a1.png','background-cyangray.png')
 $programFiles = @('app\CloverStart.exe') + @($resources | ForEach-Object { 'res\' + $_ })
-$documentation = @('VERSION','LICENSE','README.md','THIRD-PARTY-NOTICES.md','licenses\Apache-2.0.txt',
+$documentation = @('VERSION','LICENSE','README.md','CHANGELOG.md','THIRD-PARTY-NOTICES.md','licenses\Apache-2.0.txt',
     'docs\PRODUCT-RULES.md','docs\UPGRADE.md','docs\RELEASE-CHECKLIST.md','tools\update.ps1',
-    'res\screenshot-light.png','res\screenshot-dark.png')
+    "docs\RELEASE-v$version.md")
 foreach ($relative in ($programFiles + $documentation)) {
     $inputPath = Join-Path $root $relative
     if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) { throw "Missing release input: $relative" }
