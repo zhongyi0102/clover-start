@@ -18,8 +18,8 @@ namespace Clover
     ///   · 静态：抓一次，缓存，除非参数变否则不重算
     ///   · 视频：`MediaElement` 自己解码播放，**不能每帧都过一遍模糊**
     ///
-    /// 所以视频单独一层 `MediaElement` 铺在面板最底层，
-    /// 上面再叠 `GlassBackdrop` 的模糊层（低频采样缩略帧）。
+    /// 视频由独立、居中等比铺满的 viewport 播放，静态兼容图在其下方。
+    /// 自动模式只在视频上方叠轻量底色与实际文字区域的保护；不逐帧模糊。
     ///
     /// ── 暂停策略 ──
     ///
@@ -43,6 +43,7 @@ namespace Clover
 
         /// <summary>视频元素。</summary>
         MediaElement media;
+        Grid viewport;
 
         /// <summary>当前播放的文件路径。</summary>
         string currentPath;
@@ -74,10 +75,19 @@ namespace Clover
         {
             try
             {
-                if (!InUse || media.ActualWidth <= 0 || media.ActualHeight <= 0) return null;
+                if (!InUse || media.ActualWidth <= 0 || media.ActualHeight <= 0 ||
+                    media.NaturalVideoWidth <= 0 || media.NaturalVideoHeight <= 0 ||
+                    host.ActualWidth <= 0 || host.ActualHeight <= 0) return null;
                 DrawingVisual visual = new DrawingVisual();
                 using (DrawingContext dc = visual.RenderOpen())
-                    dc.DrawRectangle(new VisualBrush(media) { Stretch = Stretch.Fill }, null, new Rect(0, 0, 64, 40));
+                {
+                    // Render the host viewport, not an auto-sized MediaElement's
+                    // intrinsic image. Sampling must use the same crop as display.
+                    dc.PushClip(new RectangleGeometry(new Rect(0, 0, 64, 40)));
+                    dc.DrawRectangle(new VisualBrush(viewport) { Stretch = Stretch.Fill,
+                        ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(viewport.RenderSize) }, null, new Rect(0, 0, 64, 40));
+                    dc.Pop();
+                }
                 RenderTargetBitmap bitmap = new RenderTargetBitmap(64, 40, 96, 96, PixelFormats.Pbgra32);
                 bitmap.Render(visual);
                 byte[] pixels = new byte[64 * 40 * 4];
@@ -91,6 +101,7 @@ namespace Clover
         {
             this.owner = owner;
             this.host = host;
+            if (host != null) host.SizeChanged += delegate { UpdateClip(); };
 
             StartPolicyTimer();
             if (owner != null)
@@ -163,8 +174,9 @@ namespace Clover
                     try { media.Stop(); } catch { }
                     try { media.Close(); } catch { }
                     try { media.Source = null; } catch { }
-                    try { if (host != null) host.Children.Remove(media); } catch { }
+                    try { if (host != null && viewport != null) host.Children.Remove(viewport); } catch { }
                     media = null;
+                    viewport = null;
                 }
                 attached = false;
                 currentPath = null;
@@ -182,12 +194,16 @@ namespace Clover
             media = new MediaElement();
             media.LoadedBehavior = MediaState.Manual;
             media.UnloadedBehavior = MediaState.Manual;
-            media.Stretch = Stretch.UniformToFill;
+            // Cover geometry is assigned explicitly once natural dimensions are
+            // known. UniformToFill's desired size can overflow left-aligned in WPF.
+            media.Stretch = Stretch.Fill;
             media.IsMuted = true;
             media.Volume = 0;
-            media.HorizontalAlignment = HorizontalAlignment.Stretch;
-            media.VerticalAlignment = VerticalAlignment.Stretch;
+            media.HorizontalAlignment = HorizontalAlignment.Left;
+            media.VerticalAlignment = VerticalAlignment.Top;
             media.IsHitTestVisible = false;   // 不挡鼠标
+            viewport = new Grid { ClipToBounds = true, IsHitTestVisible = false };
+            viewport.Children.Add(media);
             media.SnapsToDevicePixels = false;
             // 高质量缩放：窗口尺寸变化时视频按 UniformToFill 等比填充，
             // 默认的线性插值在大幅缩小时会有锯齿，HighQuality 更平滑。
@@ -204,6 +220,8 @@ namespace Clover
                 }
                 catch { }
             };
+            media.SizeChanged += delegate { UpdateClip(); };
+            media.MediaOpened += delegate { UpdateClip(); };
 
             media.MediaFailed += delegate(object s, ExceptionRoutedEventArgs e)
             {
@@ -225,6 +243,7 @@ namespace Clover
                 //   正确位置：毛玻璃层**之上**、内容层之下。
                 InsertAboveGlass();
                 attached = true;
+                UpdateClip();
             }
         }
 
@@ -251,7 +270,7 @@ namespace Clover
                 if (host == null || media == null) return;
 
                 // 先移除（可能已在树里）
-                try { host.Children.Remove(media); } catch { }
+                try { host.Children.Remove(viewport); } catch { }
 
                 // 找毛玻璃层
                 int glassIndex = -1;
@@ -264,12 +283,12 @@ namespace Clover
                 if (glassIndex >= 0)
                 {
                     // 插到毛玻璃层之后
-                    host.Children.Insert(glassIndex + 1, media);
+                    host.Children.Insert(glassIndex + 1, viewport);
                 }
                 else
                 {
                     // 没有毛玻璃层 → 放最底下即可
-                    host.Children.Insert(0, media);
+                    host.Children.Insert(0, viewport);
                 }
 
                 attached = true;
@@ -293,6 +312,25 @@ namespace Clover
             {
                 if (media == null || host == null) return;
                 InsertAboveGlass();
+            }
+            catch { }
+        }
+
+        void UpdateClip()
+        {
+            if (media == null || host == null || host.ActualWidth <= 0 || host.ActualHeight <= 0) return;
+            try
+            {
+                double width = host.ActualWidth, height = host.ActualHeight;
+                if (media.NaturalVideoWidth > 0 && media.NaturalVideoHeight > 0)
+                {
+                    double scale = Math.Max(width / media.NaturalVideoWidth, height / media.NaturalVideoHeight);
+                    width = media.NaturalVideoWidth * scale; height = media.NaturalVideoHeight * scale;
+                }
+                media.Width = width; media.Height = height;
+                media.Margin = new Thickness((host.ActualWidth - width) / 2,
+                    (host.ActualHeight - height) / 2, 0, 0);
+                viewport.Clip = new RectangleGeometry(new Rect(host.RenderSize), Ui.R.Lg, Ui.R.Lg);
             }
             catch { }
         }

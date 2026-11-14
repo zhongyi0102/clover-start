@@ -4,6 +4,7 @@ using System.IO;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -174,10 +175,26 @@ namespace Clover
                 Check(shown.Count == 3 && shown[0].RoleRank == 0 && shown[1].RoleRank == 1 && shown[2].RoleRank == 2, "真实搜索按用户/低价值/电脑排序，不显示手动隐藏");
                 Check(HasText(host, "电脑用的（仅搜索显示）") && HasText(host, "低价值"), "真实搜索有明确分组标题");
                 Check(HasText(host, "电脑用的 ·") && HasText(host, "用户用的 ·"), "每行显示类别说明");
+                Check(SearchResultList.ResolveClickAction(1) == SearchResultList.SearchResultClickAction.Select
+                    && SearchResultList.ResolveClickAction(2) == SearchResultList.SearchResultClickAction.Open
+                    && SearchResultList.ResolveClickAction(3) == SearchResultList.SearchResultClickAction.Select,
+                    "搜索结果单击只选择，只有双击启动");
+                Border focusedSearchRow = null;
+                foreach (UIElement child in host.Children)
+                {
+                    Border row = child as Border;
+                    if (row != null && row.Tag is SearchResult) { focusedSearchRow = row; break; }
+                }
+                Window searchWindow = new Window { Width = 760, Height = 450, Content = host, ShowInTaskbar = false };
+                searchWindow.Show(); searchWindow.Activate(); focusedSearchRow.Focus(); Pump();
+                focusedSearchRow.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = UIElement.MouseLeaveEvent });
+                Check(focusedSearchRow.IsKeyboardFocused && ReferenceEquals(focusedSearchRow.Background, Ui.Hover),
+                    "搜索结果鼠标离开后保留键盘焦点视觉");
                 host.Measure(new Size(760, 450)); host.Arrange(new Rect(0, 0, 760, host.DesiredSize.Height)); host.UpdateLayout();
                 RenderTargetBitmap searchBitmap = new RenderTargetBitmap(760, (int)Math.Ceiling(host.ActualHeight), 96, 96, PixelFormats.Pbgra32);
                 searchBitmap.Render(host); PngBitmapEncoder searchEncoder = new PngBitmapEncoder(); searchEncoder.Frames.Add(BitmapFrame.Create(searchBitmap));
                 using (FileStream stream = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app-classification-search.png"))) searchEncoder.Save(stream);
+                searchWindow.Close();
                 AppItem sharedUser = new AppItem { Name = "Python 用户界面", Path = apps[1].Path };
                 Check(shown[0].Name == sharedUser.Name, "精确电脑结果不能挤到用户结果前面");
                 HiddenAppsPage page = new HiddenAppsPage(new Window(), panel, settings, null);
@@ -185,6 +202,28 @@ namespace Clover
                 page.Content.Measure(new Size(520, 550)); page.Content.Arrange(new Rect(0, 0, 520, 550)); page.Content.UpdateLayout();
                 Check(!HasText(page.Content, "电脑用的（搜索可见）") && HasText(page.Content, "手动隐藏不参与搜索"), "隐藏管理不混入电脑类");
                 Check(panel.HiddenSnapshot().Find(a => a.Path == apps[0].Path) == null, "电脑类不属于手动隐藏名单");
+                Window hiddenWindow = new Window { Content = page.Content, Width = 520, Height = 550, ShowInTaskbar = false };
+                hiddenWindow.Show(); hiddenWindow.Activate(); page.OnShown(); Pump();
+                TextBox hiddenSearch = (TextBox)typeof(HiddenAppsPage)
+                    .GetField("searchBox", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(page);
+                hiddenSearch.Text = "Python 手动隐藏"; Pump();
+                typeof(HiddenAppsPage).GetMethod("MoveSelection", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    .Invoke(page, new object[] { 1 });
+                hiddenSearch.Focus();
+                KeyEventArgs hiddenEnter = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(hiddenWindow), 0, Key.Enter)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                page.Content.RaiseEvent(hiddenEnter);
+                Check(!hiddenEnter.Handled && HiddenApps.Load(root).IsHidden(apps[5].Path) && hiddenSearch.IsKeyboardFocused,
+                    "隐藏管理搜索框回车不恢复已选应用");
+                ScrollViewer hiddenScroll = (ScrollViewer)typeof(HiddenAppsPage)
+                    .GetField("scroll", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(page);
+                hiddenScroll.Focus();
+                KeyEventArgs listEnter = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(hiddenWindow), 0, Key.Enter)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                page.Content.RaiseEvent(listEnter);
+                Check(listEnter.Handled && !HiddenApps.Load(root).IsHidden(apps[5].Path),
+                    "隐藏管理列表的Enter仍可恢复用户选中项");
+                hiddenWindow.Close();
                 panel.TestClassification(apps[0].Path, AppRole.User);
                 Check(Tile(panel, apps[0].Path) != null, "电脑类仍通过分类操作改为用户类");
                 panel.RefreshCatalogQuiet(); Wait(panel);

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -19,8 +21,8 @@ namespace Clover
     ///
     /// ── 风格 ──
     ///
-    /// 直接复用「整理与隐藏」窗口：独立小窗、加粗小标题、灰色小字说明、
-    /// 勾选项、圆角灰色小按钮。深浅色跟随主题（所有颜色走 Ui.* 刷子）。
+    /// 单列纯色设置行、左侧名称说明与右侧原生开关；诊断详情默认折叠。
+    /// 深浅色跟随主题（所有颜色走 Ui.* 刷子），修改即时生效。
     ///
     /// ── 单例 ──
     ///
@@ -60,6 +62,8 @@ namespace Clover
         TextBlock locationValue;
         TextBlock healthValue;
         TextBlock deskRootValue;
+        TextBlock statusValue;
+        TextBlock hoverHint;
         ScrollViewer scroll;
         Section pendingSection = Section.General;
 
@@ -118,9 +122,11 @@ namespace Clover
         void BuildUi()
         {
             dlg = new Window();
-            dlg.Title = "四叶草 · 设置";
-            dlg.Width = 500;
-            dlg.Height = 640;
+            dlg.Title = AppBrand.Text("四叶草 · 设置");
+            dlg.Width = 580;
+            dlg.Height = 740;
+            dlg.FontFamily = Ui.YaHei;
+            dlg.UseLayoutRounding = true;
             dlg.WindowStartupLocation = owner != null
                 ? WindowStartupLocation.CenterOwner
                 : WindowStartupLocation.CenterScreen;
@@ -137,23 +143,28 @@ namespace Clover
             // 位置记忆：有记录就恢复（此时不要再 CenterOwner），没记录保持居中
             if (WindowPos.Attach(baseDir, WindowPos.Settings, dlg))
                 dlg.WindowStartupLocation = WindowStartupLocation.Manual;
+            ApplyWorkAreaLimits();
+            dlg.LocationChanged += delegate { ApplyWorkAreaLimits(); };
 
             scroll = new ScrollViewer();
             scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            scroll.Padding = new Thickness(Ui.S.Xl);
+            scroll.Padding = new Thickness(Ui.S.Xl, Ui.S.Lg, Ui.S.Xl, Ui.S.Xl);
+            scroll.Name = "SettingsScroll";
+            scroll.Foreground = Ui.Sub;
+            scroll.Template = SettingsScrollTemplate();
 
             StackPanel col = new StackPanel();
             col.Orientation = Orientation.Vertical;
 
             // ---------- 常规 ----------
-            StackPanel generalHeader = SectionHeader("常规",
-                "控制全屏应用运行时悬浮按钮的行为。");
+            StackPanel generalHeader = SectionHeader("常规", null);
+            generalHeader.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
             sectionAnchors[Section.General] = generalHeader;
             col.Children.Add(generalHeader);
 
             chkFullscreen = MakeCheck("全屏时隐藏悬浮按钮",
-                "看视频、玩游戏（全屏）时自动隐藏四叶草按钮，不挡画面",
+                "看视频、玩游戏时不遮挡全屏画面。",
                 settings.FullscreenDetect,
                 delegate(bool on)
                 {
@@ -166,8 +177,8 @@ namespace Clover
                 });
             col.Children.Add(chkFullscreen);
 
-            chkHover = MakeCheck("全屏时鼠标移过去临时显示",
-                "全屏时把鼠标移到按钮位置，按钮临时浮现，移开再隐藏",
+            chkHover = MakeCheck("鼠标移到按钮位置时临时显示",
+                null,
                 settings.HoverReveal,
                 delegate(bool on)
                 {
@@ -178,27 +189,30 @@ namespace Clover
                     Ui.Log("悬停唤出 -> " + on);
                 });
             // 缩进子选项
-            chkHover.Margin = new Thickness(22, 2, 0, 0);
+            chkHover.Margin = new Thickness(Ui.S.Lg, 0, 0, 0);
             col.Children.Add(chkHover);
+            hoverHint = Ui.T("", 12, Ui.Sub);
+            hoverHint.TextWrapping = TextWrapping.Wrap;
+            hoverHint.Margin = new Thickness(Ui.S.Lg + Ui.S.Sm, 0, Ui.S.Sm, Ui.S.Xs);
+            col.Children.Add(hoverHint);
 
             chkAutostart = MakeCheck("开机自启",
-                "用户登录时立即启动；旧快捷方式会自动升级为快速登录任务",
+                "登录 Windows 后自动启动归位。",
                 AutostartEnabled(),
                 delegate(bool on)
                 {
                     if (AutostartEnabled() != on) ToggleAutostart();
                 });
-            chkAutostart.Margin = new Thickness(0, Ui.S.Md, 0, 0);
+            chkAutostart.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
             col.Children.Add(chkAutostart);
 
             // ---------- 任务栏 ----------
-            StackPanel taskbarHeader = SectionHeader("任务栏",
-                "迷你任务栏显示「显示在任务栏」的窗口；隐藏系统任务栏后由四叶草接管位置。");
+            StackPanel taskbarHeader = SectionHeader("任务栏", null);
             sectionAnchors[Section.Taskbar] = taskbarHeader;
             col.Children.Add(taskbarHeader);
 
             chkMiniTaskbar = MakeCheck("迷你任务栏",
-                "左下角显示“显示在任务栏”加入的窗口按钮；关闭后该功能整体停用",
+                "在面板左下角显示已加入任务栏的窗口。",
                 settings.MiniTaskbar,
                 delegate(bool on)
                 {
@@ -210,7 +224,7 @@ namespace Clover
             col.Children.Add(chkMiniTaskbar);
 
             chkHideTaskbar = MakeCheck("隐藏系统任务栏",
-                "隐藏后由四叶草接管。恢复方式：关闭本开关，或右键四叶草 →「退出」",
+                "由归位接管位置；关闭开关或退出即可恢复。",
                 settings.HideTaskbar,
                 delegate(bool on) { SetHideTaskbar(on); });
 
@@ -220,14 +234,18 @@ namespace Clover
                 chkHideTaskbar.IsEnabled = false;
                 chkHideTaskbar.ToolTip = Settings.SafeModeActive
                     ? "安全模式下已禁用（避免程序异常时系统任务栏回不来）"
-                    : "「允许隐藏系统任务栏」已关闭，先在本窗口重新开启";
+                    : "「允许隐藏系统任务栏」已关闭，当前不可用";
+                TextBlock reason = Ui.T(chkHideTaskbar.ToolTip.ToString(), 12, Ui.Sub);
+                reason.TextWrapping = TextWrapping.Wrap;
+                reason.Margin = new Thickness(Ui.S.Sm, 0, Ui.S.Sm, Ui.S.Xs);
+                col.Children.Add(chkHideTaskbar);
+                col.Children.Add(reason);
             }
-            col.Children.Add(chkHideTaskbar);
+            else col.Children.Add(chkHideTaskbar);
 
             // ---------- 桌面收纳 ----------
             StackPanel deskHeader = SectionHeader("桌面收纳",
-                "「桌面收纳」把桌面上的东西收进一个真实文件夹。"
-                + "存放目录可以改到别的盘，改完立即生效。");
+                "收纳内容保存在此目录，可更换存放位置。");
             sectionAnchors[Section.DeskFiles] = deskHeader;
             col.Children.Add(deskHeader);
 
@@ -235,52 +253,64 @@ namespace Clover
                 delegate { CopyText(deskRootValue.Text); });
             col.Children.Add(deskRow);
 
-            StackPanel deskBtns = new StackPanel();
-            deskBtns.Orientation = Orientation.Horizontal;
+            WrapPanel deskBtns = new WrapPanel();
             deskBtns.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
 
-            Border changeBtn = SmallButton("更改…", delegate { ChangeDeskRoot(); });
+            Button changeBtn = SmallButton("更改目录…", delegate { ChangeDeskRoot(); });
+            changeBtn.Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
             deskBtns.Children.Add(changeBtn);
 
-            Border openBtn = SmallButton("打开目录", delegate { OpenDeskRoot(); });
-            openBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            Button openBtn = SmallButton("打开目录", delegate { OpenDeskRoot(); });
+            openBtn.Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
             deskBtns.Children.Add(openBtn);
 
-            Border resetBtn = SmallButton("恢复默认", delegate { ResetDeskRoot(); });
-            resetBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            Button resetBtn = SmallButton("恢复默认", delegate { ResetDeskRoot(); });
+            resetBtn.Background = Brushes.Transparent;
+            resetBtn.BorderThickness = new Thickness(0);
+            resetBtn.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
             deskBtns.Children.Add(resetBtn);
 
             col.Children.Add(deskBtns);
 
-            TextBlock deskHint = Ui.T(
-                "更改时会问「搬过去」还是「只改指针」，并写明会搬多少个文件。"
-                + "搬过去走核对式移动：全部成功才切换，失败自动搬回原处。",
-                10.5, Ui.Sub);
-            deskHint.TextWrapping = TextWrapping.Wrap;
-            deskHint.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
-            col.Children.Add(deskHint);
-
             // ---------- 维护 ----------
-            StackPanel maintHeader = SectionHeader("维护", "诊断信息与恢复");
+            StackPanel maintHeader = SectionHeader("维护与诊断", null);
             sectionAnchors[Section.Maintenance] = maintHeader;
             col.Children.Add(maintHeader);
 
-            col.Children.Add(SubHeader("诊断信息"));
+            statusValue = Ui.T("读取运行状态…", 13, Ui.Fg);
+            statusValue.TextWrapping = TextWrapping.Wrap;
+            statusValue.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
+            col.Children.Add(statusValue);
+
+            Expander details = new Expander();
+            details.Name = "SettingsDiagnostics";
+            details.Header = "诊断详情";
+            details.Foreground = Ui.Fg;
+            details.FontSize = 13;
+            details.IsExpanded = false;
+            details.Template = DiagnosticsTemplate();
+            System.Windows.Automation.AutomationProperties.SetName(details, "诊断详情");
+            StackPanel diagnosticRows = new StackPanel();
+            diagnosticRows.Margin = new Thickness(Ui.S.Lg, Ui.S.Sm, 0, 0);
 
             // 任务栏定位
             Grid locRow = InfoRow("任务栏定位", out locationValue,
                 delegate { CopyText(locationValue.Text); });
             locationValue.TextWrapping = TextWrapping.Wrap;
             locationValue.TextTrimming = TextTrimming.None;
-            col.Children.Add(locRow);
+            diagnosticRows.Children.Add(locRow);
 
             // 运行状态
             Grid healthRow = InfoRow("运行状态", out healthValue,
                 delegate { CopyText(healthValue.Text); });
-            col.Children.Add(healthRow);
+            healthValue.TextWrapping = TextWrapping.Wrap;
+            healthValue.TextTrimming = TextTrimming.None;
+            diagnosticRows.Children.Add(healthRow);
+            details.Content = diagnosticRows;
+            col.Children.Add(details);
 
             // 复制全部
-            Border copyAll = SmallButton("复制全部诊断信息", delegate { CopyAllDiagnostics(); });
+            Button copyAll = SmallButton("复制全部诊断信息", delegate { CopyAllDiagnostics(); });
             copyAll.HorizontalAlignment = HorizontalAlignment.Left;
             copyAll.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
             col.Children.Add(copyAll);
@@ -292,17 +322,14 @@ namespace Clover
                 Margin = new Thickness(0, Ui.S.Lg, 0, Ui.S.Md)
             });
 
-            col.Children.Add(SubHeader("出问题时可恢复到上次正常状态"));
-
-            Border rollback = SmallButton("一键回滚", delegate { DoRollback(); });
+            Button rollback = SmallButton("撤销系统改动", delegate { DoRollback(); });
             rollback.HorizontalAlignment = HorizontalAlignment.Left;
             rollback.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
             col.Children.Add(rollback);
 
             TextBlock rollbackHint = Ui.T(
-                "撤销本程序对系统做过的所有改动：任务栏可见性、开机自启、看门狗、"
-                + "崩溃保护状态。你的设置和应用清单会保留。",
-                10.5, Ui.Sub);
+                "恢复系统任务栏，移除自启等系统改动。保留设置和应用清单，执行前需确认。",
+                12, Ui.Sub);
             rollbackHint.TextWrapping = TextWrapping.Wrap;
             rollbackHint.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
             col.Children.Add(rollbackHint);
@@ -311,7 +338,16 @@ namespace Clover
 
             // 设置窗口不占任务栏，与“外观”“整理与隐藏”共用只含「关闭」的
             // 项目标题栏；仍可拖动和从边缘调整大小。
-            DialogChrome.UseCloseOnlyTitleBar(dlg, scroll);
+            Grid body = new Grid();
+            body.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            body.Children.Add(scroll);
+            Border footer = new Border { BorderBrush = Ui.Line, BorderThickness = new Thickness(0, 1, 0, 0),
+                Padding = new Thickness(Ui.S.Xl, Ui.S.Md, Ui.S.Xl, Ui.S.Md) };
+            footer.Child = Ui.T("修改即时生效", 12, Ui.Sub);
+            Grid.SetRow(footer, 1);
+            body.Children.Add(footer);
+            DialogChrome.UseCloseOnlyTitleBar(dlg, body);
 
             // Esc 关闭
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
@@ -321,6 +357,7 @@ namespace Clover
 
             dlg.Loaded += delegate
             {
+                ApplyWorkAreaLimits();
                 RefreshValues();
                 UpdateHoverEnabled();
                 ScrollToSection(pendingSection);
@@ -334,15 +371,15 @@ namespace Clover
         {
             StackPanel sp = new StackPanel();
             sp.Orientation = Orientation.Vertical;
-            sp.Margin = new Thickness(0, Ui.S.Lg, 0, Ui.S.Sm);
+            sp.Margin = new Thickness(0, Ui.S.Xl, 0, Ui.S.Sm);
 
-            TextBlock t = Ui.T(title, 13, Ui.Fg);
+            TextBlock t = Ui.T(title, 16, Ui.Fg);
             t.FontWeight = FontWeights.SemiBold;
             sp.Children.Add(t);
 
             if (!string.IsNullOrEmpty(sub))
             {
-                TextBlock d = Ui.T(sub, 10.5, Ui.Sub);
+                TextBlock d = Ui.T(sub, 12, Ui.Sub);
                 d.TextWrapping = TextWrapping.Wrap;
                 d.Margin = new Thickness(0, 2, 0, 0);
                 sp.Children.Add(d);
@@ -351,22 +388,32 @@ namespace Clover
             return sp;
         }
 
-        static TextBlock SubHeader(string text)
-        {
-            TextBlock t = Ui.T(text, 11.5, Ui.Fg);
-            t.FontWeight = FontWeights.SemiBold;
-            t.Margin = new Thickness(0, Ui.S.Md, 0, Ui.S.Xs);
-            return t;
-        }
-
         static CheckBox MakeCheck(string label, string tip, bool isChecked, Action<bool> onToggle)
         {
             CheckBox c = new CheckBox();
-            c.Content = label;
+            StackPanel text = new StackPanel();
+            TextBlock title = Ui.T(label, 13, Ui.Fg);
+            title.TextWrapping = TextWrapping.Wrap;
+            text.Children.Add(title);
+            if (!string.IsNullOrEmpty(tip))
+            {
+                TextBlock hint = Ui.T(tip, 12, Ui.Sub);
+                hint.TextWrapping = TextWrapping.Wrap;
+                hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
+                text.Children.Add(hint);
+            }
+            c.Content = text;
             c.IsChecked = isChecked;
             c.Foreground = Ui.Fg;
-            c.FontSize = 12;
-            c.Margin = new Thickness(0, 3, 0, 3);
+            c.FontFamily = Ui.YaHei;
+            c.FontSize = 13;
+            c.MinHeight = 44;
+            c.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            c.Padding = new Thickness(Ui.S.Sm);
+            c.Cursor = Cursors.Hand;
+            c.Template = SettingToggleTemplate();
+            System.Windows.Automation.AutomationProperties.SetName(c, label);
+            System.Windows.Automation.AutomationProperties.SetHelpText(c, tip ?? "");
             if (!string.IsNullOrEmpty(tip)) c.ToolTip = tip;
             c.Checked += delegate { try { if (onToggle != null) onToggle(true); } catch (Exception ex) { Ui.LogError(ex, "设置开关"); } };
             c.Unchecked += delegate { try { if (onToggle != null) onToggle(false); } catch (Exception ex) { Ui.LogError(ex, "设置开关"); } };
@@ -376,56 +423,278 @@ namespace Clover
         Grid InfoRow(string label, out TextBlock valueText, Action onCopy)
         {
             Grid g = new Grid();
-            g.Margin = new Thickness(0, 2, 0, 2);
-            g.ColumnDefinitions.Add(new ColumnDefinition());
-            g.ColumnDefinitions.Add(new ColumnDefinition());
-            g.ColumnDefinitions.Add(new ColumnDefinition());
-            g.ColumnDefinitions[0].Width = new GridLength(88);
-            g.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
-            g.ColumnDefinitions[2].Width = GridLength.Auto;
+            g.Margin = new Thickness(0, Ui.S.Xs, 0, Ui.S.Sm);
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            TextBlock l = Ui.T(label + "：", 10.5, Ui.Sub);
+            TextBlock l = Ui.T(label, 12, Ui.Sub);
+            l.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
             l.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(l, 0);
             g.Children.Add(l);
 
-            TextBlock v = Ui.T("—", 10.5, Ui.Fg);
+            TextBlock v = Ui.T("—", 13, Ui.Fg);
             v.TextTrimming = TextTrimming.CharacterEllipsis;
             v.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetColumn(v, 1);
+            Grid.SetRow(v, 1);
             g.Children.Add(v);
             valueText = v;
 
-            Border copy = SmallButton("复制", onCopy);
+            Button copy = SmallButton("复制", onCopy);
+            copy.Background = Brushes.Transparent;
+            copy.BorderThickness = new Thickness(0);
+            System.Windows.Automation.AutomationProperties.SetName(copy, "复制" + label);
             copy.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
-            Grid.SetColumn(copy, 2);
+            Grid.SetColumn(copy, 1);
+            Grid.SetRow(copy, 1);
             g.Children.Add(copy);
 
             return g;
         }
 
-        static Border SmallButton(string label, Action onClick)
+        static Button SmallButton(string label, Action onClick)
         {
-            Border b = new Border();
-            b.CornerRadius = new CornerRadius(10);
-            b.Padding = new Thickness(10, 2, 10, 2);
+            Button b = new Button();
+            b.Template = UiButtons.Template(Ui.R.Sm);
+            b.Padding = new Thickness(Ui.S.Md, Ui.S.Xs, Ui.S.Md, Ui.S.Xs);
+            b.MinHeight = 32;
+            b.VerticalAlignment = VerticalAlignment.Center;
             b.Cursor = Cursors.Hand;
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(1);
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
 
-            TextBlock t = Ui.T(label, 10.5, Ui.Fg);
+            TextBlock t = Ui.T(label, 12, Ui.Fg);
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            b.Content = t;
+            System.Windows.Automation.AutomationProperties.SetName(b, label);
 
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
-            b.MouseLeftButtonUp += delegate
+            b.Click += delegate
             {
                 try { if (onClick != null) onClick(); }
                 catch (Exception ex) { Ui.LogError(ex, "设置按钮"); }
             };
             return b;
+        }
+
+        // 保留原生 CheckBox 的鼠标、Space 和 TogglePattern 语义，只调整布局。
+        static ControlTemplate SettingToggleTemplate()
+        {
+            ControlTemplate template = new ControlTemplate(typeof(CheckBox));
+            FrameworkElementFactory layers = new FrameworkElementFactory(typeof(Grid));
+            FrameworkElementFactory chrome = new FrameworkElementFactory(typeof(Border), "SettingChrome");
+            chrome.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(Ui.R.Sm));
+            chrome.SetBinding(Border.PaddingProperty, new Binding("Padding")
+                { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            FrameworkElementFactory row = new FrameworkElementFactory(typeof(DockPanel));
+            FrameworkElementFactory track = new FrameworkElementFactory(typeof(Border), "ToggleTrack");
+            track.SetValue(DockPanel.DockProperty, Dock.Right);
+            track.SetValue(FrameworkElement.WidthProperty, 38.0);
+            track.SetValue(FrameworkElement.HeightProperty, 22.0);
+            track.SetValue(FrameworkElement.MarginProperty, new Thickness(Ui.S.Lg, 0, 0, 0));
+            track.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            track.SetValue(Border.CornerRadiusProperty, new CornerRadius(11));
+            track.SetBinding(Border.BackgroundProperty, new Binding { Source = Ui.SearchBg });
+            track.SetBinding(Border.BorderBrushProperty, new Binding { Source = Ui.Sub });
+            track.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            FrameworkElementFactory thumb = new FrameworkElementFactory(typeof(Border), "ToggleThumb");
+            thumb.SetValue(FrameworkElement.WidthProperty, 14.0);
+            thumb.SetValue(FrameworkElement.HeightProperty, 14.0);
+            thumb.SetValue(FrameworkElement.MarginProperty, new Thickness(3, 0, 3, 0));
+            thumb.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+            thumb.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            thumb.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
+            thumb.SetBinding(Border.BackgroundProperty, new Binding { Source = Ui.Sub });
+            track.AppendChild(thumb);
+            row.AppendChild(track);
+            FrameworkElementFactory content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            row.AppendChild(content);
+            chrome.AppendChild(row);
+            layers.AppendChild(chrome);
+            FrameworkElementFactory focus = new FrameworkElementFactory(typeof(Border), "SettingFocus");
+            focus.SetValue(Border.CornerRadiusProperty, new CornerRadius(Ui.R.Sm));
+            focus.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+            focus.SetBinding(Border.BorderBrushProperty, new Binding { Source = Ui.Accent });
+            focus.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            focus.SetValue(UIElement.VisibilityProperty, Visibility.Hidden);
+            layers.AppendChild(focus);
+            template.VisualTree = layers;
+
+            Trigger on = new Trigger { Property = CheckBox.IsCheckedProperty, Value = true };
+            on.Setters.Add(new Setter(Border.BackgroundProperty, new Binding { Source = Ui.Accent }, "ToggleTrack"));
+            on.Setters.Add(new Setter(Border.BorderBrushProperty, new Binding { Source = Ui.Accent }, "ToggleTrack"));
+            on.Setters.Add(new Setter(Border.BackgroundProperty, new Binding { Source = Ui.AccentText }, "ToggleThumb"));
+            on.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right, "ToggleThumb"));
+            template.Triggers.Add(on);
+            Trigger hover = new Trigger { Property = CheckBox.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, new Binding { Source = Ui.Hover }, "SettingChrome"));
+            template.Triggers.Add(hover);
+            Trigger focused = new Trigger { Property = CheckBox.IsKeyboardFocusedProperty, Value = true };
+            focused.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "SettingFocus"));
+            template.Triggers.Add(focused);
+            Trigger pressed = new Trigger { Property = CheckBox.IsPressedProperty, Value = true };
+            pressed.Setters.Add(new Setter(Border.BackgroundProperty, new Binding { Source = Ui.Pressed }, "SettingChrome"));
+            template.Triggers.Add(pressed);
+            Trigger disabled = new Trigger { Property = CheckBox.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.45, "SettingChrome"));
+            template.Triggers.Add(disabled);
+            return template;
+        }
+
+        static void BindParent(FrameworkElementFactory target, DependencyProperty property, string path)
+        {
+            target.SetBinding(property, new Binding(path)
+                { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+        }
+
+        static ControlTemplate SettingsScrollTemplate()
+        {
+            ControlTemplate template = new ControlTemplate(typeof(ScrollViewer));
+            FrameworkElementFactory root = new FrameworkElementFactory(typeof(DockPanel));
+            FrameworkElementFactory bar = new FrameworkElementFactory(typeof(ScrollBar), "PART_VerticalScrollBar");
+            bar.SetValue(DockPanel.DockProperty, Dock.Right);
+            bar.SetValue(ScrollBar.OrientationProperty, Orientation.Vertical);
+            bar.SetValue(FrameworkElement.WidthProperty, 12.0);
+            BindParent(bar, UIElement.VisibilityProperty, "ComputedVerticalScrollBarVisibility");
+            BindParent(bar, ScrollBar.MaximumProperty, "ScrollableHeight");
+            BindParent(bar, ScrollBar.ViewportSizeProperty, "ViewportHeight");
+            bar.SetBinding(ScrollBar.ValueProperty, new Binding("VerticalOffset")
+                { Mode = BindingMode.OneWay, RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            // Track 不实现 IAddChild，不能用 FrameworkElementFactory.AppendChild。
+            // XAML 的属性元素把三个原生部件明确接到 Track，仍由 ScrollViewer 处理滚动。
+            ControlTemplate barTemplate = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(@"
+<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                 xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml' TargetType='{x:Type ScrollBar}'>
+  <Track x:Name='PART_Track' Orientation='Vertical' IsDirectionReversed='True'>
+    <Track.DecreaseRepeatButton>
+      <RepeatButton Command='{x:Static ScrollBar.PageUpCommand}' Focusable='False'>
+        <RepeatButton.Template><ControlTemplate TargetType='{x:Type RepeatButton}'>
+          <Border Background='Transparent'/>
+        </ControlTemplate></RepeatButton.Template>
+      </RepeatButton>
+    </Track.DecreaseRepeatButton>
+    <Track.Thumb>
+      <Thumb MinHeight='28'>
+        <Thumb.Template><ControlTemplate TargetType='{x:Type Thumb}'>
+          <Border x:Name='Grip' Margin='3,2' CornerRadius='3'
+                  Background='{Binding Foreground, RelativeSource={RelativeSource AncestorType={x:Type ScrollViewer}}}' Opacity='0.5'/>
+          <ControlTemplate.Triggers>
+            <Trigger Property='IsMouseOver' Value='True'><Setter TargetName='Grip' Property='Opacity' Value='1'/></Trigger>
+            <Trigger Property='IsDragging' Value='True'><Setter TargetName='Grip' Property='Opacity' Value='1'/></Trigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate></Thumb.Template>
+      </Thumb>
+    </Track.Thumb>
+    <Track.IncreaseRepeatButton>
+      <RepeatButton Command='{x:Static ScrollBar.PageDownCommand}' Focusable='False'>
+        <RepeatButton.Template><ControlTemplate TargetType='{x:Type RepeatButton}'>
+          <Border Background='Transparent'/>
+        </ControlTemplate></RepeatButton.Template>
+      </RepeatButton>
+    </Track.IncreaseRepeatButton>
+  </Track>
+</ControlTemplate>");
+            bar.SetValue(Control.TemplateProperty, barTemplate);
+            root.AppendChild(bar);
+            FrameworkElementFactory presenter = new FrameworkElementFactory(typeof(ScrollContentPresenter), "PART_ScrollContentPresenter");
+            BindParent(presenter, ContentPresenter.ContentProperty, "Content");
+            BindParent(presenter, FrameworkElement.MarginProperty, "Padding");
+            presenter.SetValue(UIElement.ClipToBoundsProperty, true);
+            root.AppendChild(presenter);
+            template.VisualTree = root;
+            return template;
+        }
+
+        static ControlTemplate DiagnosticsTemplate()
+        {
+            ControlTemplate template = new ControlTemplate(typeof(Expander));
+            FrameworkElementFactory stack = new FrameworkElementFactory(typeof(StackPanel));
+            FrameworkElementFactory toggle = new FrameworkElementFactory(typeof(ToggleButton), "HeaderSite");
+            toggle.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+            toggle.SetValue(FrameworkElement.MinHeightProperty, 32.0);
+            toggle.SetBinding(Control.ForegroundProperty, new Binding { Source = Ui.Fg });
+            toggle.SetValue(Control.PaddingProperty, new Thickness(Ui.S.Xs));
+            toggle.SetValue(FrameworkElement.CursorProperty, Cursors.Hand);
+            toggle.SetBinding(ToggleButton.IsCheckedProperty, new Binding("IsExpanded")
+                { Mode = BindingMode.TwoWay, RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            BindParent(toggle, ContentControl.ContentProperty, "Header");
+            toggle.SetValue(System.Windows.Automation.AutomationProperties.NameProperty, "诊断详情");
+            ControlTemplate headerTemplate = new ControlTemplate(typeof(ToggleButton));
+            FrameworkElementFactory chrome = new FrameworkElementFactory(typeof(Border), "HeaderChrome");
+            chrome.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(Ui.R.Sm));
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+            chrome.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+            BindParent(chrome, Border.PaddingProperty, "Padding");
+            FrameworkElementFactory row = new FrameworkElementFactory(typeof(DockPanel));
+            FrameworkElementFactory arrow = new FrameworkElementFactory(typeof(TextBlock), "Arrow");
+            arrow.SetValue(TextBlock.TextProperty, "\u203A");
+            arrow.SetBinding(TextBlock.ForegroundProperty, new Binding { Source = Ui.Sub });
+            arrow.SetValue(TextBlock.FontSizeProperty, 16.0);
+            arrow.SetValue(FrameworkElement.WidthProperty, 18.0);
+            arrow.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            row.AppendChild(arrow);
+            FrameworkElementFactory label = new FrameworkElementFactory(typeof(ContentPresenter));
+            label.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            row.AppendChild(label); chrome.AppendChild(row);
+            headerTemplate.VisualTree = chrome;
+            Trigger expanded = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
+            expanded.Setters.Add(new Setter(TextBlock.TextProperty, "\u2304", "Arrow"));
+            headerTemplate.Triggers.Add(expanded);
+            Trigger hover = new Trigger { Property = ToggleButton.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, new Binding { Source = Ui.Hover }, "HeaderChrome"));
+            headerTemplate.Triggers.Add(hover);
+            Trigger focus = new Trigger { Property = ToggleButton.IsKeyboardFocusedProperty, Value = true };
+            focus.Setters.Add(new Setter(Border.BorderBrushProperty, new Binding { Source = Ui.Accent }, "HeaderChrome"));
+            headerTemplate.Triggers.Add(focus);
+            Trigger pressed = new Trigger { Property = ToggleButton.IsPressedProperty, Value = true };
+            pressed.Setters.Add(new Setter(Border.BackgroundProperty, new Binding { Source = Ui.Pressed }, "HeaderChrome"));
+            headerTemplate.Triggers.Add(pressed);
+            toggle.SetValue(Control.TemplateProperty, headerTemplate);
+            stack.AppendChild(toggle);
+            FrameworkElementFactory content = new FrameworkElementFactory(typeof(ContentPresenter), "DetailsContent");
+            content.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            stack.AppendChild(content);
+            template.VisualTree = stack;
+            Trigger show = new Trigger { Property = Expander.IsExpandedProperty, Value = true };
+            show.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "DetailsContent"));
+            template.Triggers.Add(show);
+            return template;
+        }
+
+        void ApplyWorkAreaLimits()
+        {
+            try
+            {
+                double scaleX = SystemParameters.PrimaryScreenWidth / System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width;
+                double scaleY = SystemParameters.PrimaryScreenHeight / System.Windows.Forms.Screen.PrimaryScreen.Bounds.Height;
+                IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                System.Windows.Forms.Screen monitor = hwnd != IntPtr.Zero
+                    ? System.Windows.Forms.Screen.FromHandle(hwnd)
+                    : (dlg.WindowStartupLocation == WindowStartupLocation.Manual
+                        && !double.IsNaN(dlg.Left) && !double.IsNaN(dlg.Top)
+                        ? System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point(
+                            (int)((dlg.Left + dlg.Width / 2) / scaleX), (int)((dlg.Top + dlg.Height / 2) / scaleY)))
+                        : (owner != null
+                            ? System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(owner).Handle)
+                            : System.Windows.Forms.Screen.PrimaryScreen));
+                System.Drawing.Rectangle area = monitor.WorkingArea;
+                double maxWidth = Math.Max(1, area.Width * scaleX - Ui.S.Lg);
+                double maxHeight = Math.Max(1, area.Height * scaleY - Ui.S.Lg);
+                dlg.MinWidth = Math.Min(420, maxWidth);
+                dlg.MinHeight = Math.Min(400, maxHeight);
+                dlg.MaxWidth = maxWidth;
+                dlg.MaxHeight = maxHeight;
+                if (dlg.Width > maxWidth) dlg.Width = maxWidth;
+                if (dlg.Height > maxHeight) dlg.Height = maxHeight;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "设置窗口工作区限制"); }
         }
 
         // ========== 逻辑 ==========
@@ -467,13 +736,13 @@ namespace Clover
                 if (on)
                 {
                     MessageBoxResult r = MessageBox.Show(dlg,
-                        "隐藏系统任务栏后，四叶草会接管任务栏位置。\r\n\r\n"
+                        AppBrand.Text("隐藏系统任务栏后，四叶草会接管任务栏位置。\r\n\r\n")
                         + "如何恢复：\r\n"
                         + "  · 关闭本窗口里的「隐藏系统任务栏」开关\r\n"
-                        + "  · 或右键四叶草 →「退出」\r\n"
+                        + AppBrand.Text("  · 或右键四叶草 →「退出」\r\n")
                         + "  · 或运行 app\\CloverStart.exe --reset-all\r\n\r\n"
                         + "继续吗？",
-                        "四叶草 · 隐藏系统任务栏",
+                        AppBrand.Text("四叶草 · 隐藏系统任务栏"),
                         MessageBoxButton.OKCancel, MessageBoxImage.Warning,
                         MessageBoxResult.Cancel);   // 默认焦点在「取消」
 
@@ -501,12 +770,23 @@ namespace Clover
                     locationValue.Text = BuildLocationDisplay();
                 if (healthValue != null)
                     healthValue.Text = BuildHealthSummary();
+                if (statusValue != null)
+                {
+                    bool required = owner != null ? owner.HideTaskbar : settings.EffectiveHideTaskbar;
+                    statusValue.Text = Settings.SafeModeActive ? "安全模式 · 系统接管已停用"
+                        : (required ? "系统接管中 · 防护" + ((Guard.IsRunning || WatchdogRunning()) ? "运行中" : "正在启动")
+                            : "运行中 · 系统接管未启用");
+                }
 
                 // 同步两个与菜单共用的开关
                 if (chkAutostart != null) chkAutostart.IsChecked = AutostartEnabled();
                 if (chkMiniTaskbar != null) chkMiniTaskbar.IsChecked = settings.MiniTaskbar;
                 if (chkHideTaskbar != null) chkHideTaskbar.IsChecked = settings.HideTaskbar;
-                if (deskRootValue != null) deskRootValue.Text = CurrentDeskRoot();
+                if (deskRootValue != null)
+                {
+                    deskRootValue.Text = CurrentDeskRoot();
+                    deskRootValue.ToolTip = deskRootValue.Text;
+                }
             }
             catch (Exception ex) { Ui.LogError(ex, "刷新设置窗口"); }
         }
@@ -535,7 +815,7 @@ namespace Clover
             {
                 if (panel == null)
                 {
-                    MessageBox.Show(dlg, "主面板还没准备好，稍后再试。", "四叶草 · 桌面收纳",
+                    MessageBox.Show(dlg, "主面板还没准备好，稍后再试。", AppBrand.Text("四叶草 · 桌面收纳"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -548,7 +828,7 @@ namespace Clover
                 DeskRootChange.Check pre = DeskRootChange.Validate(picked, CurrentDeskRoot());
                 if (!pre.Ok)
                 {
-                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面收纳",
+                    MessageBox.Show(dlg, pre.Message, AppBrand.Text("四叶草 · 桌面收纳"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -560,11 +840,11 @@ namespace Clover
                 {
                     RefreshValues();
                     MessageBox.Show(dlg, "存放目录已改为：\r\n" + CurrentDeskRoot(),
-                        "四叶草 · 桌面收纳", MessageBoxButton.OK, MessageBoxImage.Information);
+                        AppBrand.Text("四叶草 · 桌面收纳"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
-                    MessageBox.Show(dlg, err, "四叶草 · 桌面收纳",
+                    MessageBox.Show(dlg, err, AppBrand.Text("四叶草 · 桌面收纳"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     RefreshValues();
                 }
@@ -601,7 +881,7 @@ namespace Clover
                     DeskRootChange.SafeFull(CurrentDeskRoot()),
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    MessageBox.Show(dlg, "已经是默认目录了。", "四叶草 · 桌面收纳",
+                    MessageBox.Show(dlg, "已经是默认目录了。", AppBrand.Text("四叶草 · 桌面收纳"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -621,7 +901,7 @@ namespace Clover
                 DeskRootChange.Check pre = DeskRootChange.Validate(target, CurrentDeskRoot());
                 if (!pre.Ok)
                 {
-                    MessageBox.Show(dlg, pre.Message, "四叶草 · 桌面收纳",
+                    MessageBox.Show(dlg, pre.Message, AppBrand.Text("四叶草 · 桌面收纳"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -633,11 +913,11 @@ namespace Clover
                 {
                     RefreshValues();
                     MessageBox.Show(dlg, "存放目录已改为：\r\n" + CurrentDeskRoot(),
-                        "四叶草 · 桌面收纳", MessageBoxButton.OK, MessageBoxImage.Information);
+                        AppBrand.Text("四叶草 · 桌面收纳"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
-                    MessageBox.Show(dlg, err, "四叶草 · 桌面收纳",
+                    MessageBox.Show(dlg, err, AppBrand.Text("四叶草 · 桌面收纳"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     RefreshValues();
                 }
@@ -671,7 +951,7 @@ namespace Clover
             {
                 Ui.LogError(ex, "选目录对话框");
                 MessageBox.Show(dlg, "打不开选目录对话框：" + ex.Message,
-                    "四叶草 · 桌面收纳", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppBrand.Text("四叶草 · 桌面收纳"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 return null;
             }
         }
@@ -703,7 +983,7 @@ namespace Clover
             catch { return "读取失败"; }
         }
 
-        /// <summary>维护页直接可见的任务栏定位详情。</summary>
+        /// <summary>维护区折叠详情中的任务栏定位信息。</summary>
         string BuildLocationDisplay()
         {
             try
@@ -787,7 +1067,7 @@ namespace Clover
             try
             {
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
-                sb.AppendLine("四叶草 · 诊断信息");
+                sb.AppendLine(AppBrand.Text("四叶草 · 诊断信息"));
                 sb.AppendLine("时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                 sb.AppendLine();
                 sb.AppendLine("【任务栏定位】");
@@ -822,7 +1102,7 @@ namespace Clover
                 return "  " + BuildLocationSummary() + "\r\n"
                     + "  DPI 缩放：" + TaskbarGeometry.ScaleFactor().ToString("0.##") + "\r\n"
                     + "  开始按钮格：" + FmtRect(s) + "\r\n"
-                    + "  四叶草实际窗口：" + FmtRect(c) + "\r\n"
+                    + AppBrand.Text("  四叶草实际窗口：") + FmtRect(c) + "\r\n"
                     + "  按钮定位来源：" + source + "\r\n"
                     + "  最后按钮组校准：" + calibrated;
             }
@@ -865,7 +1145,7 @@ namespace Clover
             {
                 string all = BuildAllDiagnostics();
                 Clipboard.SetText(all);
-                MessageBox.Show(dlg, "诊断信息已复制到剪贴板。", "四叶草 · 设置",
+                MessageBox.Show(dlg, "诊断信息已复制到剪贴板。", AppBrand.Text("四叶草 · 设置"),
                     MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex) { Ui.LogError(ex, "复制全部诊断信息"); }
@@ -890,7 +1170,9 @@ namespace Clover
                 // 前者关闭时子选项置灰
                 bool on = chkFullscreen.IsChecked == true;
                 chkHover.IsEnabled = on;
-                chkHover.Opacity = on ? 1.0 : 0.45;
+                string hint = on ? "移开鼠标后再次隐藏。" : "需先开启“全屏时隐藏悬浮按钮”，此选项的设置会保留。";
+                if (hoverHint != null) hoverHint.Text = hint;
+                System.Windows.Automation.AutomationProperties.SetHelpText(chkHover, hint);
             }
             catch { }
         }

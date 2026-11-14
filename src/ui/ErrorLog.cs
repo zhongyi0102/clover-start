@@ -96,7 +96,7 @@ namespace Clover
                 e.Handled = true; // 不让程序直接退出
                 try
                 {
-                    MessageBox.Show("四叶草出错了，详细信息已写入 config\\error.log，程序会继续运行。", "四叶草");
+                    MessageBox.Show(AppBrand.Text("四叶草出错了，详细信息已写入 config\\error.log，程序会继续运行。"), AppBrand.Text("四叶草"));
                 }
                 catch { }
             };

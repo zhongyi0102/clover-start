@@ -22,7 +22,7 @@ namespace Clover
                 System.Reflection.Assembly assembly = typeof(Program).Assembly;
                 using (Stream stream = assembly.GetManifestResourceStream("CloverStart.MaterialColors.License.txt"))
                 using (StreamReader reader = stream == null ? null : new StreamReader(stream))
-                    if (reader != null) MessageBox.Show(reader.ReadToEnd(), "四叶草 · Material Color Utilities · Apache-2.0");
+                    if (reader != null) MessageBox.Show(reader.ReadToEnd(), AppBrand.Text("四叶草 · Material Color Utilities · Apache-2.0"));
                 return;
             }
             Stopwatch startupWatch = Stopwatch.StartNew();
@@ -374,7 +374,7 @@ namespace Clover
 
                 trigger.Show();
                 startupWatch.Stop();
-                ErrorLog.Log("启动就绪：四叶草按钮已显示，用时 "
+                ErrorLog.Log(AppBrand.Text("启动就绪：四叶草按钮已显示，用时 ")
                     + startupWatch.ElapsedMilliseconds + "ms；主面板将在首次打开时加载");
                 if (show) trigger.ShowPanel();
 
@@ -388,10 +388,10 @@ namespace Clover
                 try
                 {
                     MessageBox.Show(
-                        "四叶草启动失败：" + ex.Message + Environment.NewLine +
+                        AppBrand.Text("四叶草启动失败：") + ex.Message + Environment.NewLine +
                         "版本 " + BuildInfo.Version + Environment.NewLine +
                         "详细信息已写入 config\\error.log",
-                        "四叶草");
+                        AppBrand.Text("四叶草"));
                 }
                 catch { }
             }
@@ -435,7 +435,7 @@ namespace Clover
             try
             {
                 MessageBox.Show(
-                    "四叶草已进入【安全模式】。\n\n"
+                    AppBrand.Text("四叶草已进入【安全模式】。\n\n")
                     + "原因：2 分钟内连续异常退出 3 次，或使用了 --safe-mode。\n\n"
                     + "安全模式下已自动关闭：\n"
                     + "  · 隐藏系统任务栏\n"
@@ -444,7 +444,7 @@ namespace Clover
                     + "  · 全屏检测与悬停唤出\n\n"
                     + "面板和按钮仍可正常使用。稳定运行 5 分钟后会自动解除。\n"
                     + "详细日志见 config\\error.log",
-                    "四叶草 · 安全模式");
+                    AppBrand.Text("四叶草 · 安全模式"));
             }
             catch { }
         }

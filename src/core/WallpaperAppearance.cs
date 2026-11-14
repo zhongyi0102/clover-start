@@ -19,7 +19,7 @@ namespace Clover
         {
             public bool Dark, Neutral;
             public uint Seed, Surface, Foreground, Secondary, Accent, AccentText, AccentSoft;
-            public double SurfaceAlpha, Blur, Texture, MeanTone;
+            public double SurfaceAlpha, Blur, Texture, MeanTone, ProtectionCost;
             public int Opacity;
             public string Description
             {
@@ -73,22 +73,26 @@ namespace Clover
             texture = edges == 0 ? 0 : Math.Min(1, texture / edges / 25);
             Scheme light = Build(pixels, width, height, false, neutral, seed, texture, meanTone, dynamic);
             Scheme dark = Build(pixels, width, height, true, neutral, seed, texture, meanTone, dynamic);
-            Scheme next = dark.SurfaceAlpha < light.SurfaceAlpha ? dark : light;
+            Scheme next = dark.ProtectionCost < light.ProtectionCost ? dark : light;
             if (previous != null)
             {
                 Scheme same = previous.Dark ? dark : light;
                 // Dynamic media keeps one theme: per-frame black/white inversion is
                 // distracting. Static changes need a meaningful advantage to switch.
-                if (dynamic || same.SurfaceAlpha <= next.SurfaceAlpha + 0.10) next = same;
+                if (dynamic || same.ProtectionCost <= next.ProtectionCost + 0.10) next = same;
                 if (next.Dark == previous.Dark && next.Neutral == previous.Neutral &&
                     ColorDistance(next.Seed, previous.Seed) < 28)
                 {
                     next.Seed = previous.Seed;
                     FillAccent(next);
                 }
-                // Attack immediately, release slowly. Never hold an unsafe lower alpha.
-                if (next.Dark == previous.Dark)
-                    next.SurfaceAlpha = Math.Max(next.SurfaceAlpha, previous.SurfaceAlpha - 0.035);
+                else if (dynamic && next.Dark == previous.Dark)
+                {
+                    // Ambient color changes slowly; text safety is independent of it.
+                    next.Seed = Mix(previous.Seed, next.Seed, 0.18);
+                    FillAccent(next);
+                }
+                if (dynamic) next.SurfaceAlpha = previous.SurfaceAlpha;
             }
             return next;
         }
@@ -101,23 +105,46 @@ namespace Clover
             s.Foreground = dark ? 0xF3F4F4u : 0x202020u;
             s.Secondary = dark ? 0xD8DCDDu : 0x454545u;
             s.Surface = AtTone(neutral ? 0x808080u : Mix(seed, 0x808080, 0.92), dark ? 10 : 97);
-            s.Blur = Math.Round(3 + texture * 11, 1);
-            s.Opacity = (int)Math.Round(90 - texture * 15);
-            double minimum = dynamic ? 0.58 : 0.06 + texture * 0.12;
-            // Dynamic frames may change between samples; protect against BOTH extremes.
-            s.SurfaceAlpha = minimum;
-            if (dynamic || pixels == null)
-                s.SurfaceAlpha = Math.Max(minimum, Math.Max(RequiredAlpha(0, s.Secondary, s.Surface),
-                    RequiredAlpha(0xFFFFFF, s.Secondary, s.Surface)));
-            else
+            s.Blur = Math.Round(texture * 2, 1);
+            s.Opacity = 100;
+            // Keep the image intact. Contrast protection belongs behind actual text,
+            // not over icons and empty space. Missing sources still get a solid fallback.
+            s.SurfaceAlpha = pixels == null ? 1 : 0.03 + texture * 0.05;
+            if (pixels != null)
+            {
+                int count = 0;
                 for (int i = 0; i < width * height * 4; i += 4)
                 {
                     if (pixels[i + 3] < 240) continue;
                     uint background = Rgb(pixels[i + 2], pixels[i + 1], pixels[i]);
-                    s.SurfaceAlpha = Math.Max(s.SurfaceAlpha, RequiredAlpha(background, s.Secondary, s.Surface));
+                    s.ProtectionCost += RequiredAlpha(background, s.Secondary, s.Surface); count++;
                 }
+                if (count > 0) s.ProtectionCost /= count;
+            }
             FillAccent(s);
             return s;
+        }
+
+        /// <summary>Minimal local backing for one text rectangle, in sample coordinates.
+        /// Dynamic text backings withstand unsampled opposite frames without dimming the image.</summary>
+        public static double TextProtectionAlpha(byte[] pixels, int width, int height,
+            int left, int top, int right, int bottom, uint foreground, uint surface,
+            uint globalSurface, double globalAlpha, bool dynamic)
+        {
+            if (dynamic || pixels == null || width <= 0 || height <= 0 ||
+                (long)width * height > 65536 || pixels.Length < (long)width * height * 4)
+                return Math.Max(RequiredAlpha(0, foreground, surface), RequiredAlpha(0xFFFFFF, foreground, surface));
+            double alpha = 0;
+            left = Math.Max(0, left); top = Math.Max(0, top);
+            right = Math.Min(width, right); bottom = Math.Min(height, bottom);
+            for (int y = top; y < bottom; y++) for (int x = left; x < right; x++)
+            {
+                int i = (y * width + x) * 4;
+                if (pixels[i + 3] < 240) continue;
+                uint background = Rgb(pixels[i + 2], pixels[i + 1], pixels[i]);
+                alpha = Math.Max(alpha, RequiredAlpha(Mix(background, globalSurface, globalAlpha), foreground, surface));
+            }
+            return alpha;
         }
 
         static void FillAccent(Scheme s)

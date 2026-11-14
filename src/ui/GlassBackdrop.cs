@@ -638,52 +638,10 @@ namespace Clover
 
                 BitmapImage cached = weImage;
 
-                // ── 铺满面板（cover），取景锚点对准主体 ──
-                //
-                // 要求是「主体完整可见、多余部分裁掉」：
-                //   · 铺满 → 不留白、不变形（等比放大到覆盖整个面板）
-                //   · 多余裁掉 → 面板比例和图片比例不一致时，裁掉超出的一边
-                //   · 主体优先 → 锚点不是机械居中，而是对准人物所在区域
-                //
-                // 主体位置：实测这张 WE 贴图的人物在纵向 13%~89%，
-                // 中心约 51%。裁切时以这个点为锚，避免把头或脚裁掉。
-                double panelRatio = panelW / panelH;
-
-                double srcW = cached.PixelWidth;
-                double srcH = cached.PixelHeight;
-                double srcRatio = srcW / srcH;
-
-                double cropW, cropH;
-                if (srcRatio > panelRatio)
-                {
-                    // 源图更宽 → 高度铺满，裁左右
-                    cropH = srcH;
-                    cropW = srcH * panelRatio;
-                }
-                else
-                {
-                    // 源图更高（竖图铺横面板）→ 宽度铺满，裁上下
-                    cropW = srcW;
-                    cropH = srcW / panelRatio;
-                }
-
-                cropW = Math.Max(1, Math.Min(cropW, srcW));
-                cropH = Math.Max(1, Math.Min(cropH, srcH));
-
-                // 锚点：横向居中，纵向对准主体（51%）
-                const double AnchorY = 0.28;
-                double x = (srcW - cropW) / 2.0;
-                double y = srcH * AnchorY - cropH / 2.0;
-
-                x = Math.Max(0, Math.Min(x, srcW - cropW));
-                y = Math.Max(0, Math.Min(y, srcH - cropH));
-
-                Int32Rect src = new Int32Rect(
-                    (int)Math.Round(x), (int)Math.Round(y),
-                    Math.Max(1, (int)Math.Round(cropW)),
-                    Math.Max(1, (int)Math.Round(cropH)));
-
-                CroppedBitmap crop = new CroppedBitmap(cached, src);
+                // Generic centered cover, identical to the video surface. No
+                // integer aspect division or anchor tuned to a particular wallpaper.
+                CroppedBitmap crop = new CroppedBitmap(cached,
+                    CalculateCoverCrop(cached.PixelWidth, cached.PixelHeight, panelW, panelH));
                 crop.Freeze();
                 return crop;
             }            catch (Exception ex)
@@ -742,7 +700,8 @@ namespace Clover
                 int panelW = Math.Max(1, rect.Right - rect.Left);
                 int panelH = Math.Max(1, rect.Bottom - rect.Top);
                 double screenW = Math.Max(1, SystemParameters.PrimaryScreenWidth);
-                DecodeSize need = CalculateAnchoredCropDecodeSize(
+                DecodeSize need = AutomaticAppearance ? CalculateCoverDecodeSize(
+                    customSourceWidth, customSourceHeight, panelW, panelH) : CalculateAnchoredCropDecodeSize(
                     customSourceWidth, customSourceHeight, panelW, panelH, screenW);
 
                 if (customImage == null || customDecodedWidth < need.Width ||
@@ -755,6 +714,13 @@ namespace Clover
                 }
 
                 BitmapImage cached = customImage;
+
+                if (AutomaticAppearance)
+                {
+                    CroppedBitmap cover = new CroppedBitmap(cached,
+                        CalculateCoverCrop(cached.PixelWidth, cached.PixelHeight, panelW, panelH));
+                    cover.Freeze(); return cover;
+                }
 
                 double scrW = Math.Max(1, SystemParameters.PrimaryScreenWidth);
                 double scrH = Math.Max(1, SystemParameters.PrimaryScreenHeight);
@@ -840,6 +806,19 @@ namespace Clover
                 panelWidth * DecodeOverscan / sourceWidth,
                 panelHeight * DecodeOverscan / sourceHeight);
             return ClampDecodeSize(sourceWidth, sourceHeight, scale);
+        }
+
+        internal static Int32Rect CalculateCoverCrop(int sourceWidth, int sourceHeight,
+            double panelWidth, double panelHeight)
+        {
+            if (sourceWidth <= 0 || sourceHeight <= 0 || panelWidth <= 0 || panelHeight <= 0)
+                return new Int32Rect(0, 0, 1, 1);
+            double ratio = panelWidth / panelHeight;
+            int width = sourceWidth, height = sourceHeight;
+            if ((double)sourceWidth / sourceHeight > ratio)
+                width = Math.Max(1, Math.Min(sourceWidth, (int)Math.Round(sourceHeight * ratio)));
+            else height = Math.Max(1, Math.Min(sourceHeight, (int)Math.Round(sourceWidth / ratio)));
+            return new Int32Rect((sourceWidth - width) / 2, (sourceHeight - height) / 2, width, height);
         }
 
         /// <summary>
@@ -938,6 +917,13 @@ namespace Clover
                 }
 
                 BitmapImage cached = backgroundImage;
+
+                if (AutomaticAppearance)
+                {
+                    CroppedBitmap cover = new CroppedBitmap(cached, CalculateCoverCrop(
+                        cached.PixelWidth, cached.PixelHeight, rect.Right - rect.Left, rect.Bottom - rect.Top));
+                    cover.Freeze(); return cover;
+                }
 
                 // 按面板在屏幕上的相对位置，从背景图里裁对应区域
                 double scrW = Math.Max(1, SystemParameters.PrimaryScreenWidth);

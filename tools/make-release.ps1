@@ -1,242 +1,87 @@
-﻿# 打包发布：生成可分发的 zip（解压即用，免安装）
-#
-# 产物结构（与程序运行时的目录约定一致）：
-#   CloverStart-v1.0.0\
-#     app\CloverStart.exe    主程序
-#     res\clover.png         界面图标（运行时必需）
-#     res\clover.ico         备用图标
-#     启动.bat               双击启动
-#     安装开机自启.bat       创建开机自启
-#     使用说明.txt
-#   CloverStart-v1.0.0.zip
-#   CloverStart-v1.0.0.zip.sha256   校验值
-#
-# 注意：exe 必须放在 app\ 子目录里——程序用 `exe目录\..` 推算程序根目录，
-#       直接放在根目录会导致配置和 res 都找不到。
-#
-# 版本号来源：仓库根目录的 VERSION 文件（如 1.0.0），与 build.ps1、git tag 保持一致。
-#
-# 用法：powershell -NoProfile -ExecutionPolicy Bypass -File tools\make-release.ps1
-#      可加 -SkipBuild 跳过重新编译
-param(
-    [switch]$SkipBuild
-)
-
+# Portable package with a verified program-only update manifest.
+param([switch]$SkipBuild)
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -eq 'Core') { throw 'Use Windows PowerShell 5.1.' }
 $root = Split-Path -Parent $PSScriptRoot
-
-# ---------------- 0. 读版本号 ----------------
-$versionFile = Join-Path $root 'VERSION'
-if (-not (Test-Path $versionFile)) { throw "找不到 $versionFile（内容形如 1.0.0）" }
-$Version = (Get-Content $versionFile -Raw -Encoding ascii).Trim()
-if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION 内容不合法: '$Version'（应形如 1.0.0）" }
-
-$distDir = Join-Path $root 'dist'
-$pkgName = "CloverStart-v$Version"
-$pkgDir = Join-Path $distDir $pkgName
-$zipPath = Join-Path $distDir ($pkgName + '.zip')
-$shaPath = $zipPath + '.sha256'
-
-# ---------------- 1. 编译 ----------------
+$version = (Get-Content -LiteralPath (Join-Path $root 'VERSION') -Raw -Encoding ASCII).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid VERSION.' }
 if (-not $SkipBuild) {
-    Write-Host '编译中...' -ForegroundColor Cyan
+    if (Get-Process -Name CloverStart -ErrorAction SilentlyContinue) { throw 'Close CloverStart before building.' }
     & (Join-Path $root 'build.ps1')
-    if ($LASTEXITCODE -ne 0) { throw "编译失败 (exit $LASTEXITCODE)" }
+    if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+    & (Join-Path $root 'tests\run-tests.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 }
-
 $exe = Join-Path $root 'app\CloverStart.exe'
-if (-not (Test-Path $exe)) { throw "找不到 $exe，请先运行 build.ps1 或去掉 -SkipBuild" }
-
-# ---------------- 2. 准备目录 ----------------
-if (Test-Path $pkgDir) { Remove-Item $pkgDir -Recurse -Force }
-New-Item -ItemType Directory -Force -Path (Join-Path $pkgDir 'app') | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $pkgDir 'res') | Out-Null
-
-# ---------------- 3. 复制必需文件 ----------------
-Copy-Item $exe (Join-Path $pkgDir 'app\CloverStart.exe') -Force
-
-# res 下的图片全复制。
-# 为什么不再逐个列名：README 现在内嵌截图（screenshot-light/dark.png），
-# 而原先只列了 clover.png / clover.ico —— 加一张图就出死链，且不容易发现。
-# 改成"res 下有什么就带什么"，并让后面的 README 对账来兜底。
-#
-# 注意 PowerShell 陷阱：Get-ChildItem -Include 必须配 -Recurse，或路径以 \* 结尾，
-# 否则过滤器被静默忽略 —— 表现是"一个文件都没复制"，而且不报错。
-$resDir = Join-Path $root 'res'
-$resFiles = @(Get-ChildItem -Path (Join-Path $resDir '*') -File -ErrorAction SilentlyContinue)
-if ($resFiles.Count -eq 0) { throw "res 目录里没有任何文件（$resDir）" }
-foreach ($f in $resFiles) {
-    Copy-Item $f.FullName (Join-Path $pkgDir ('res\' + $f.Name)) -Force
+$evidence = Join-Path $root 'tests\bin\test-summary.json'
+if (-not (Test-Path -LiteralPath $exe) -or -not (Test-Path -LiteralPath $evidence)) { throw 'Build and full test evidence are required.' }
+$summary = Get-Content -LiteralPath $evidence -Raw -Encoding UTF8 | ConvertFrom-Json
+$exeInfo = Get-Item -LiteralPath $exe
+$actualVersion = [version][Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
+$expectedVersion = [version]$version
+if ($actualVersion.Major -ne $expectedVersion.Major -or $actualVersion.Minor -ne $expectedVersion.Minor -or
+    $actualVersion.Build -ne $expectedVersion.Build -or $actualVersion.Revision -gt 0) { throw 'Executable version differs from VERSION.' }
+if ($summary.mode -ne 'full' -or $summary.failed -ne 0 -or $summary.suites -lt 1 -or @($summary.results | Where-Object { $_.status -ne 'passed' }).Count -gt 0) { throw 'Full tests must pass.' }
+if ([datetime]$summary.startedAt -lt $exeInfo.LastWriteTime -or [datetime]$summary.generatedAt -lt $exeInfo.LastWriteTime) { throw 'Test evidence predates the executable.' }
+$inputs = @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Recurse -File -Filter '*.cs') +
+    @(Get-ChildItem -LiteralPath (Join-Path $root 'tests') -File) +
+    @(Get-ChildItem -LiteralPath (Join-Path $root 'tools') -File -Filter '*.ps1') +
+    @(Get-ChildItem -LiteralPath (Join-Path $root 'res') -File) + @(Get-Item -LiteralPath (Join-Path $root 'build.ps1'))
+if (@($inputs | Where-Object { $_.LastWriteTime -gt [datetime]$summary.startedAt }).Count -gt 0) { throw 'Source or tests changed after the test run began.' }
+$dist = Join-Path $root 'dist'
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+$packageName = "CloverStart-v$version"
+$package = Join-Path $dist $packageName
+$staging = Join-Path $dist ($packageName + '.staging-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $staging | Out-Null
+$resources = @('brand.png','brand.ico','brand-light.png','brand-dark.png','brand.svg','clover.png','clover.ico','background-a1.png','background-cyangray.png')
+$programFiles = @('app\CloverStart.exe') + @($resources | ForEach-Object { 'res\' + $_ })
+$documentation = @('VERSION','LICENSE','README.md','THIRD-PARTY-NOTICES.md','licenses\Apache-2.0.txt',
+    'docs\PRODUCT-RULES.md','docs\UPGRADE.md','docs\RELEASE-CHECKLIST.md','tools\update.ps1',
+    'res\screenshot-light.png','res\screenshot-dark.png')
+foreach ($relative in ($programFiles + $documentation)) {
+    $inputPath = Join-Path $root $relative
+    if (-not (Test-Path -LiteralPath $inputPath -PathType Leaf)) { throw "Missing release input: $relative" }
+    $outputPath = Join-Path $staging $relative
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outputPath) | Out-Null
+    Copy-Item -LiteralPath $inputPath -Destination $outputPath
 }
-Write-Host ("  res 资源: " + ($resFiles | ForEach-Object { $_.Name }) -join ', ')
-
-Copy-Item (Join-Path $root 'LICENSE') $pkgDir -Force
-Copy-Item (Join-Path $root 'README.md') (Join-Path $pkgDir 'README.md') -Force
-
-# ---------------- 4. 生成启动脚本 ----------------
-# 用 GBK 编码写 .bat，避免中文在 cmd 里乱码
-$batLaunch = @'
-@echo off
-cd /d "%~dp0"
-start "" "app\CloverStart.exe"
-'@
-[System.IO.File]::WriteAllText((Join-Path $pkgDir '启动.bat'), $batLaunch,
-    [System.Text.Encoding]::GetEncoding(936))
-
-$batInstall = @'
-@echo off
-cd /d "%~dp0"
-echo 正在创建开机自启...
-"app\CloverStart.exe" --enable-autostart
-if errorlevel 1 goto failed
-start "" "app\CloverStart.exe"
-echo.
-echo 已创建开机自启并启动。
-pause
-exit /b 0
-
-:failed
-echo.
-echo 创建开机自启失败，请直接启动程序后在右键菜单中启用。
-pause
-exit /b 1
-'@
-[System.IO.File]::WriteAllText((Join-Path $pkgDir '安装开机自启.bat'), $batInstall,
-    [System.Text.Encoding]::GetEncoding(936))
-
-# ---------------- 5. 使用说明 ----------------
-$readme = @"
-四叶草启动面板 v$Version —— 使用说明
-
-【怎么运行】
-  双击「启动.bat」
-  或者直接双击 app\CloverStart.exe
-
-【需要什么】
-  Windows 10 / 11
-  .NET Framework 4.8（Win10 1903 以后系统自带，一般不用装）
-
-【开机自启】
-  双击「安装开机自启.bat」，或运行 app\CloverStart.exe --enable-autostart。
-  取消：右键四叶草按钮 → 取消勾选「开机自启」，
-        或运行 app\CloverStart.exe --disable-autostart。
-
-【主要操作】
-  · 点击任务栏里的四叶草按钮，或按 Ctrl + Alt + 空格 打开/收起面板
-  · 面板顶部搜索框支持中文、英文、拼音（全拼 weixin / 首字母 wx）
-  · 方向键选中、回车启动、Esc 关闭
-  · 右键应用磁贴 → 打开文件所在位置
-  · 右键四叶草按钮 → 各种开关和设置
-
-【出问题了怎么办】
-  任务栏不见了：
-    任务管理器(Ctrl+Shift+Esc) → 文件 → 运行新任务 → 输入 explorer.exe → 确定
-    或：在本目录打开命令行，运行 app\CloverStart.exe --restore-system
-
-  面板打不开 / 反复崩溃：
-    运行 app\CloverStart.exe --safe-mode
-
-  想彻底清除：
-    app\CloverStart.exe --reset-all
-    （会还原所有系统改动，并清理配置和缓存）
-
-【数据在哪】
-  首次运行会在本目录生成 config\ 文件夹，里面是应用清单、设置、使用记录。
-  desktop-backup\ 旧版本移走的桌面快捷方式（程序不再读写它）。
-
-【卸载】
-  1. 如果开了开机自启，先运行 app\CloverStart.exe --disable-autostart
-  2. 运行 app\CloverStart.exe --reset-all
-  3. 删除整个文件夹
-
-完整文档见 README.md
-"@
-[System.IO.File]::WriteAllText((Join-Path $pkgDir '使用说明.txt'), $readme,
-    (New-Object System.Text.UTF8Encoding($true)))
-
-# ---------------- 6. 打包 zip + 单文件 exe + 生成 SHA256 ----------------
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-Compress-Archive -Path $pkgDir -DestinationPath $zipPath -CompressionLevel Optimal
-$zipSize = [math]::Round((Get-Item $zipPath).Length / 1KB, 1)
-
-$hash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$zipName = Split-Path $zipPath -Leaf
-[System.IO.File]::WriteAllText($shaPath, "$hash  $zipName`n", (New-Object System.Text.ASCIIEncoding))
-
-# 单文件 exe：直接放 dist\ 下，图标已嵌入程序集，无外部依赖
-$singleExe = Join-Path $distDir 'CloverStart.exe'
-Copy-Item $exe $singleExe -Force
-$singleSize = [math]::Round((Get-Item $singleExe).Length / 1KB, 1)
-$singleHash = (Get-FileHash $singleExe -Algorithm SHA256).Hash.ToLowerInvariant()
-[System.IO.File]::WriteAllText($singleExe + '.sha256', "$singleHash  CloverStart.exe`n", (New-Object System.Text.ASCIIEncoding))
-
-# ---------------- 7. 汇总 ----------------
-Write-Host ''
-Write-Host '打包完成' -ForegroundColor Green
-Write-Host ''
-Write-Host '【单文件 exe】' -ForegroundColor Cyan
-Write-Host ('  ' + $singleExe + '  (' + $singleSize + ' KB)')
-Write-Host ('  SHA256: ' + $singleHash)
-Write-Host ''
-Write-Host '【免安装 zip】' -ForegroundColor Cyan
-Write-Host ('  目录: ' + $pkgDir)
-Write-Host ('  压缩包: ' + $zipPath + '  (' + $zipSize + ' KB)')
-Write-Host ('  SHA256: ' + $hash)
-Write-Host ('  校验文件: ' + $shaPath)
-Write-Host ''
-Write-Host 'zip 内容:' -ForegroundColor Cyan
-Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {
-    $rel = $_.FullName.Substring($pkgDir.Length + 1)
-    Write-Host ('  {0,-30} {1,8} KB' -f $rel, [math]::Round($_.Length / 1KB, 1))
-}
-
-# 校验 zip 能正常解压
-Write-Host ''
-Write-Host '校验...' -ForegroundColor Cyan
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-try {
-    $count = $zip.Entries.Count
-    $names = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
-    $hasExe = ($names | Where-Object { $_ -like '*CloverStart.exe' }).Count -gt 0
-    $hasPng = ($names | Where-Object { $_ -like '*clover.png' }).Count -gt 0
-    Write-Host ("  zip 条目数: $count")
-    Write-Host ("  zip 含主程序: " + $(if ($hasExe) { '是' } else { '否' }))
-    Write-Host ("  zip 含界面图标: " + $(if ($hasPng) { '是' } else { '否' }))
-    if (-not ($hasExe -and $hasPng)) { throw '压缩包缺少关键文件' }
-
-    # ★ 从 README 反查所有图片引用，逐个确认在包里。
-    # 为什么这样校验：原先只硬编码检查 clover.png，于是给 README 加了截图之后
-    # 包是"校验通过"的，但解压出来 README 里两张图都是死链。
-    # 改成从 README 提取 ![](...) 的路径来对账，以后再加图也会被兜住。
-    $readmeText = Get-Content (Join-Path $root 'README.md') -Raw -Encoding UTF8
-    $refs = [regex]::Matches($readmeText, '!\[[^\]]*\]\(([^)]+)\)') |
-        ForEach-Object { $_.Groups[1].Value } |
-        Where-Object { $_ -notmatch '^https?://' } |
-        ForEach-Object { $_ -replace '/', '\' } |
-        Sort-Object -Unique
-
-    if ($refs.Count -eq 0) {
-        Write-Host '  README 图片引用: 0 个（跳过对账）'
-    } else {
-        $missing = @()
-        foreach ($r in $refs) {
-            # 包里路径形如 CloverStart-v1.0.3\res\xxx.png
-            $hit = $names | Where-Object { $_ -like ('*' + ($r -replace '\\', '/')) }
-            if (-not $hit) { $missing += $r }
-        }
-        Write-Host ("  README 图片引用: $($refs.Count) 个，包内缺失 $($missing.Count) 个")
-        if ($missing.Count -gt 0) {
-            throw ('README 引用了这些图片，但压缩包里没有（解压后会是死链）: ' + ($missing -join ', '))
-        }
+$files = @($programFiles | ForEach-Object {
+    [pscustomobject]@{ path=$_.Replace('\','/'); sha256=(Get-FileHash -LiteralPath (Join-Path $staging $_) -Algorithm SHA256).Hash.ToLowerInvariant() }
+})
+[pscustomobject]@{ format=1; version=$version; files=$files } | ConvertTo-Json -Depth 4 |
+    Set-Content -LiteralPath (Join-Path $staging 'release-manifest.json') -Encoding UTF8
+Copy-Item -LiteralPath $evidence -Destination (Join-Path $staging 'test-summary.json')
+# These are generated package artifacts, not workspace source edits.
+[IO.File]::WriteAllText((Join-Path $staging 'Launch.bat'), "@echo off`r`ncd /d `"%~dp0`"`r`nstart `"`" `"app\CloverStart.exe`"`r`n", [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText((Join-Path $staging 'Enable-autostart.bat'), "@echo off`r`ncd /d `"%~dp0`"`r`n`"app\CloverStart.exe`" --enable-autostart`r`nif errorlevel 1 pause`r`n", [Text.Encoding]::ASCII)
+Copy-Item -LiteralPath (Join-Path $root 'docs\UPGRADE.md') -Destination (Join-Path $staging 'UPGRADE.md')
+$backupSuffix = '.previous-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N')
+foreach ($oldPath in @($package, ($package + '.zip'), ($package + '.zip.sha256'), (Join-Path $dist 'CloverStart.exe'), (Join-Path $dist 'CloverStart.exe.sha256'))) {
+    $resolved = [IO.Path]::GetFullPath($oldPath)
+    if (-not $resolved.StartsWith([IO.Path]::GetFullPath($dist) + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Release output escapes dist.' }
+    if (Test-Path -LiteralPath $resolved) {
+        if ((Get-Item -LiteralPath $resolved -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Release output cannot be a reparse point.' }
+        Move-Item -LiteralPath $resolved -Destination ($resolved + $backupSuffix)
     }
-} finally {
-    $zip.Dispose()
 }
-
-# 校验单 exe 里确实嵌入了图标资源
-$asm = [System.Reflection.Assembly]::LoadFile($singleExe)
-$hasEmbeddedIcon = ($asm.GetManifestResourceNames() | Where-Object { $_ -like '*clover.png' }).Count -gt 0
-Write-Host ("  单 exe 含嵌入图标: " + $(if ($hasEmbeddedIcon) { '是' } else { '否' }))
-if (-not $hasEmbeddedIcon) { throw '单文件 exe 缺少嵌入图标资源' }
-Write-Host '  校验通过' -ForegroundColor Green
+Move-Item -LiteralPath $staging -Destination $package
+$zipPath = $package + '.zip'
+Compress-Archive -LiteralPath $package -DestinationPath $zipPath -CompressionLevel Optimal
+$hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText(($zipPath + '.sha256'), "$hash  $packageName.zip`n", [Text.Encoding]::ASCII)
+$single = Join-Path $dist 'CloverStart.exe'
+Copy-Item -LiteralPath $exe -Destination $single
+$singleHash = (Get-FileHash -LiteralPath $single -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText(($single + '.sha256'), "$singleHash  CloverStart.exe`n", [Text.Encoding]::ASCII)
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$archive = [IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
+    foreach ($relative in ($programFiles + $documentation + @('release-manifest.json','test-summary.json'))) {
+        if ($names -notcontains ($packageName + '/' + $relative.Replace('\','/'))) { throw "Archive is missing $relative" }
+    }
+} finally { $archive.Dispose() }
+Write-Host "Verified portable package: $zipPath"
+Write-Host "SHA256: $hash"
+Write-Host 'No public release was created. Previous same-version outputs are preserved.'

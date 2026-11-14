@@ -56,7 +56,7 @@ namespace Clover
             this.onPicked = onPicked;
 
             dlg = new Window();
-            dlg.Title = "四叶草 · Wallpaper Engine 壁纸";
+            dlg.Title = AppBrand.Text("四叶草 · Wallpaper Engine 壁纸");
             dlg.Width = 760;
             dlg.Height = 620;
             dlg.WindowStartupLocation = owner != null
@@ -167,10 +167,10 @@ namespace Clover
             StackPanel btns = new StackPanel();
             btns.Orientation = Orientation.Horizontal;
 
-            Border manual = Chip("手动选择目录…", false, delegate { PickManualDir(); });
+            Button manual = Chip("手动选择目录…", false, delegate { PickManualDir(); });
             btns.Children.Add(manual);
 
-            Border cancel = Chip("取消", false, delegate { dlg.Close(); });
+            Button cancel = Chip("取消", false, delegate { dlg.Close(); });
             cancel.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
             btns.Children.Add(cancel);
 
@@ -323,10 +323,12 @@ namespace Clover
 
         FrameworkElement MakeCard(WallpaperEngine.Item it)
         {
-            Border card = new Border();
+            Button card = new Button();
             card.Width = 168;
             card.Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
-            card.CornerRadius = new CornerRadius(Ui.R.Sm);
+            card.Template = UiButtons.Template(Ui.R.Sm);
+            card.Padding = new Thickness(0);
+            card.HorizontalContentAlignment = HorizontalAlignment.Stretch;
             card.Background = Ui.SearchBg;
             card.BorderBrush = Ui.Line;
             card.BorderThickness = new Thickness(1);
@@ -379,11 +381,12 @@ namespace Clover
             }
             sp.Children.Add(tags);
 
-            card.Child = sp;
+            card.Content = sp;
+            System.Windows.Automation.AutomationProperties.SetName(card, "选择壁纸：" + it.Title);
 
             card.MouseEnter += delegate { card.BorderBrush = Ui.Accent; };
             card.MouseLeave += delegate { card.BorderBrush = Ui.Line; };
-            card.MouseLeftButtonUp += delegate { Choose(it); };
+            card.Click += delegate { Choose(it); };
 
             return card;
         }
@@ -472,7 +475,7 @@ namespace Clover
                 if (string.IsNullOrEmpty(mainFile) || !File.Exists(mainFile))
                 {
                     MessageBox.Show(dlg, "这个壁纸的文件已不存在，无法使用。",
-                        "四叶草 · 壁纸", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        AppBrand.Text("四叶草 · 壁纸"), MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
@@ -480,7 +483,7 @@ namespace Clover
                 if (string.IsNullOrEmpty(rel))
                 {
                     MessageBox.Show(dlg, "无法确定壁纸文件的相对路径。",
-                        "四叶草 · 壁纸", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        AppBrand.Text("四叶草 · 壁纸"), MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
@@ -508,7 +511,7 @@ namespace Clover
                     + "  文件：" + rel + "\r\n\r\n"
                     + "只记录引用，没有复制文件。"
                     + "壁纸被删除或取消订阅时会自动回退到内置背景。",
-                    "四叶草 · 壁纸已应用",
+                    AppBrand.Text("四叶草 · 壁纸已应用"),
                     MessageBoxButton.OK, MessageBoxImage.Information);
 
                 dlg.Close();
@@ -517,31 +520,32 @@ namespace Clover
             {
                 Ui.LogError(ex, "选择壁纸");
                 MessageBox.Show(dlg, "选择失败：" + ex.Message,
-                    "四叶草 · 壁纸", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppBrand.Text("四叶草 · 壁纸"), MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
         // ========== 小工具 ==========
 
-        static Border Chip(string label, bool primary, Action onClick)
+        static Button Chip(string label, bool primary, Action onClick)
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Height = 28;
-            b.CornerRadius = new CornerRadius(b.Height / 2);
+            b.Template = UiButtons.Template(b.Height / 2);
             b.Padding = new Thickness(14, 0, 14, 0);
             b.Cursor = Cursors.Hand;
             b.Background = primary ? Ui.Accent : Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(primary ? 0 : 1);
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
 
             TextBlock t = Ui.T(label, 11.5, primary ? Brushes.White : Ui.Fg,
                 primary ? FontWeights.SemiBold : FontWeights.Normal);
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            b.Content = t;
+            System.Windows.Automation.AutomationProperties.SetName(b, label);
 
-            b.MouseEnter += delegate { b.Opacity = 0.85; };
-            b.MouseLeave += delegate { b.Opacity = 1.0; };
-            b.MouseLeftButtonUp += delegate
+            b.Click += delegate
             {
                 try { if (onClick != null) onClick(); }
                 catch (Exception ex) { Ui.LogError(ex, "壁纸窗口按钮"); }

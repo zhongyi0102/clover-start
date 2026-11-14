@@ -21,7 +21,7 @@ namespace Clover
             "新机手册", "发送至", "产品改进", "向导", "Install Additional",
             "打开日志目录", "SnoreToast", "Administrative Tools",
             // 自我引用：不该把启动面板自己列进面板
-            "四叶草启动器", "CloverStart"
+            "四叶草启动器", "CloverStart", AppBrand.Name, AppBrand.Product
         };
 
         public static bool Scan(string baseDir)

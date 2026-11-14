@@ -34,7 +34,7 @@ namespace Clover
                 app = new AppItem { Name = result.Name, Path = result.Path, Category = "其他" };
                 if (!Catalog.RegisterManual(baseDir, app))
                 {
-                    MessageBox.Show(this, "分类未保存：无法登记应用入口，原清单已保留。", "四叶草");
+                    MessageBox.Show(this, "分类未保存：无法登记应用入口，原清单已保留。", AppBrand.Text("四叶草"));
                     return;
                 }
                 catalog.Apps.Add(app);

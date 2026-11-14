@@ -113,7 +113,7 @@ namespace Clover
             }
             catch (Exception ex)
             {
-                MessageBox.Show("重新扫描失败: " + ex.Message, "四叶草面板");
+                MessageBox.Show("重新扫描失败: " + ex.Message, AppBrand.Text("四叶草面板"));
             }
         }
         void ReloadCatalog()
@@ -253,6 +253,10 @@ namespace Clover
                                 bool wasOk = !weUnavailable;
                                 weUnavailable = true;
                                 if (wasOk) NotifyWeUnavailable("视频无法播放");
+                            videoBackdrop.Unload();
+                            glassBackdrop.InvalidateSource();
+                            automaticAppearance = null; lastAnalyzedBackground = null;
+                            glassBackdrop.RefreshSoon();
                             }
                             catch { }
                         };
@@ -752,7 +756,7 @@ namespace Clover
                     MessageBox.Show(this,
                         "「" + category + "」里没有可隐藏的应用。"
                         + "\r\n\r\n（全部都在例外名单里，或已经隐藏了）",
-                        "四叶草 · 批量隐藏",
+                        AppBrand.Text("四叶草 · 批量隐藏"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return 0;
                 }

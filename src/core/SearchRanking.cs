@@ -7,7 +7,7 @@ namespace Clover
     /// 搜索结果的匹配与个性化排序。
     ///
     /// 这是纯 core 逻辑：不读文件、不依赖 WPF。界面把目录结果和系统索引结果
-    /// 交进来后，统一按「三类顺序 → 匹配质量 → 手动固定 → 使用次数 → 最近使用」排序。
+    /// 交进来后，统一按「三类顺序 → 匹配质量 → 使用次数 → 最近使用」排序。
     /// </summary>
     static class SearchRanking
     {
@@ -74,8 +74,6 @@ namespace Clover
             if (c != 0) return c;
 
             // 同等匹配质量下，尊重用户的明确选择和真实使用习惯。
-            c = b.Pinned.CompareTo(a.Pinned);
-            if (c != 0) return c;
             c = b.Usage.CompareTo(a.Usage);
             if (c != 0) return c;
             c = b.LastUsed.CompareTo(a.LastUsed);

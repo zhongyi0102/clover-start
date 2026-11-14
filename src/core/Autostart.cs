@@ -539,7 +539,7 @@ namespace Clover
                     definition = Call(service, "NewTask", 0);
 
                     registration = Get(definition, "RegistrationInfo");
-                    Set(registration, "Description", "四叶草启动面板快速开机自启");
+                    Set(registration, "Description", AppBrand.Product + "快速开机自启");
                     Set(registration, "Author", string.IsNullOrEmpty(plan.UserId) ? "CloverStart" : plan.UserId);
 
                     principal = Get(definition, "Principal");
@@ -624,7 +624,7 @@ namespace Clover
                     Set(shortcut, "TargetPath", executablePath);
                     Set(shortcut, "WorkingDirectory", workingDirectory);
                     Set(shortcut, "IconLocation", executablePath + ",0");
-                    Set(shortcut, "Description", "四叶草启动面板（兼容自启）");
+                    Set(shortcut, "Description", AppBrand.Product + "（兼容自启）");
                     Call(shortcut, "Save");
                 }
                 finally

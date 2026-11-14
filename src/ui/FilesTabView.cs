@@ -38,10 +38,11 @@ namespace Clover
         readonly Settings settings;
         readonly string baseDir;
 
-        readonly StackPanel chipRow;      // 第一行：来源
+        readonly Panel chipRow;           // 第一行：来源
         readonly Panel extRow;            // 第二行：后缀
         readonly StackPanel listPanel;
         readonly TextBlock noticeText;
+        Panel selectionSurface;
         TextBlock statusText;
         string status = "";
 
@@ -60,13 +61,13 @@ namespace Clover
         int displayLimit = FileScanner.MaxReturn;
         int matchedCount;
         bool showSourceColumn;
+        bool compactSourceLayout;
         volatile int loadGeneration;
         volatile bool disposed;
         bool active;
         double savedScrollOffset;
         bool hasRenderedRows;
         System.Windows.Threading.DispatcherTimer loadTimeout;
-        static ControlTemplate fileButtonTemplate;
 
         /// <summary>固定后缀分组（7 组）。</summary>
         readonly List<FileExtGroups.Group> builtinGroups = FileExtGroups.Builtin();
@@ -91,14 +92,11 @@ namespace Clover
 
         /// <summary>上次点击的索引（Shift 范围选择用）。</summary>
         int anchorIndex = -1;
+        string currentPath;
 
         /// <summary>行控件缓存：路径 → Border（重绘选中态用，不必重建整列表）。</summary>
         readonly Dictionary<string, Border> rowMap =
             new Dictionary<string, Border>(StringComparer.OrdinalIgnoreCase);
-
-        /// <summary>自带图标缓存：文件路径 → ImageSource（null = 用矢量兜底）。</summary>
-        readonly Dictionary<string, ImageSource> iconByPath =
-            new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
 
         /// <summary>空格预览浮层。懒创建（第一次按空格才建）。</summary>
         FilePreviewPopup preview;
@@ -121,7 +119,7 @@ namespace Clover
         DropHint dropHint;
 
         public FilesTabView(PanelWindow owner, Settings settings, string baseDir,
-            StackPanel chipHost, Panel extHost, StackPanel listHost, TextBlock noticeHost,
+            Panel chipHost, Panel extHost, StackPanel listHost, TextBlock noticeHost,
             StackPanel undoHost)
         {
             this.owner = owner;
@@ -132,6 +130,25 @@ namespace Clover
             this.listPanel = listHost;
             this.noticeText = noticeHost;
             this.undoHost = undoHost;
+
+            if (chipRow != null)
+                chipRow.SizeChanged += delegate { UpdateSourceChipWidths(); };
+
+            if (listPanel != null)
+            {
+                listPanel.Focusable = true;
+                listPanel.SizeChanged += delegate
+                {
+                    try
+                    {
+                        bool compact = ShouldCompactSourceColumn();
+                        if (compact == compactSourceLayout) return;
+                        compactSourceLayout = compact;
+                        if (active && cached != null) RenderList(cached);
+                    }
+                    catch (Exception ex) { Ui.LogError(ex, "调整文件列表列宽"); }
+                };
+            }
 
             this.folders = FileFolders.Load(baseDir);
 
@@ -175,6 +192,46 @@ namespace Clover
                 RefreshDropHint();
             }
             catch (Exception ex) { Ui.LogError(ex, "接入放置提示"); }
+        }
+
+        /// <summary>
+        /// 接入文件页的背景承载面。点击列表之外的空白，或列表行之间的空隙时，
+        /// 清空当前选择；子控件（文件行、筛选、表头、按钮）仍按自己的语义处理。
+        /// </summary>
+        internal void AttachSelectionSurface(Panel surface)
+        {
+            try
+            {
+                if (ReferenceEquals(selectionSurface, surface)) return;
+                if (selectionSurface != null)
+                    selectionSurface.MouseLeftButtonDown -= OnSelectionSurfaceMouseLeftButtonDown;
+
+                selectionSurface = surface;
+                if (selectionSurface == null) return;
+
+                // Panel 没有背景时，子控件之外的区域不参与命中测试。
+                if (selectionSurface.Background == null)
+                    selectionSurface.Background = Brushes.Transparent;
+                selectionSurface.MouseLeftButtonDown += OnSelectionSurfaceMouseLeftButtonDown;
+            }
+            catch (Exception ex) { Ui.LogError(ex, "接入文件页空白选择"); }
+        }
+
+        void OnSelectionSurfaceMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                if (!active || e == null || e.ChangedButton != MouseButton.Left) return;
+
+                object hit = e.OriginalSource;
+                bool blankSurface = ReferenceEquals(hit, selectionSurface);
+                bool rowGap = ReferenceEquals(hit, listPanel);
+                if (!blankSurface && !rowGap) return;
+
+                ClearSelection();
+                listPanel.Focus();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "文件页点击空白处"); }
         }
 
         /// <summary>
@@ -286,6 +343,7 @@ namespace Clover
                     SaveSource();
                     selected.Clear();
                     anchorIndex = -1;
+                    currentPath = null;
                     Refresh(true);
                 }
 
@@ -350,6 +408,7 @@ namespace Clover
         {
             try
             {
+                InvalidateItemMenu();
                 ClosePreview();
                 ScrollViewer scroll = FindScrollViewer();
                 if (scroll != null) savedScrollOffset = scroll.VerticalOffset;
@@ -364,8 +423,10 @@ namespace Clover
         {
             disposed = true;
             OnLeave();
+            if (selectionSurface != null)
+                selectionSurface.MouseLeftButtonDown -= OnSelectionSurfaceMouseLeftButtonDown;
+            selectionSurface = null;
             ClearList();
-            iconByPath.Clear();
             cached = null;
         }
 
@@ -458,9 +519,8 @@ namespace Clover
                     if (IsPreviewOpen) { ClosePreview(); return true; }
                     if (selected.Count > 0)
                     {
-                        selected.Clear();
-                        anchorIndex = -1;
-                        UpdateSelectionVisuals();
+                        ClearSelection();
+                        listPanel.Focus();
                         return true;
                     }
                     return false;   // 都清完了 → 交给上层（清搜索框 / 收起面板）
@@ -468,6 +528,22 @@ namespace Clover
 
                 if (key == Key.F5) { Refresh(true); return true; }
                 if (visible.Count == 0) return false;
+
+                if (Ui.IsContextMenuKey(key, mods))
+                {
+                    FileScanner.Entry target = null;
+                    foreach (FileScanner.Entry entry in visible)
+                    {
+                        Border row;
+                        if (rowMap.TryGetValue(entry.Path, out row) && row.IsKeyboardFocusWithin)
+                        { target = entry; break; }
+                    }
+                    if (target == null) target = CurrentEntry();
+                    if (target == null) return false;
+                    SelectMenuTarget(target);
+                    ShowItemMenu(target, true);
+                    return true;
+                }
 
                 // Ctrl+A 全选
                 if (key == Key.A && (mods & ModifierKeys.Control) != 0)
@@ -497,7 +573,7 @@ namespace Clover
                 // Enter 打开（等同双击）
                 if (key == Key.Enter)
                 {
-                    FileScanner.Entry e = FirstSelected();
+                    FileScanner.Entry e = CurrentEntry();
                     if (e != null) { OpenEntry(e); return true; }
                     return false;
                 }
@@ -505,10 +581,10 @@ namespace Clover
                 // ↑↓ 移动选中（预览打开时同步更新内容）
                 if (key == Key.Up || key == Key.Down)
                 {
-                    MoveSelection(key == Key.Up ? -1 : 1);
+                    MoveSelection(key == Key.Up ? -1 : 1, (mods & ModifierKeys.Shift) != 0);
                     if (IsPreviewOpen)
                     {
-                        FileScanner.Entry e = FirstSelected();
+                        FileScanner.Entry e = CurrentEntry();
                         if (e != null && preview != null) preview.Show(e, owner);
                     }
                     return true;
@@ -523,30 +599,10 @@ namespace Clover
             }
         }
 
-        /// <summary>把选中的文件放进剪贴板（FileDrop）。只读 —— 不移动任何文件。</summary>
+        /// <summary>与右键复制共用规则，包含文件和文件夹；不移动来源内容。</summary>
         public void CopySelectedToClipboard()
         {
-            try
-            {
-
-                List<string> paths = SelectedFilePaths();
-                if (paths.Count == 0) return;
-
-                System.Collections.Specialized.StringCollection sc =
-                    new System.Collections.Specialized.StringCollection();
-                foreach (string p in paths) sc.Add(p);
-
-                System.Windows.DataObject data = new System.Windows.DataObject();
-                data.SetFileDropList(sc);
-                Clipboard.SetDataObject(data, true);
-
-                SetNotice("已复制 " + paths.Count + " 个文件到剪贴板");
-            }
-            catch (Exception ex)
-            {
-                Ui.LogError(ex, "复制文件到剪贴板");
-                SetNotice("复制失败：" + ex.Message);
-            }
+            CopySelectedIncludingFolders();
         }
 
         // ========== 来源胶囊行 ==========
@@ -595,7 +651,7 @@ namespace Clover
             Button b = MakeChipButton("", null, true);
             b.Height = 28;
             b.Padding = new Thickness(12, 0, 12, 0);
-            b.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+            b.Margin = new Thickness(0, 0, Ui.S.Sm, chipRow is WrapPanel ? Ui.S.Xs : 0);
             b.Cursor = Cursors.Hand;
             b.Background = isSelected ? Ui.Accent : Ui.SearchBg;
             b.BorderBrush = isSelected ? Ui.Accent : Ui.Line;
@@ -608,13 +664,16 @@ namespace Clover
             string label = f.Name ?? "";
             if (!available) label += "（不可用）";
 
-            b.Content = label;
+            b.Content = new TextBlock { Text = label, TextTrimming = TextTrimming.CharacterEllipsis,
+                TextWrapping = TextWrapping.NoWrap, VerticalAlignment = VerticalAlignment.Center };
+            b.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            b.MaxWidth = SourceChipMaxWidth();
             b.Foreground = isSelected ? Brushes.White : Ui.Fg;
             System.Windows.Automation.AutomationProperties.SetName(b, "来源 " + label + "，" + f.Path);
 
             b.ToolTip = available
-                ? f.Path
-                : (f.Path + "\n\n不可用：目录可能已删除，或外置盘未插入。\n右键可以移除这条记录。");
+                ? label + "\n" + f.Path
+                : (label + "\n" + f.Path + "\n\n不可用：目录可能已删除，或外置盘未插入。\n右键可以移除这条记录。");
 
             b.Click += delegate
             {
@@ -648,12 +707,30 @@ namespace Clover
             return b;
         }
 
+        double SourceChipMaxWidth()
+        {
+            double width = chipRow == null ? 0 : chipRow.ActualWidth;
+            return width > 0 ? Math.Min(280, Math.Max(0, width - Ui.S.Sm)) : 280;
+        }
+
+        void UpdateSourceChipWidths()
+        {
+            if (chipRow == null) return;
+            double maxWidth = SourceChipMaxWidth();
+            foreach (UIElement child in chipRow.Children)
+            {
+                Button chip = child as Button;
+                if (chip != null && chip.Tag is string && chip.Content is TextBlock)
+                    chip.MaxWidth = maxWidth;
+            }
+        }
+
         Button MakeChipButton(string label, Action onClick, bool wide)
         {
             Button b = MakeExtChipButton(label, onClick);
             b.Height = 28;
             b.Padding = new Thickness(wide ? 12 : 10, 0, wide ? 12 : 10, 0);
-            b.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+            b.Margin = new Thickness(0, 0, Ui.S.Sm, chipRow is WrapPanel ? Ui.S.Xs : 0);
             b.Cursor = Cursors.Hand;
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
@@ -779,33 +856,10 @@ namespace Clover
 
         Button MakeExtChipButton(string label, Action onClick)
         {
-            if (fileButtonTemplate == null)
-            {
-                fileButtonTemplate = PanelWindow.MakeButtonTemplate(14);
-                fileButtonTemplate.VisualTree.SetBinding(Border.PaddingProperty, new System.Windows.Data.Binding("Padding")
-                {
-                    RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
-                });
-                fileButtonTemplate.VisualTree.FirstChild.SetBinding(ContentPresenter.HorizontalAlignmentProperty,
-                    new System.Windows.Data.Binding("HorizontalContentAlignment")
-                    {
-                        RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
-                    });
-                Trigger hover = new Trigger { Property = Button.IsMouseOverProperty, Value = true };
-                hover.Setters.Add(new Setter(Border.OpacityProperty, 0.88, "ButtonChrome"));
-                fileButtonTemplate.Triggers.Add(hover);
-                Trigger focus = new Trigger { Property = Button.IsKeyboardFocusedProperty, Value = true };
-                // 模板会冻结 Setter 中直接引用的 Freezable；绑定保留可变主题刷子。
-                focus.Setters.Add(new Setter(Border.BorderBrushProperty,
-                    new System.Windows.Data.Binding { Source = Ui.Accent }, "ButtonChrome"));
-                focus.Setters.Add(new Setter(Border.BorderThicknessProperty, new Thickness(2), "ButtonChrome"));
-                fileButtonTemplate.Triggers.Add(focus);
-                Trigger disabled = new Trigger { Property = Button.IsEnabledProperty, Value = false };
-                disabled.Setters.Add(new Setter(Border.OpacityProperty, 0.45, "ButtonChrome"));
-                fileButtonTemplate.Triggers.Add(disabled);
-            }
             Button b = new Button();
-            b.Template = fileButtonTemplate;
+            b.Template = UiButtons.Template(14);
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
             b.Height = 28;
             b.Padding = new Thickness(10, 0, 10, 0);
             b.Margin = new Thickness(0, 0, Ui.S.Xs, 0);
@@ -866,7 +920,7 @@ namespace Clover
 
                 if (added == 0)
                 {
-                    MessageBox.Show("没有可添加的新后缀。", "四叶草 · 文件");
+                    MessageBox.Show("没有可添加的新后缀。", AppBrand.Text("四叶草 · 文件"));
                     return;
                 }
 
@@ -879,7 +933,7 @@ namespace Clover
         {
             try
             {
-
+                InvalidateItemMenu();
                 int generation = ++loadGeneration;
                 if (loadTimeout != null) loadTimeout.Stop();
                 lastLoad = DateTime.MinValue; // 扫描被切页取消后，下次返回必须重新读取。
@@ -967,6 +1021,8 @@ namespace Clover
         /// <summary>清空列表控件与瞬时状态（不动筛选/排序状态）。</summary>
         void ClearList()
         {
+            InvalidateItemMenu();
+            currentPath = null;
             if (listPanel != null) listPanel.Children.Clear();
             visible = new List<FileScanner.Entry>();
             rowMap.Clear();
@@ -1060,7 +1116,7 @@ namespace Clover
         {
             try
             {
-
+                InvalidateItemMenu();
                 if (listPanel == null) return;
 
                 string anchorPath = anchorIndex >= 0 && anchorIndex < visible.Count ? visible[anchorIndex].Path : null;
@@ -1124,15 +1180,15 @@ namespace Clover
                 visible = byType.GetRange(0, Math.Min(displayLimit, byType.Count));
                 PruneSelection();
                 anchorIndex = anchorPath == null ? -1 : VisibleIndex(anchorPath);
+                if (VisibleIndex(currentPath) < 0) currentPath = null;
                 showSourceColumn = EffectiveSources().Count > 1;
+                compactSourceLayout = ShouldCompactSourceColumn();
 
                 // 删除真正消失的路径缓存；筛选隐藏的行仍可复用，最多为扫描预算大小。
                 HashSet<string> alive = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (FileScanner.Entry item in r.Items) alive.Add(item.Path);
                 foreach (string path in new List<string>(rowMap.Keys))
                     if (!alive.Contains(path)) rowMap.Remove(path);
-                foreach (string path in new List<string>(iconByPath.Keys))
-                    if (!alive.Contains(path)) iconByPath.Remove(path);
 
                 List<UIElement> desired = new List<UIElement>();
                 if (visible.Count > 0) desired.Add(MakeHeader());
@@ -1165,6 +1221,7 @@ namespace Clover
                 {
                     selected.Add(visible[0].Path);
                     anchorIndex = 0;
+                    currentPath = visible[0].Path;
                     hasRenderedRows = true;
                 }
 
@@ -1260,9 +1317,7 @@ namespace Clover
                 g.ColumnDefinitions.Add(new ColumnDefinition());
                 g.ColumnDefinitions[0].Width = new GridLength(32);
                 g.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
-                g.ColumnDefinitions[2].Width = new GridLength(110);
-                g.ColumnDefinitions[3].Width = new GridLength(76);
-                g.ColumnDefinitions[4].Width = new GridLength(showSourceColumn ? 132 : 0);
+                ApplyFileColumns(g);
 
                 // 名称列（第 1 列，占满）
                 FrameworkElement nameH = MakeHeaderCell("名称", FileScanner.SortKey.Name);
@@ -1282,7 +1337,8 @@ namespace Clover
                 TextBlock sourceH = Ui.T("来源", 10.5, Ui.Sub);
                 sourceH.VerticalAlignment = VerticalAlignment.Center;
                 sourceH.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
-                sourceH.Visibility = showSourceColumn ? Visibility.Visible : Visibility.Collapsed;
+                sourceH.Visibility = showSourceColumn && !compactSourceLayout
+                    ? Visibility.Visible : Visibility.Collapsed;
                 Grid.SetColumn(sourceH, 4);
                 g.Children.Add(sourceH);
 
@@ -1343,7 +1399,7 @@ namespace Clover
             {
 
                 Border b = new Border();
-                b.Height = 44;
+                b.Height = compactSourceLayout && showSourceColumn ? 52 : 44;
                 b.CornerRadius = new CornerRadius(Ui.R.Sm);
                 b.Padding = new Thickness(Ui.S.Sm, 0, Ui.S.Sm, 0);
                 b.Margin = new Thickness(0, 0, 0, 2);
@@ -1360,15 +1416,11 @@ namespace Clover
                 g.ColumnDefinitions.Add(new ColumnDefinition());
                 g.ColumnDefinitions[0].Width = new GridLength(32);
                 g.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
-                g.ColumnDefinitions[2].Width = new GridLength(110);
-                g.ColumnDefinitions[3].Width = new GridLength(76);
-                g.ColumnDefinitions[4].Width = new GridLength(showSourceColumn ? 132 : 0);
+                ApplyFileColumns(g);
 
                 // ---- 图标 ----
                 //
-                // 策略：自带图标按路径缓存。
-                //   · .exe / .ico / .msi 等自带图标的 → 走 IconCache（同步取，约 1-3ms）
-                //   · 其余（.txt / .pdf / 文件夹）→ 用矢量轮廓
+                // 关联图标按类型异步复用，自带图标按路径异步读取。
                 FrameworkElement icon = MakeIcon(e);
                 Grid.SetColumn(icon, 0);
                 g.Children.Add(icon);
@@ -1378,6 +1430,11 @@ namespace Clover
                 name.TextTrimming = TextTrimming.CharacterEllipsis;
                 name.ToolTip = e.Path;
                 name.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+                if (compactSourceLayout && showSourceColumn)
+                {
+                    name.VerticalAlignment = VerticalAlignment.Top;
+                    name.Margin = new Thickness(0, 6, Ui.S.Sm, 0);
+                }
                 Grid.SetColumn(name, 1);
                 g.Children.Add(name);
 
@@ -1399,7 +1456,12 @@ namespace Clover
                 source.TextTrimming = TextTrimming.CharacterEllipsis;
                 source.ToolTip = e.SourceRoot;
                 source.Visibility = showSourceColumn ? Visibility.Visible : Visibility.Collapsed;
-                Grid.SetColumn(source, 4);
+                Grid.SetColumn(source, compactSourceLayout ? 1 : 4);
+                if (compactSourceLayout && showSourceColumn)
+                {
+                    source.VerticalAlignment = VerticalAlignment.Bottom;
+                    source.Margin = new Thickness(0, 0, Ui.S.Sm, 5);
+                }
                 g.Children.Add(source);
                 System.Windows.Automation.AutomationProperties.SetName(b,
                     e.Name + (e.IsFolder ? "，文件夹" : "，文件") + "，来源 " + e.SourceRoot);
@@ -1412,7 +1474,18 @@ namespace Clover
                 };
                 b.MouseLeave += delegate
                 {
-                    if (!selected.Contains(e.Path)) b.Background = Brushes.Transparent;
+                    if (!selected.Contains(e.Path))
+                        b.Background = b.IsKeyboardFocused ? Ui.Hover : Brushes.Transparent;
+                };
+                b.GotKeyboardFocus += delegate
+                {
+                    if (VisibleIndex(e.Path) >= 0) currentPath = e.Path;
+                    if (!selected.Contains(e.Path)) b.Background = Ui.Hover;
+                };
+                b.LostKeyboardFocus += delegate
+                {
+                    if (!selected.Contains(e.Path))
+                        b.Background = b.IsMouseOver ? Ui.Hover : Brushes.Transparent;
                 };
 
                 // ---- 双击：打开（文件 → 默认程序；文件夹 → 资源管理器）----
@@ -1436,20 +1509,23 @@ namespace Clover
                     dragStart = new Point(double.NaN, double.NaN);   // 松手清起点
                     if (ev.ClickCount == 2) return;                  // 双击的 Up 不当作单击
                     HandleRowClick(e, VisibleIndex(e.Path), ev);
+                    b.Focus();
                 };
 
                 b.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs ev)
                 {
                     ev.Handled = true;
                     // 右键时如果这项没被选中，先只选它（资源管理器行为）
-                    if (!selected.Contains(e.Path))
-                    {
-                        selected.Clear();
-                        selected.Add(e.Path);
-                        anchorIndex = VisibleIndex(e.Path);
-                        UpdateSelectionVisuals();
-                    }
+                    SelectMenuTarget(e);
+                    b.Focus();
                     ShowItemMenu(e);
+                };
+                b.KeyDown += delegate(object s, KeyEventArgs ev)
+                {
+                    if (!Ui.IsContextMenuKey(Ui.EffectiveKey(ev), Keyboard.Modifiers)) return;
+                    SelectMenuTarget(e);
+                    ShowItemMenu(e, true);
+                    ev.Handled = true;
                 };
 
                 // ---- 拖出（只允许复制）----
@@ -1541,12 +1617,40 @@ namespace Clover
             source.Text = SourceLabel(item.SourceRoot);
             source.ToolTip = item.SourceRoot;
             source.Visibility = showSourceColumn ? Visibility.Visible : Visibility.Collapsed;
-            grid.ColumnDefinitions[4].Width = new GridLength(showSourceColumn ? 132 : 0);
+            ApplyFileColumns(grid);
+            TextBlock name = (TextBlock)grid.Children[1];
+            row.Height = compactSourceLayout && showSourceColumn ? 52 : 44;
+            name.VerticalAlignment = compactSourceLayout && showSourceColumn
+                ? VerticalAlignment.Top : VerticalAlignment.Center;
+            name.Margin = compactSourceLayout && showSourceColumn
+                ? new Thickness(0, 6, Ui.S.Sm, 0) : new Thickness(0, 0, Ui.S.Sm, 0);
+            Grid.SetColumn(source, compactSourceLayout ? 1 : 4);
+            source.VerticalAlignment = compactSourceLayout
+                ? VerticalAlignment.Bottom : VerticalAlignment.Center;
+            source.Margin = compactSourceLayout
+                ? new Thickness(0, 0, Ui.S.Sm, 5) : new Thickness(Ui.S.Sm, 0, 0, 0);
             row.BeginAnimation(UIElement.OpacityProperty, null);
             row.Opacity = 1;
             row.Visibility = Visibility.Visible;
             System.Windows.Automation.AutomationProperties.SetName(row,
                 item.Name + (item.IsFolder ? "，文件夹" : "，文件") + "，来源 " + item.SourceRoot);
+        }
+
+        bool ShouldCompactSourceColumn()
+        {
+            return showSourceColumn && listPanel != null
+                && listPanel.ActualWidth > 0 && listPanel.ActualWidth < 720;
+        }
+
+        void ApplyFileColumns(Grid grid)
+        {
+            if (grid == null || grid.ColumnDefinitions.Count < 5) return;
+            grid.ColumnDefinitions[0].Width = new GridLength(32);
+            grid.ColumnDefinitions[1].Width = new GridLength(1, GridUnitType.Star);
+            grid.ColumnDefinitions[2].Width = new GridLength(compactSourceLayout ? 88 : 110);
+            grid.ColumnDefinitions[3].Width = new GridLength(compactSourceLayout ? 64 : 76);
+            grid.ColumnDefinitions[4].Width = new GridLength(
+                showSourceColumn && !compactSourceLayout ? 132 : 0);
         }
 
         // ========== 选中保持 ==========
@@ -1580,7 +1684,7 @@ namespace Clover
                     return;
                 }
 
-                FileScanner.Entry e = FirstSelected();
+                FileScanner.Entry e = CurrentEntry();
                 if (e == null) return;
 
                 if (preview == null) preview = new FilePreviewPopup(owner);
@@ -1610,7 +1714,7 @@ namespace Clover
         /// ── 按需确认 ──
         ///
         ///   · 单个**文件** → 不弹确认，直接删，底部出「已移到回收站 [撤销]」
-        ///   · 文件夹 / 一次超过 5 项 → 弹确认框（警告图标，「移到回收站 / 取消」，
+        ///   · 文件夹 / 一次多项 → 弹确认框（警告图标，「移到回收站 / 取消」，
         ///     默认焦点「取消」，居中于面板）
         ///
         /// ── 删除后 ──
@@ -1639,7 +1743,7 @@ namespace Clover
                 foreach (FileScanner.Entry t in targets)
                     if (t.IsFolder) { hasFolder = true; break; }
 
-                if (hasFolder || targets.Count > 5) needConfirm = true;
+                if (hasFolder || targets.Count > 1) needConfirm = true;
 
                 if (needConfirm)
                 {
@@ -1701,17 +1805,17 @@ namespace Clover
                         MessageBox.Show(owner,
                             "提权删除完成 " + elevatedOk.Count + " 项，失败 " + elevatedFail.Count + " 项。"
                             + (string.IsNullOrEmpty(firstErr) ? "" : "\r\n\r\n" + firstErr),
-                            "四叶草 · 删除", MessageBoxButton.OK, MessageBoxImage.Warning);
+                            AppBrand.Text("四叶草 · 删除"), MessageBoxButton.OK, MessageBoxImage.Warning);
                         // MessageBox 也会失焦，补一次
-                        try { if (owner != null) owner.ReActivate(); } catch { }
+                        try { RestoreListFocus(); } catch { }
                     }
                     return;
                 }
 
                 // ---- 非权限失败 ----
-                MessageBox.Show(owner, res.Message, "四叶草 · 移到回收站",
+                MessageBox.Show(owner, res.Message, AppBrand.Text("四叶草 · 移到回收站"),
                     MessageBoxButton.OK, MessageBoxImage.Warning);
-                try { if (owner != null) owner.ReActivate(); } catch { }
+                try { RestoreListFocus(); } catch { }
             }
             catch (Exception ex) { Ui.LogError(ex, "删除文件"); }
         }
@@ -1748,6 +1852,7 @@ namespace Clover
                     {
                         selected.Clear();
                         anchorIndex = -1;
+                        currentPath = null;
                     }
                     else
                     {
@@ -1759,6 +1864,7 @@ namespace Clover
                         {
                             selected.Add(visible[target].Path);
                             anchorIndex = target;
+                            currentPath = visible[target].Path;
                         }
                     }
                     UpdateSelectionVisuals();
@@ -1784,7 +1890,7 @@ namespace Clover
                     // 点按钮后焦点回到文件列表（不跳搜索框、不触发面板外收起）
                     undoBar.OnFocusBack = delegate
                     {
-                        try { if (listPanel != null) listPanel.Focus(); } catch { }
+                        try { RestoreListFocus(); } catch { }
                     };
 
                     if (undoBar != null)
@@ -1800,13 +1906,13 @@ namespace Clover
                                 {
                                     Refresh(true);
                                     MessageBox.Show(owner, "已还原 " + n + " 项。",
-                                        "四叶草 · 撤销", MessageBoxButton.OK, MessageBoxImage.Information);
+                                        AppBrand.Text("四叶草 · 撤销"), MessageBoxButton.OK, MessageBoxImage.Information);
                                 }
                                 else
                                 {
                                     MessageBox.Show(owner,
                                         "自动还原失败。\r\n\r\n请手动到回收站右键该文件 → 还原。",
-                                        "四叶草 · 撤销", MessageBoxButton.OK, MessageBoxImage.Information);
+                                        AppBrand.Text("四叶草 · 撤销"), MessageBoxButton.OK, MessageBoxImage.Information);
                                 }
                             }
                             catch (Exception ex) { Ui.LogError(ex, "撤销删除"); }
@@ -1818,7 +1924,7 @@ namespace Clover
                 //
                 // SHFileOperation（回收站删除）由 explorer.exe 代理执行，
                 // 会抢走前台激活状态。不恢复的话，删完文件面板键盘就不响应了。
-                try { if (owner != null) owner.ReActivate(); } catch { }
+                try { RestoreListFocus(); } catch { }
             }
             catch (Exception ex) { Ui.LogError(ex, "删除收尾"); }
         }
@@ -1890,7 +1996,7 @@ namespace Clover
                 dlg.SizeToContent = SizeToContent.WidthAndHeight;
                 dlg.Owner = owner;
                 dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-                dlg.Title = "四叶草 · 移到回收站";
+                dlg.Title = AppBrand.Text("四叶草 · 移到回收站");
 
                 bool result = false;
 
@@ -1941,31 +2047,37 @@ namespace Clover
                 btns.Orientation = Orientation.Horizontal;
                 btns.HorizontalAlignment = HorizontalAlignment.Right;
 
-                Border cancelBtn = new Border();
-                cancelBtn.CornerRadius = new CornerRadius(14);
+                Button cancelBtn = new Button();
+                cancelBtn.Template = UiButtons.Template(14);
                 cancelBtn.Padding = new Thickness(14, 5, 14, 5);
                 cancelBtn.Cursor = System.Windows.Input.Cursors.Hand;
                 cancelBtn.Background = Ui.SearchBg;
                 cancelBtn.BorderBrush = Ui.Line;
                 cancelBtn.BorderThickness = new Thickness(1);
                 cancelBtn.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+                cancelBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                cancelBtn.VerticalContentAlignment = VerticalAlignment.Center;
                 TextBlock ct = Ui.T("取消", 11.5, Ui.Fg);
                 ct.VerticalAlignment = VerticalAlignment.Center;
-                cancelBtn.Child = ct;
-                cancelBtn.MouseLeftButtonUp += delegate { dlg.Close(); };
+                cancelBtn.Content = ct;
+                System.Windows.Automation.AutomationProperties.SetName(cancelBtn, "取消移到回收站");
+                cancelBtn.Click += delegate { dlg.Close(); };
                 btns.Children.Add(cancelBtn);
 
-                Border okBtn = new Border();
-                okBtn.CornerRadius = new CornerRadius(14);
+                Button okBtn = new Button();
+                okBtn.Template = UiButtons.Template(14);
                 okBtn.Padding = new Thickness(14, 5, 14, 5);
                 okBtn.Cursor = System.Windows.Input.Cursors.Hand;
                 okBtn.Background = Ui.Accent;
                 okBtn.BorderBrush = Ui.Accent;
                 okBtn.BorderThickness = new Thickness(1);
+                okBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+                okBtn.VerticalContentAlignment = VerticalAlignment.Center;
                 TextBlock ot = Ui.T("移到回收站", 11.5, Brushes.White);
                 ot.VerticalAlignment = VerticalAlignment.Center;
-                okBtn.Child = ot;
-                okBtn.MouseLeftButtonUp += delegate { result = true; dlg.Close(); };
+                okBtn.Content = ot;
+                System.Windows.Automation.AutomationProperties.SetName(okBtn, "确认移到回收站");
+                okBtn.Click += delegate { result = true; dlg.Close(); };
                 btns.Children.Add(okBtn);
 
                 col.Children.Add(btns);
@@ -1976,17 +2088,15 @@ namespace Clover
                 dlg.PreviewKeyDown += delegate(object s, System.Windows.Input.KeyEventArgs e)
                 {
                     if (e.Key == System.Windows.Input.Key.Escape) { dlg.Close(); e.Handled = true; }
-                    else if (e.Key == System.Windows.Input.Key.Enter)
-                    {
-                        // 回车不默认删除 —— 默认焦点在「取消」，这里也不给 Enter 删除
-                        e.Handled = true;
-                    }
                 };
+
+                // 默认落在取消；只有用户主动 Tab 到删除按钮后，Enter/空格才会执行。
+                dlg.Loaded += delegate { try { cancelBtn.Focus(); } catch { } };
 
                 dlg.ShowDialog();
 
                 // 模态框关闭后把焦点还回面板（否则键盘不响应）
-                try { if (owner != null) owner.ReActivate(); } catch { }
+                try { RestoreListFocus(); } catch { }
                 return result;
             }
             catch (Exception ex)
@@ -2040,46 +2150,52 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "复制文件"); }
         }
 
-        /// <summary>自带图标按路径缓存；取不到用矢量轮廓。</summary>
+        /// <summary>24px 稳定图标槽：立即兜底，后台原位填入系统关联图标。</summary>
         FrameworkElement MakeIcon(FileScanner.Entry e)
         {
-            // 文件夹：固定字形
-            if (e.IsFolder)
+            Grid slot = new Grid { Width = 24, Height = 24, VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center, IsHitTestVisible = false };
+            string key = e.IsFolder || !FileListIcons.HasOwnIcon(e.Ext)
+                ? FileListIcons.Key(e.Ext, e.IsFolder)
+                : "path:" + e.Path + ":" + e.Modified.Ticks + ":" + e.Size;
+            slot.Tag = key;
+            slot.Children.Add(MakeFileOutline(e.IsFolder));
+            ImageSource source;
+            bool own = !e.IsFolder && FileListIcons.HasOwnIcon(e.Ext);
+            bool hit = own ? AppIcons.TryGetCached(e.Path, out source) : FileListIcons.TryGet(key, out source);
+            if (hit) { ApplyFileIcon(slot, source); return slot; }
+
+            // 队列不强持有页面；切页、删行、类型变化或 Dispose 后迟到结果不污染新图标。
+            WeakReference page = new WeakReference(this), target = new WeakReference(slot);
+            var dispatcher = listPanel.Dispatcher;
+            Action<ImageSource> complete = delegate(ImageSource image)
             {
-                return MakeFileOutline(true);
-            }
-
-            // 自带图标的扩展名才走 IconCache（其余用字形，零成本）
-            string ext = e.Ext ?? "";
-            bool hasOwnIcon = ext == ".exe" || ext == ".ico" || ext == ".msi"
-                || ext == ".url" || ext == ".appref-ms";
-
-            if (hasOwnIcon)
+                if (dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished) return;
+                dispatcher.BeginInvoke(new Action(delegate
+                {
+                    FilesTabView view = page.Target as FilesTabView;
+                    Grid current = target.Target as Grid;
+                    if (view == null || view.disposed || current == null || Convert.ToString(current.Tag) != key) return;
+                    ApplyFileIcon(current, image);
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            };
+            try
             {
-                ImageSource img = null;
-                // 同扩展名的程序不一定同图标，按路径缓存自带图标。
-                if (!iconByPath.TryGetValue(e.Path, out img))
-                {
-                    // 该扩展名第一次出现：真的去取一次
-                    try { img = IconCache.Get(e.Path); }
-                    catch { img = null; }
-                    iconByPath[e.Path] = img;   // 存 null 也存 —— 表示"取过了，没有"
-                }
-
-                if (img != null)
-                {
-                    Image im = new Image();
-                    im.Source = img;
-                    im.Width = 20;
-                    im.Height = 20;
-                    im.Stretch = Stretch.Uniform;
-                    im.VerticalAlignment = VerticalAlignment.Center;
-                    im.HorizontalAlignment = HorizontalAlignment.Center;
-                    return im;
-                }
+                if (own) AppIcons.GetAsync(e.Path, complete);
+                else FileListIcons.GetAsync(key, complete);
             }
+            catch { }
+            return slot;
+        }
 
-            return MakeFileOutline(false);
+        static void ApplyFileIcon(Grid slot, ImageSource source)
+        {
+            if (source == null) return;
+            slot.Children.Clear();
+            Image image = new Image { Source = source, Width = 24, Height = 24, Stretch = Stretch.Uniform,
+                SnapsToDevicePixels = true, IsHitTestVisible = false };
+            RenderOptions.SetBitmapScalingMode(image, BitmapScalingMode.HighQuality);
+            slot.Children.Add(image);
         }
 
         // 用矢量轮廓兜底，不依赖系统图标字体，避免缺字时文件夹变成方框。
@@ -2092,7 +2208,7 @@ namespace Clover
             outline.Stroke = folder ? Ui.Accent : Ui.Sub;
             outline.StrokeThickness = 1.3;
             outline.Fill = folder ? Ui.AccentSoft : Brushes.Transparent;
-            outline.Width = 20; outline.Height = 20;
+            outline.Width = 24; outline.Height = 24;
             outline.Stretch = Stretch.Uniform;
             outline.VerticalAlignment = VerticalAlignment.Center;
             outline.HorizontalAlignment = HorizontalAlignment.Center;
@@ -2102,6 +2218,21 @@ namespace Clover
 
         // ========== 选择 ==========
 
+        void ClearSelection()
+        {
+            try
+            {
+                if (selected.Count == 0 && anchorIndex < 0 && currentPath == null) return;
+                selected.Clear();
+                anchorIndex = -1;
+                currentPath = null;
+                dragStart = new Point(double.NaN, double.NaN);
+                ClosePreview();
+                UpdateSelectionVisuals();
+            }
+            catch (Exception ex) { Ui.LogError(ex, "清空文件选择"); }
+        }
+
         void HandleRowClick(FileScanner.Entry e, int index, MouseButtonEventArgs ev)
         {
             try
@@ -2109,6 +2240,7 @@ namespace Clover
 
                 bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
                 bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+                currentPath = e.Path;
 
                 if (shift && anchorIndex >= 0 && anchorIndex < visible.Count)
                 {
@@ -2138,27 +2270,40 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "文件行点击"); }
         }
 
-        void MoveSelection(int delta)
+        void MoveSelection(int delta, bool extend)
         {
             try
             {
 
                 if (visible.Count == 0) return;
 
-                int cur = -1;
-                if (anchorIndex >= 0 && anchorIndex < visible.Count) cur = anchorIndex;
+                int cur = VisibleIndex(currentPath);
+                if (cur < 0 && anchorIndex >= 0 && anchorIndex < visible.Count) cur = anchorIndex;
 
                 int next = cur < 0 ? 0 : Math.Max(0, Math.Min(visible.Count - 1, cur + delta));
 
                 selected.Clear();
-                selected.Add(visible[next].Path);
-                anchorIndex = next;
+                if (extend)
+                {
+                    if (anchorIndex < 0 || anchorIndex >= visible.Count) anchorIndex = cur < 0 ? next : cur;
+                    for (int i = Math.Min(anchorIndex, next); i <= Math.Max(anchorIndex, next); i++)
+                        selected.Add(visible[i].Path);
+                }
+                else
+                {
+                    selected.Add(visible[next].Path);
+                    anchorIndex = next;
+                }
+                currentPath = visible[next].Path;
                 UpdateSelectionVisuals();
 
                 // 滚到可见
                 Border row;
                 if (rowMap.TryGetValue(visible[next].Path, out row) && row != null)
+                {
+                    row.Focus();
                     row.BringIntoView();
+                }
             }
             catch (Exception ex) { Ui.LogError(ex, "移动选择"); }
         }
@@ -2167,12 +2312,13 @@ namespace Clover
         {
             try
             {
-
+                InvalidateItemMenu();
                 foreach (KeyValuePair<string, Border> kv in rowMap)
                 {
                     if (kv.Value == null) continue;
                     bool on = selected.Contains(kv.Key);
-                    kv.Value.Background = on ? Ui.AccentSoft : Brushes.Transparent;
+                    kv.Value.Background = on ? Ui.AccentSoft
+                        : kv.Value.IsKeyboardFocused || kv.Value.IsMouseOver ? Ui.Hover : Brushes.Transparent;
                 }
             }
             catch { }
@@ -2206,7 +2352,13 @@ namespace Clover
             return null;
         }
 
-        /// <summary>选中项里的文件路径（**不含文件夹** —— FileDrop 只放文件）。</summary>
+        FileScanner.Entry CurrentEntry()
+        {
+            int index = VisibleIndex(currentPath);
+            return index >= 0 ? visible[index] : FirstSelected();
+        }
+
+        /// <summary>现有拖出流程使用的普通文件路径；剪贴板复制另含文件夹。</summary>
         List<string> SelectedFilePaths()
         {
             List<string> list = new List<string>();
@@ -2227,17 +2379,75 @@ namespace Clover
 
         // ========== 右键菜单 ==========
 
-        void ShowItemMenu(FileScanner.Entry e)
+        void SelectMenuTarget(FileScanner.Entry entry)
+        {
+            currentPath = entry.Path;
+            if (selected.Contains(entry.Path)) return;
+            selected.Clear();
+            selected.Add(entry.Path);
+            anchorIndex = VisibleIndex(entry.Path);
+            UpdateSelectionVisuals();
+        }
+
+        void RestoreListFocus(Border preferred = null)
+        {
+            Border focused = preferred ?? Keyboard.FocusedElement as Border;
+            foreach (FileScanner.Entry item in visible)
+            {
+                Border candidate;
+                if (selected.Contains(item.Path) && rowMap.TryGetValue(item.Path, out candidate)
+                    && ReferenceEquals(candidate, focused) && candidate.IsVisible)
+                {
+                    if (owner != null) owner.ReActivate(candidate);
+                    else candidate.Focus();
+                    return;
+                }
+            }
+            FileScanner.Entry entry = FirstSelected();
+            Border row;
+            IInputElement target = entry != null && rowMap.TryGetValue(entry.Path, out row) && row.IsVisible
+                ? (IInputElement)row : listPanel;
+            if (owner != null) owner.ReActivate(target);
+            else if (target != null) Keyboard.Focus(target);
+        }
+
+        ContextMenu activeItemMenu;
+        int itemMenuGeneration;
+
+        void InvalidateItemMenu()
+        {
+            unchecked { itemMenuGeneration++; }
+            ContextMenu previous = activeItemMenu;
+            activeItemMenu = null;
+            if (previous != null) previous.IsOpen = false;
+        }
+
+        bool IsMenuTargetCurrent(int ticket, string path, HashSet<string> selection)
+        {
+            if (ticket != itemMenuGeneration || disposed || VisibleIndex(path) < 0
+                || !selected.SetEquals(selection)) return false;
+            if (!File.Exists(path) && !Directory.Exists(path)) return false;
+            foreach (string target in selection)
+                if (!File.Exists(target) && !Directory.Exists(target)) return false;
+            return true;
+        }
+
+        void ShowItemMenu(FileScanner.Entry e, bool keyboard = false)
         {
             try
             {
-
+                if (e == null || VisibleIndex(e.Path) < 0) return;
+                InvalidateItemMenu();
+                int ticket = itemMenuGeneration;
+                HashSet<string> selection = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+                Func<bool> valid = delegate { return IsMenuTargetCurrent(ticket, e.Path, selection); };
                 ContextMenu cm = new ContextMenu();
 
                 MenuItem open = new MenuItem();
                 open.Header = "打开";
                 open.Click += delegate
                 {
+                    if (!valid()) return;
                     if (e.IsFolder) OpenInExplorer(e.Path);
                     else OpenFile(e.Path);
                 };
@@ -2248,7 +2458,7 @@ namespace Clover
                 {
                     MenuItem openWith = new MenuItem();
                     openWith.Header = "打开方式…";
-                    openWith.Click += delegate { OpenWith(e.Path); };
+                    openWith.Click += delegate { if (valid()) OpenWith(e.Path); };
                     cm.Items.Add(openWith);
 
                     // 以管理员身份运行：只对可执行类扩展名显示
@@ -2258,6 +2468,7 @@ namespace Clover
                         runAs.Header = "以管理员身份运行";
                         runAs.Click += delegate
                         {
+                            if (!valid()) return;
                             if (!Elevation.RunAs(e.Path, null))
                             {
                                 // UAC 被取消是静默的；只有真的失败才提示
@@ -2270,20 +2481,20 @@ namespace Clover
 
                 MenuItem reveal = new MenuItem();
                 reveal.Header = "在资源管理器中显示";
-                reveal.Click += delegate { RevealInExplorer(e.Path); };
+                reveal.Click += delegate { if (valid()) RevealInExplorer(e.Path); };
                 cm.Items.Add(reveal);
 
                 cm.Items.Add(new Separator());
 
                 MenuItem copy = new MenuItem();
                 copy.Header = "复制路径";
-                copy.Click += delegate { CopyText(e.Path); };
+                copy.Click += delegate { if (valid()) CopyText(e.Path); };
                 cm.Items.Add(copy);
 
                 // 复制文件：把选中项（含文件夹）放进剪贴板 FileDrop
                 MenuItem copyFile = new MenuItem();
                 copyFile.Header = "复制文件";
-                copyFile.Click += delegate { CopySelectedIncludingFolders(); };
+                copyFile.Click += delegate { if (valid()) CopySelectedIncludingFolders(); };
                 cm.Items.Add(copyFile);
 
                 cm.Items.Add(new Separator());
@@ -2291,16 +2502,22 @@ namespace Clover
                 // 删除：进回收站，带确认
                 MenuItem del = new MenuItem();
                 del.Header = "删除（移到回收站）";
-                del.Click += delegate { ConfirmAndDelete(); };
+                del.Click += delegate { if (valid()) ConfirmAndDelete(); };
                 cm.Items.Add(del);
 
                 cm.Items.Add(new Separator());
                 MenuItem props = new MenuItem();
                 props.Header = "属性";
-                props.Click += delegate { ShowProperties(e.Path); };
+                props.Click += delegate { if (valid()) ShowProperties(e.Path); };
                 cm.Items.Add(props);
 
-                cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                Border anchor;
+                rowMap.TryGetValue(e.Path, out anchor);
+                cm.PlacementTarget = anchor;
+                cm.Placement = keyboard ? System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    : System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                cm.Closed += delegate { if (keyboard && active && valid()) RestoreListFocus(anchor); };
+                activeItemMenu = cm;
                 cm.IsOpen = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "文件右键菜单"); }
@@ -2319,7 +2536,7 @@ namespace Clover
                 {
                     MessageBox.Show(
                         "最多添加 " + FileFolders.MaxFolders + " 个文件夹。\r\n请先移除一些再添加。",
-                        "四叶草 · 文件", MessageBoxButton.OK, MessageBoxImage.Information);
+                        AppBrand.Text("四叶草 · 文件"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
 
@@ -2329,7 +2546,7 @@ namespace Clover
                 FileFolders.AddResult r = folders.Add(picked);
                 if (r != FileFolders.AddResult.Ok)
                 {
-                    MessageBox.Show(AddResultText(r, picked), "四叶草 · 文件",
+                    MessageBox.Show(AddResultText(r, picked), AppBrand.Text("四叶草 · 文件"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -2342,12 +2559,13 @@ namespace Clover
 
                 selected.Clear();
                 anchorIndex = -1;
+                currentPath = null;
                 Refresh(true);
             }
             catch (Exception ex)
             {
                 Ui.LogError(ex, "添加文件夹");
-                MessageBox.Show("添加失败：" + ex.Message, "四叶草 · 文件");
+                MessageBox.Show("添加失败：" + ex.Message, AppBrand.Text("四叶草 · 文件"));
             }
         }
 
@@ -2381,7 +2599,7 @@ namespace Clover
             catch (Exception ex)
             {
                 Ui.LogError(ex, "选目录对话框");
-                MessageBox.Show("打不开选目录对话框：" + ex.Message, "四叶草 · 文件");
+                MessageBox.Show("打不开选目录对话框：" + ex.Message, AppBrand.Text("四叶草 · 文件"));
                 return null;
             }
         }
@@ -2418,7 +2636,7 @@ namespace Clover
 
                 if (!folders.Rename(f.Path, input))
                 {
-                    MessageBox.Show("重命名失败。", "四叶草 · 文件");
+                    MessageBox.Show("重命名失败。", AppBrand.Text("四叶草 · 文件"));
                     return;
                 }
                 Refresh(true);
@@ -2435,14 +2653,14 @@ namespace Clover
                     "从列表里移除「" + (f.Name ?? "") + "」？\r\n\r\n"
                     + "只移除记录，不会删除磁盘上的文件夹和文件。\r\n"
                     + f.Path,
-                    "四叶草 · 文件",
+                    AppBrand.Text("四叶草 · 文件"),
                     MessageBoxButton.OKCancel, MessageBoxImage.Question);
 
                 if (r != MessageBoxResult.OK) return;
 
                 if (!folders.Remove(f.Path))
                 {
-                    MessageBox.Show("移除失败。", "四叶草 · 文件");
+                    MessageBox.Show("移除失败。", AppBrand.Text("四叶草 · 文件"));
                     return;
                 }
 
@@ -2455,6 +2673,7 @@ namespace Clover
 
                 selected.Clear();
                 anchorIndex = -1;
+                currentPath = null;
                 Refresh(true);
             }
             catch (Exception ex) { Ui.LogError(ex, "移除文件夹"); }
@@ -2469,7 +2688,7 @@ namespace Clover
 
                 if (!Directory.Exists(path))
                 {
-                    MessageBox.Show("目录不存在：\r\n" + path, "四叶草 · 文件");
+                    MessageBox.Show("目录不存在：\r\n" + path, AppBrand.Text("四叶草 · 文件"));
                     return;
                 }
                 System.Diagnostics.Process.Start("explorer.exe", "\"" + path + "\"");
@@ -2483,7 +2702,7 @@ namespace Clover
             {
                 if (!File.Exists(path))
                 {
-                    MessageBox.Show(owner, "文件不存在：\r\n" + path, "四叶草 · 文件");
+                    MessageBox.Show(owner, "文件不存在：\r\n" + path, AppBrand.Text("四叶草 · 文件"));
                     return;
                 }
 
@@ -2502,13 +2721,13 @@ namespace Clover
                         if (AskElevate("打开「" + Path.GetFileName(path) + "」", false))
                         {
                             if (!Elevation.OpenAs(path))
-                                MessageBox.Show(owner, "提权打开失败或被取消。", "四叶草 · 文件");
+                                MessageBox.Show(owner, "提权打开失败或被取消。", AppBrand.Text("四叶草 · 文件"));
                         }
                         return;
                     }
 
                     Ui.LogError(ex, "打开文件");
-                    MessageBox.Show(owner, "打不开这个文件：\r\n" + ex.Message, "四叶草 · 文件");
+                    MessageBox.Show(owner, "打不开这个文件：\r\n" + ex.Message, AppBrand.Text("四叶草 · 文件"));
                 }
             }
             catch (Exception ex)
@@ -2536,7 +2755,7 @@ namespace Clover
                 }
 
                 MessageBoxResult r = MessageBox.Show(owner, msg,
-                    "四叶草 · 需要管理员权限",
+                    AppBrand.Text("四叶草 · 需要管理员权限"),
                     MessageBoxButton.OKCancel, MessageBoxImage.Warning,
                     MessageBoxResult.Cancel);   // ★ 默认焦点在「取消」
 
@@ -2559,7 +2778,7 @@ namespace Clover
             catch (Exception ex)
             {
                 Ui.LogError(ex, "打开方式");
-                MessageBox.Show("打不开「打开方式」对话框：\r\n" + ex.Message, "四叶草 · 文件");
+                MessageBox.Show("打不开「打开方式」对话框：\r\n" + ex.Message, AppBrand.Text("四叶草 · 文件"));
             }
         }
 
@@ -2598,7 +2817,7 @@ namespace Clover
             catch (Exception ex)
             {
                 Ui.LogError(ex, "显示属性");
-                MessageBox.Show("打不开属性对话框：\r\n" + ex.Message, "四叶草 · 文件");
+                MessageBox.Show("打不开属性对话框：\r\n" + ex.Message, AppBrand.Text("四叶草 · 文件"));
             }
         }
 

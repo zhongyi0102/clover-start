@@ -77,12 +77,7 @@ namespace Clover
 
         internal static bool IsCommonByUsage(AppItem a, long dismissedAt, long nowTicks)
         {
-            if (a == null) return false;
-            if (a.Hidden || a.ExcludedEntry || a.Role != AppRole.User || a.LowValue) return false;
-            if (a.Usage <= 0) return false;                   // 没有使用记录 → 不进
-            if (string.IsNullOrEmpty(a.Path)) return false;   // 无路径 → 无法记录/去重
-            if (dismissedAt > 0 && a.LastUsed <= dismissedAt) return false;
-            return a.LastUsed > nowTicks - UsageStore.RecentWindowTicks && a.LastUsed <= nowTicks;
+            return CommonUsagePolicy.IsEligible(a, dismissedAt, nowTicks);
         }
 
 
@@ -274,7 +269,10 @@ namespace Clover
                 if (contentScroll == null) return;
 
                 double target;
-                if (!scrollOffsets.TryGetValue(current, out target) || target <= 0) return;
+                // 新页面没有历史记录时应从顶部开始，不能沿用前一个长列表的偏移。
+                // 已记录 0 也走同一路径，确保页面切换语义稳定。
+                if (!scrollOffsets.TryGetValue(current, out target)) target = 0;
+                if (target < 0) target = 0;
 
                 // 布局没跑完就设偏移会被钳掉，先强制布局
                 contentScroll.UpdateLayout();
@@ -592,17 +590,6 @@ namespace Clover
             b.BorderThickness = new Thickness(0, 0, 0, 1);
             b.Background = Brushes.Transparent;
             b.HorizontalAlignment = HorizontalAlignment.Stretch;
-            try
-            {
-                b.SetBinding(FrameworkElement.WidthProperty,
-                    new System.Windows.Data.Binding("ActualWidth")
-                    {
-                        Source = tilePanel,
-                        Mode = System.Windows.Data.BindingMode.OneWay
-                    });
-            }
-            catch { }
-
             Grid row = new Grid();
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             row.ColumnDefinitions.Add(new ColumnDefinition
@@ -633,7 +620,7 @@ namespace Clover
         Border MakeCommonListHeader(int count)
         {
             string mode = CommonManualSort() ? "手动排序" : "自动排序";
-            string hint = mode + " · 3 天未使用自动移除";
+            string hint = mode + " · 面板启动记录 · 3 天未用退出本页";
             Border header = MakeCommonSectionHeader("常用", count, hint);
             header.Tag = TileSectionCommonTag;
             Grid row = header.Child as Grid;
@@ -733,7 +720,7 @@ namespace Clover
                 {
                     glyph = "\uE7C3";                                   // 页面
                     tip = "没有可显示的应用";
-                    sub = "右键四叶草 →「重新扫描应用」可以重新识别";
+                    sub = "右下角「重新扫描应用」可以重新识别";
                 }
 
                 StackPanel empty = new StackPanel();
@@ -779,7 +766,8 @@ namespace Clover
         /// <summary>刷新底部计数与两个可点击入口，不触碰磁贴或其它界面结构。</summary>
         void RefreshFooterCount(bool searching)
         {
-            if (footerCount == null || catalog == null) return;
+            if (footerCount == null || catalog == null || current == FilesCategory || IsDeskTab(current)) return;
+            footerCount.ToolTip = null;
 
             int visible = VisibleAppCount();
             if (searching)
@@ -805,11 +793,13 @@ namespace Clover
 
                 Hyperlink link = new Hyperlink();
                 link.Focusable = true;
-                link.Inlines.Add(new Run("收起/隐藏 " + hiddenCount + " 个"));
+                link.Inlines.Add(new Run("已隐藏 " + hiddenCount + " 个"));
                 link.Foreground = Ui.AccentText;
-                link.TextDecorations = null;
+                link.TextDecorations = TextDecorations.Underline;
                 link.Cursor = System.Windows.Input.Cursors.Hand;
                 link.ToolTip = "点击查看并恢复已隐藏的应用";
+                AutomationProperties.SetName(link, "查看已隐藏的应用");
+                AutomationProperties.SetHelpText(link, "打开隐藏管理，不启动应用");
                 link.Click += delegate
                 {
                     try { ShowHiddenItems(); }
@@ -828,9 +818,11 @@ namespace Clover
                 lowLink.Focusable = true;
                 lowLink.Inlines.Add(new Run(lowCount + " 个低价值"));
                 lowLink.Foreground = Ui.AccentText;
-                lowLink.TextDecorations = null;
+                lowLink.TextDecorations = TextDecorations.Underline;
                 lowLink.Cursor = System.Windows.Input.Cursors.Hand;
                 lowLink.ToolTip = "点击查看低价值清单，可批量取消标记";
+                AutomationProperties.SetName(lowLink, "查看低价值应用");
+                AutomationProperties.SetHelpText(lowLink, "打开低价值清单，不启动应用");
                 lowLink.Click += delegate
                 {
                     try { ShowLowValueList(); }
@@ -1084,18 +1076,6 @@ namespace Clover
             b.BorderThickness = new Thickness(0, 0, 0, 1);   // 下边一条细线，像分组分隔
             b.Background = Brushes.Transparent;
             b.HorizontalAlignment = HorizontalAlignment.Stretch;
-            try
-            {
-                // 宽度跟着 tilePanel 走：WrapPanel 里 HorizontalAlignment.Stretch 不会自动撑满
-                b.SetBinding(FrameworkElement.WidthProperty,
-                    new System.Windows.Data.Binding("ActualWidth")
-                    {
-                        Source = tilePanel,
-                        Mode = System.Windows.Data.BindingMode.OneWay
-                    });
-            }
-            catch { }
-
             Grid g = new Grid();
             g.ColumnDefinitions.Add(new ColumnDefinition());
             g.ColumnDefinitions.Add(new ColumnDefinition());
@@ -1124,27 +1104,19 @@ namespace Clover
         /// 同样只 Children.Add、不进 renderedTiles —— 它不是磁贴，不参与拖拽与键盘导航。
         /// 键盘导航跳过它是合理的：收起时那些项本来就不在 renderedApps 里。
         /// </summary>
-        Border MakeLowValueCollapsedRow(int lowCount)
+        Button MakeLowValueCollapsedRow(int lowCount)
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Tag = TileSectionLowValueCollapsedTag;
             b.Margin = new Thickness(2, Ui.S.Md, 2, Ui.S.Xs);
             b.Padding = new Thickness(Ui.S.Sm, Ui.S.Sm, Ui.S.Sm, Ui.S.Sm);
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Template = UiButtons.Template(Ui.R.Sm);
             b.Background = Ui.SearchBg;
             b.Cursor = System.Windows.Input.Cursors.Hand;
             b.HorizontalAlignment = HorizontalAlignment.Stretch;
-            try
-            {
-                b.SetBinding(FrameworkElement.WidthProperty,
-                    new System.Windows.Data.Binding("ActualWidth")
-                    {
-                        Source = tilePanel,
-                        Mode = System.Windows.Data.BindingMode.OneWay
-                    });
-            }
-            catch { }
-
+            b.HorizontalContentAlignment = HorizontalAlignment.Left;
+            b.BorderBrush = Ui.Line;
+            b.BorderThickness = new Thickness(1);
             StackPanel sp = new StackPanel();
             sp.Orientation = Orientation.Horizontal;
 
@@ -1158,9 +1130,10 @@ namespace Clover
             label.VerticalAlignment = VerticalAlignment.Center;
             sp.Children.Add(label);
 
-            b.Child = sp;
+            b.Content = sp;
             b.ToolTip = "展开低价值段（卸载器、帮助文档、许可协议等）";
-            b.MouseLeftButtonUp += delegate
+            AutomationProperties.SetName(b, "展开低价值应用，共 " + lowCount + " 项");
+            b.Click += delegate
             {
                 try { SetCollapseLowValue(false); }
                 catch (Exception ex) { Ui.LogError(ex, "展开低价值段"); }
@@ -1617,6 +1590,8 @@ namespace Clover
             b.CornerRadius = new CornerRadius(Ui.R.Sm);
             b.Margin = new Thickness(2);
             b.Background = Brushes.Transparent;
+            b.BorderBrush = Brushes.Transparent;
+            b.BorderThickness = new Thickness(2);
             b.Cursor = Cursors.Hand;
             b.ToolTip = TileToolTipOf(a);
 
@@ -1678,7 +1653,10 @@ namespace Clover
             name.TextWrapping = TextWrapping.Wrap;
             name.TextAlignment = TextAlignment.Center;
             name.LineHeight = 15;
+            name.LineStackingStrategy = LineStackingStrategy.BlockLineHeight;
+            name.TextTrimming = TextTrimming.CharacterEllipsis;
             name.MaxWidth = 88;
+            name.MaxHeight = 30;
 
             Border nameClip = new Border();
             nameClip.MaxHeight = 30;
@@ -1824,7 +1802,12 @@ namespace Clover
                 downClickCount = 0;
                 CancelTileDrag();
             };
-            b.MouseRightButtonUp += delegate { ShowTileMenu(a, b); };
+            b.MouseRightButtonDown += delegate { SelectTile(renderedApps.IndexOf(a), false); };
+            b.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
+            {
+                e.Handled = true;
+                ShowTileMenu(a, b);
+            };
             return b;
         }
 
@@ -2291,7 +2274,9 @@ namespace Clover
             catch (Exception ex) { Ui.LogError(ex, "从最近常用移除"); }
         }
 
-        void ShowTileMenu(AppItem a, Border sourceTile)
+        ContextMenu activeTileMenu;
+
+        void ShowTileMenu(AppItem a, Border sourceTile, bool keyboard = false)
         {
             if (a == null || string.IsNullOrEmpty(a.Path)) return;
             ContextMenu cm = new ContextMenu();
@@ -2320,7 +2305,7 @@ namespace Clover
             {
                 MenuItem hide = new MenuItem();
                 hide.Header = "从面板隐藏";
-                hide.ToolTip = "藏起来，不在任何分类里显示；可在「隐藏的项目」里找回";
+                hide.ToolTip = "不在普通页面或搜索中显示；从右下角已隐藏数量恢复";
                 hide.Click += delegate { SetAppHidden(a, true); };
                 cm.Items.Add(hide);
             }
@@ -2348,36 +2333,13 @@ namespace Clover
 
                     MenuItem rm = new MenuItem();
                     rm.Header = "从常用移除";
-                    rm.ToolTip = "保留启动次数；下次从四叶草启动后会重新出现";
+                    rm.ToolTip = AppBrand.Text("保留启动次数；下次从四叶草启动后会重新出现");
                     rm.Click += delegate { DismissRecentCommon(a); };
                     cm.Items.Add(rm);
                     break;
             }
 
-            // ---- 低价值标记（手动纠正，优先于自动规则）----
-            //
-            // 只作用于「全部」页：常用页是"你常用的"，不该有沉底概念。
-            if (!showingCommon)
-            {
-                cm.Items.Add(new Separator());
-
-                if (a.LowValue)
-                {
-                    MenuItem unmark = new MenuItem();
-                    unmark.Header = "取消低价值标记";
-                    unmark.ToolTip = "恢复正常排序与不透明度";
-                    unmark.Click += delegate { SetLowValue(a, false); };
-                    cm.Items.Add(unmark);
-                }
-                else
-                {
-                    MenuItem mark = new MenuItem();
-                    mark.Header = "标记为低价值";
-                    mark.ToolTip = "排到最后并变淡";
-                    mark.Click += delegate { SetLowValue(a, true); };
-                    cm.Items.Add(mark);
-                }
-            }
+            // 分类只从上述统一子菜单修改，不重复提供低价值开关。
 
             // ---- 保留在桌面（「全部」「常用」都有，同一位置切换）----
             //
@@ -2468,9 +2430,11 @@ namespace Clover
             }
 
             taskMenuOpen = true;
+            activeTileMenu = cm;
             cm.Closed += delegate
             {
                 taskMenuOpen = false;
+                if (keyboard && tilePanel != null && tilePanel.IsVisible) tilePanel.Focus();
 
                 // ContextMenu 在独立窗口中显示，打开/关闭会打断原磁贴的鼠标状态序列。
                 // 显式按当前状态复原，避免菜单关掉后残留按下/悬停色块；键盘选中态
@@ -2486,7 +2450,8 @@ namespace Clover
                 }
                 catch { }
             };
-            cm.Placement = PlacementMode.MousePoint;
+            cm.PlacementTarget = sourceTile;
+            cm.Placement = keyboard ? PlacementMode.Bottom : PlacementMode.MousePoint;
             cm.IsOpen = true;
         }
 
@@ -2594,7 +2559,7 @@ namespace Clover
                 string path = a == null ? null : a.Path;
                 if (string.IsNullOrEmpty(path))
                 {
-                    MessageBox.Show("这个应用没有可定位的路径。", "四叶草面板");
+                    MessageBox.Show("这个应用没有可定位的路径。", AppBrand.Text("四叶草面板"));
                     return;
                 }
 
@@ -2602,7 +2567,7 @@ namespace Clover
                 string err;
                 if (!TryBuildExplorerArgs(path, out arg, out err))
                 {
-                    MessageBox.Show(err, "四叶草面板");
+                    MessageBox.Show(err, AppBrand.Text("四叶草面板"));
                     return;
                 }
 
@@ -2614,7 +2579,7 @@ namespace Clover
                 Ui.LogError(ex, "打开文件所在位置");
                 try
                 {
-                    MessageBox.Show("无法打开文件位置：" + ex.Message, "四叶草面板");
+                    MessageBox.Show("无法打开文件位置：" + ex.Message, AppBrand.Text("四叶草面板"));
                 }
                 catch { }
             }

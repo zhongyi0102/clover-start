@@ -80,6 +80,23 @@ namespace Clover
                 Check(!workspace.Preview().Items.Exists(c => c.Path == back.Moved[0].To), "放回项目不会立即再次收纳");
                 workspace.Execute(new List<string> { back.Moved[0].To }, storage);
                 Check(File.Exists(back.Moved[0].To), "显式处理也尊重例外");
+                string failBack = Path.Combine(storage, "failed-back.txt"); File.WriteAllText(failBack, "locked");
+                string goodBack = Path.Combine(storage, "good-back.txt"); File.WriteAllText(goodBack, "good");
+                using (FileStream stream = File.Open(failBack, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    DeskCollector.MoveResult mixed = workspace.PutBack(new List<string> { failBack, null, goodBack, goodBack }, desktop);
+                    Check(mixed.MovedCount == 1 && mixed.Failed.Count == 2 && File.Exists(failBack), "放回逐项报错，后续成功项继续且重复项只处理一次");
+                    Check(!DesktopWorkspace.IsKept(settings, Path.Combine(desktop, "failed-back.txt")), "放回失败撤销本次新增例外");
+                    DesktopWorkspace.Keep(settings, Path.Combine(desktop, "failed-back.txt"));
+                    workspace.PutBack(new List<string> { failBack }, desktop);
+                    Check(DesktopWorkspace.IsKept(settings, Path.Combine(desktop, "failed-back.txt")), "放回失败不撤销已有用户例外");
+                }
+                Check(workspace.PutBack(null, desktop).MovedCount == 0, "空放回批次不崩溃");
+                FieldInfo busyField = typeof(DesktopWorkspace).GetField("busy", BindingFlags.Instance | BindingFlags.NonPublic);
+                busyField.SetValue(workspace, 1);
+                Check(workspace.PutBack(new List<string> { failBack }, desktop).Failed.Count == 1
+                    && File.Exists(failBack), "放回与自动收纳共享互斥，不并发移动");
+                busyField.SetValue(workspace, 0);
                 workspace.Dispose();
 
                 string autoDesktop = Path.Combine(root, "auto-desktop"); Directory.CreateDirectory(autoDesktop);
@@ -139,7 +156,7 @@ namespace Clover
                 panelCatalog.Apps.Add(hiddenFixture); panelCatalog.Apps.Add(lowFixture);
                 MethodInfo refreshFooter = typeof(PanelWindow).GetMethod("RefreshFooterCount", BindingFlags.Instance | BindingFlags.NonPublic);
                 refreshFooter.Invoke(panel, new object[] { false });
-                Check(HasFooterLink(footerCount, "收起/隐藏") && HasFooterLink(footerCount, "低价值"), "隐藏和低价值仍由右下角数量进入");
+                Check(HasFooterLink(footerCount, "已隐藏") && HasFooterLink(footerCount, "低价值"), "隐藏和低价值仍由右下角数量进入");
                 Hyperlink footerLink = null;
                 foreach (Inline inline in footerCount.Inlines) { footerLink = inline as Hyperlink; if (footerLink != null) break; }
                 panel.Activate(); Keyboard.Focus(footerLink); Pump();
@@ -149,13 +166,13 @@ namespace Clover
                 Check(ReferenceEquals(Keyboard.FocusedElement, footerLink) && !linkEnter.Handled, "底部链接的回车不会被应用启动快捷键抢走");
                 FieldInfo currentField = typeof(PanelWindow).GetField("current", BindingFlags.Instance | BindingFlags.NonPublic);
                 currentField.SetValue(panel, "常用"); refreshFooter.Invoke(panel, new object[] { false });
-                Check(HasFooterLink(footerCount, "收起/隐藏") && HasFooterLink(footerCount, "低价值"), "常用页也保留两类底部管理入口");
+                Check(HasFooterLink(footerCount, "已隐藏") && HasFooterLink(footerCount, "低价值"), "常用页也保留两类底部管理入口");
                 currentField.SetValue(panel, ""); refreshFooter.Invoke(panel, new object[] { false });
                 panel.Width = 760; panel.Height = 570; panel.UpdateLayout(); Pump();
                 SaveScreenshot(panel, "application-footer-panel.png");
                 panel.Width = 640; panel.UpdateLayout(); Pump();
                 Check(FooterFits(rescan, footerCount), "640像素窄窗口扫描与统计完整显示且不重叠");
-                footerCount.Text = "共 110 个应用，收起/隐藏 60 个，27 个低价值";
+                footerCount.Text = "共 110 个应用，已隐藏 60 个，27 个低价值";
                 panel.UpdateLayout(); Pump();
                 Check(FooterFits(rescan, footerCount), "实际量级的三组统计在窄窗口下也完整显示");
                 refreshFooter.Invoke(panel, new object[] { false }); panel.UpdateLayout(); Pump();
@@ -172,24 +189,62 @@ namespace Clover
                 panel.TestSwitchCategory(PanelWindow.VirtualDesktopCategory); Pump();
                 Check(rescan.Visibility == Visibility.Collapsed, "桌面收纳不显示应用扫描按钮");
                 WrapPanel toolbar = Get<WrapPanel>(panel, "deskToolRow");
+                VirtualDesks panelDesks = Get<VirtualDesks>(panel, "virtualDesks");
+                string panelDeskFolder = panelDesks.FolderOf(PanelWindow.VirtualDesktopCategory);
+                File.WriteAllText(Path.Combine(panelDeskFolder, "空白取消选择.txt"), "fixture");
+                DesktopView panelDeskView = Get<DesktopView>(panel, "deskView");
+                panelDeskView.Load(PanelWindow.VirtualDesktopCategory);
+                Check(footerCount.Text == "1 个文件" && footerCount.ToolTip == null,
+                    "文件库切到桌面收纳后显示当前内容数量，清理旧状态和悬停说明");
+                panelDeskView.ApplyFilter("不存在的内容");
+                Check(footerCount.Text == "找到 0 / 1 项", "桌面收纳筛选同步当前页统计");
+                panelDeskView.ApplyFilter("");
+                panel.TestDeskSelectAll();
+                Check(panelDeskView.SelectedPaths().Count > 0, "桌面收纳项目可进入选中状态");
+                Canvas deskCanvas = Get<Canvas>(panel, "deskCanvas");
+                panel.Activate(); deskCanvas.Focus();
+                KeyEventArgs deskMenuKey = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(panel), 0, Key.Apps)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                panel.RaiseEvent(deskMenuKey);
+                ContextMenu deskMenu = Get<ContextMenu>(panelDeskView, "activeItemMenu");
+                Check(deskMenuKey.Handled && deskMenu != null && deskMenu.IsOpen
+                    && deskMenu.Placement == System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    && deskMenu.PlacementTarget == panelDeskView.TestTile("空白取消选择.txt"),
+                    "桌面收纳菜单键贴近选中图标");
+                deskMenu.IsOpen = false; Pump();
+                Check(deskCanvas.IsKeyboardFocused && panelDeskView.SelectedPaths().Count == 1,
+                    "桌面键盘菜单关闭保留选择并回到画布");
+                Check(panelDeskView.HandleKey(Key.F10, ModifierKeys.Shift)
+                    && Get<ContextMenu>(panelDeskView, "activeItemMenu").IsOpen,
+                    "桌面收纳Shift+F10打开已有菜单");
+                Get<ContextMenu>(panelDeskView, "activeItemMenu").IsOpen = false; Pump();
+                toolbar.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.MouseLeftButtonDownEvent
+                });
+                Check(panelDeskView.SelectedPaths().Count == 0,
+                    "桌面收纳点击工具栏空白处取消当前选择");
                 int buttons = 0; Button deskMore = null;
                 foreach (UIElement element in toolbar.Children) { Button button = element as Button; if (button != null) { buttons++; deskMore = button; } }
                 Check(buttons == 2 && Get<Button>(panel, "deskBackButton") == null, "顶部仅收纳和更多，不再突出放回");
                 Check(deskMore != null && ((MenuItem)deskMore.ContextMenu.Items[0]).Header.ToString() == "桌面设置…"
                     && ((MenuItem)deskMore.ContextMenu.Items[2]).Header.ToString() == "全部放回桌面…", "桌面设置归收纳且全部放回放在更多底部");
                 OrganizeDialog hidden = new OrganizeDialog(panel, root, settings, null, panel, null, OrganizeDialog.Tab.Hidden);
-                Check(hidden.TestWindow.Title == "四叶草 · 已隐藏的应用", "隐藏管理独立标题");
+                Check(hidden.TestWindow.Title == "归位 · 已隐藏的应用", "隐藏管理独立标题");
                 hidden.TestWindow.Close();
                 OrganizeDialog configure = new OrganizeDialog(panel, root, settings, null, panel, null, OrganizeDialog.Tab.Desktop);
-                Check(configure.TestWindow.Title == "四叶草 · 桌面设置" && configure.TestPageHasContent(), "统一桌面设置可正常构建");
+                Check(configure.TestWindow.Title == "归位 · 桌面设置" && configure.TestPageHasContent(), "统一桌面设置可正常构建");
                 configure.TestWindow.Show(); configure.TestWindow.UpdateLayout(); Pump();
                 SaveScreenshot(configure.TestWindow, "desktop-workspace-settings.png");
                 configure.TestWindow.Close();
+                panel.ShowPanel(); panel.TestSwitchCategory(PanelWindow.VirtualDesktopCategory);
                 panel.Width = 760; panel.Height = 570; panel.UpdateLayout(); Pump();
-                RenderTargetBitmap bitmap = new RenderTargetBitmap((int)panel.ActualWidth, (int)panel.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-                bitmap.Render(panel); PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+                FrameworkElement panelContent = (FrameworkElement)panel.Content;
+                RenderTargetBitmap bitmap = new RenderTargetBitmap((int)Math.Ceiling(panelContent.ActualWidth),
+                    (int)Math.Ceiling(panelContent.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+                bitmap.Render(panelContent); PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 using (FileStream file = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "desktop-workspace-panel.png"))) encoder.Save(file);
-                Check(bitmap.PixelWidth > 0, "收纳界面截图可渲染");
+                Check(HasVisiblePixels(bitmap), "收纳界面截图包含真实界面内容，不是隐藏窗口黑图");
             }
             catch (Exception ex) { Check(false, "异常：" + ex); }
             finally
@@ -205,6 +260,16 @@ namespace Clover
             RenderTargetBitmap bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
             bitmap.Render(window); PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using (FileStream file = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, name))) encoder.Save(file);
+        }
+        static bool HasVisiblePixels(BitmapSource bitmap)
+        {
+            if (bitmap == null || bitmap.PixelWidth <= 0 || bitmap.PixelHeight <= 0) return false;
+            int stride = bitmap.PixelWidth * 4;
+            byte[] pixels = new byte[stride * bitmap.PixelHeight];
+            bitmap.CopyPixels(pixels, stride, 0);
+            for (int i = 0; i + 3 < pixels.Length; i += 4)
+                if (pixels[i + 3] > 0 && (pixels[i] > 4 || pixels[i + 1] > 4 || pixels[i + 2] > 4)) return true;
+            return false;
         }
         static bool NavNamesOnly(PanelWindow panel)
         {

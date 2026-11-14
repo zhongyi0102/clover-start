@@ -19,46 +19,6 @@ namespace Clover
 {
     partial class PanelWindow
     {
-        /// <summary>
-        /// 标签栏末尾的圆形「+」：新建标签。
-        ///
-        /// 样式对齐「文件」页来源行末尾那个 +：圆形（CornerRadius = 高度/2）、
-        /// 半透明浅灰底、悬停变深。
-        /// </summary>
-        Button MakeAddTabButton()
-        {
-            Button b = new Button();
-            b.Width = 30;
-            b.Height = 30;
-            b.Margin = new Thickness(0, 2, 4, 2);
-            b.Cursor = Cursors.Hand;
-            b.Background = Ui.SearchBg;
-            b.BorderBrush = Ui.Line;
-            b.BorderThickness = new Thickness(1);
-            b.Padding = new Thickness(0);
-            b.Template = MakeButtonTemplate(b.Height / 2);
-            b.ToolTip = "新建桌面";
-            AutomationProperties.SetName(b, "新建桌面");
-
-            TextBlock t = new TextBlock();
-            t.Text = "+";
-            t.FontFamily = Ui.YaHei;
-            t.FontSize = 15;
-            t.Foreground = Ui.Sub;
-            t.HorizontalAlignment = HorizontalAlignment.Center;
-            t.VerticalAlignment = VerticalAlignment.Center;
-            b.Content = t;
-
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = b.IsKeyboardFocused ? Ui.AccentSoft : Ui.SearchBg; };
-            b.GotKeyboardFocus += delegate { b.Background = Ui.AccentSoft; };
-            b.LostKeyboardFocus += delegate { b.Background = b.IsMouseOver ? Ui.Hover : Ui.SearchBg; };
-            b.Click += delegate { PromptNewTab(); };
-            return b;
-        }
-
-
-        /// <summary>新建标签：弹小输入框，回车确认。</summary>
         /// <summary>自定义标签的右键菜单：重命名 / 删除。</summary>
         void ShowTabMenu(string name, FrameworkElement anchor)
         {
@@ -78,7 +38,7 @@ namespace Clover
                         string err = customTabs.Rename(name, nn);
                         if (err != null)
                         {
-                            MessageBox.Show(this, err, "四叶草 · 重命名标签",
+                            MessageBox.Show(this, err, AppBrand.Text("四叶草 · 重命名标签"),
                                 MessageBoxButton.OK, MessageBoxImage.Information);
                             return;
                         }
@@ -142,7 +102,7 @@ namespace Clover
                     DoRemoveTab(name);
                     MessageBox.Show(this,
                         "标签已删除。\r\n\r\n文件保留在：\r\n" + dir,
-                        "四叶草 · 删除标签",
+                        AppBrand.Text("四叶草 · 删除标签"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     Ui.Log("删除标签（保留文件）: " + name + " -> " + dir);
                     return;
@@ -165,7 +125,7 @@ namespace Clover
                         r.Failed.Count + " 个文件未能放回，仍保留在：\r\n" + dir
                         + "\r\n" + detail
                         + "\r\n\r\n标签暂未删除，请关闭占用这些文件的程序后重试。",
-                        "四叶草 · 删除标签",
+                        AppBrand.Text("四叶草 · 删除标签"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     Ui.Log("删除标签失败（有文件未放回）: " + name + " 失败 " + r.Failed.Count + " 项");
                     return;
@@ -186,7 +146,7 @@ namespace Clover
                 string err = customTabs.Remove(name);
                 if (err != null)
                 {
-                    MessageBox.Show(this, err, "四叶草 · 删除标签",
+                    MessageBox.Show(this, err, AppBrand.Text("四叶草 · 删除标签"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -583,31 +543,6 @@ namespace Clover
         }
 
 
-        void PromptNewTab()
-        {
-            try
-            {
-                if (DeskTransferPending) return;
-                string name = TextPromptDialog.Ask(this, "新建桌面", "桌面名称（最多 12 字）", "");
-                if (name == null) return;   // 用户取消
-
-                string err = customTabs.Add(name);
-                if (err != null)
-                {
-                    MessageBox.Show(this, err, "四叶草 · 新建桌面",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                string added = NavTabs.SanitizeName(name);
-                RebuildNav();
-                SwitchCategory(added);
-                Ui.Log("新建桌面: " + added);
-            }
-            catch (Exception ex) { Ui.LogError(ex, "新建标签"); }
-        }
-
-
         /// <summary>
         /// 当前标签是不是一个虚拟桌面（内置「桌面文件」或用户额外创建的桌面）。
         ///
@@ -662,6 +597,8 @@ namespace Clover
                 TextBlock status = Ui.T(settings.DesktopKeepEmptyEnabled ? "自动保持桌面空 · 已开启" : "自动保持桌面空 · 未开启", 10.5, Ui.Sub);
                 status.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
                 status.VerticalAlignment = VerticalAlignment.Center;
+                status.TextTrimming = TextTrimming.CharacterEllipsis;
+                status.MaxWidth = 220;
                 status.ToolTip = "仅自动处理用户桌面的稳定文件；例外、文件夹、公共桌面及未知入口留待手动处理。";
                 deskToolRow.Children.Add(status);
             }
@@ -727,7 +664,7 @@ namespace Clover
                 if (scan.Paths.Count == 0)
                 {
                     MessageBox.Show(this, "桌面上没有可整理的顶层项目。",
-                        "四叶草 · 智能整理", MessageBoxButton.OK, MessageBoxImage.Information);
+                        AppBrand.Text("四叶草 · 智能整理"), MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
 
@@ -768,7 +705,7 @@ namespace Clover
                     if (result.Failed > shown)
                         message += "\r\n  · 还有 " + (result.Failed - shown) + " 项…";
                 }
-                MessageBox.Show(this, message, "四叶草 · 智能整理",
+                MessageBox.Show(this, message, AppBrand.Text("四叶草 · 智能整理"),
                     MessageBoxButton.OK,
                     result.Failed == 0 ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
@@ -789,13 +726,14 @@ namespace Clover
             b.Template = MakeButtonTemplate(b.Height / 2);
             b.ToolTip = tip;
             AutomationProperties.SetName(b, label);
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
             AutomationProperties.SetHelpText(b, tip);
 
             TextBlock t = Ui.T(label, 11.5, primary ? Brushes.White : Ui.Sub,
                 primary ? FontWeights.SemiBold : FontWeights.Normal);
             t.VerticalAlignment = VerticalAlignment.Center;
-            // 既有模板不转发 Padding；在内容上留内边距，避免文字贴着胶囊边缘。
-            t.Margin = new Thickness(12, 0, 12, 0);
+            // Shared chrome forwards Padding; no second content margin.
             b.Content = t;
 
             b.MouseEnter += delegate
@@ -884,7 +822,7 @@ namespace Clover
                 string dest = CurrentDeskFolder();
                 if (string.IsNullOrEmpty(dest))
                 {
-                    MessageBox.Show(this, "当前桌面没有可用的存放目录。", "四叶草 · 收纳桌面",
+                    MessageBox.Show(this, "当前桌面没有可用的存放目录。", AppBrand.Text("四叶草 · 收纳桌面"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -895,7 +833,7 @@ namespace Clover
                     string msg = "桌面上没有可处理的项目。";
                     if (scan.Skipped.Count > 0)
                         msg += "\r\n\r\n保留了 " + scan.Skipped.Count + " 个例外、临时或未确认项目，桌面并非完全清空。";
-                    MessageBox.Show(this, msg, "四叶草 · 收纳桌面",
+                    MessageBox.Show(this, msg, AppBrand.Text("四叶草 · 收纳桌面"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -916,7 +854,7 @@ namespace Clover
                         string details = message;
                         for (int i = 0; i < r.Retained.Count && i < 6; i++) details += "\r\n" + r.Retained[i] + "：" + r.Reasons[i];
                         for (int i = 0; i < r.Files.Failed.Count && i < 6; i++) details += "\r\n" + r.Files.Failed[i] + "：" + r.Files.Reasons[i];
-                        MessageBox.Show(this, details, "四叶草 · 桌面处理结果", MessageBoxButton.OK, MessageBoxImage.Information);
+                        MessageBox.Show(this, details, AppBrand.Text("四叶草 · 桌面处理结果"), MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     else ShowToast(message);
                 });
@@ -1052,6 +990,13 @@ namespace Clover
             AutomationProperties.SetName(deskBackButton, label);
         }
 
+        void UpdateDeskFooter()
+        {
+            if (!IsDeskTab(current) || footerCount == null) return;
+            footerCount.ToolTip = null;
+            footerCount.Text = deskView == null ? "" : deskView.VisibleCountText();
+        }
+
         void PutBackToDesktopBatch(bool allItems = false)
         {
             try
@@ -1059,7 +1004,7 @@ namespace Clover
                 string dir = CurrentDeskFolder();
                 if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
                 {
-                    MessageBox.Show(this, "当前桌面没有可用的存放目录。", "四叶草 · 放回桌面",
+                    MessageBox.Show(this, "当前桌面没有可用的存放目录。", AppBrand.Text("四叶草 · 放回桌面"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -1115,7 +1060,7 @@ namespace Clover
                 if (!string.IsNullOrEmpty(where)) msg += "\r\n\r\n位置：" + where;
 
                 if (r.AllOk) { ShowToast(msg); return; }
-                MessageBox.Show(this, msg, "四叶草 · " + action,
+                MessageBox.Show(this, msg, AppBrand.Text("四叶草 · ") + action,
                     MessageBoxButton.OK,
                     r.AllOk ? MessageBoxImage.Information : MessageBoxImage.Warning);
             }
@@ -1171,10 +1116,15 @@ namespace Clover
         {
             try
             {
+                double deskScrollTarget;
+                if (!scrollOffsets.TryGetValue(current, out deskScrollTarget)) deskScrollTarget = 0;
+                deskScrollTarget = Math.Max(0, deskScrollTarget);
+                string deskCategory = current;
                 StopDeferredRendering();
                 EnsureDeskSurface();
                 ShowContentLayer(ContentLayer.Desks);
                 if (searchResults != null) searchResults.Clear();
+                if (footerCount != null) { footerCount.Text = ""; footerCount.ToolTip = null; }
 
                 if (deskCanvas == null || deskOverlay == null) return;
 
@@ -1192,6 +1142,7 @@ namespace Clover
                     deskView.OnItemCountChanged = delegate(int count)
                     {
                         try { UpdateDeskDropHint(count); } catch { }
+                        UpdateDeskFooter();
                     };
                     deskView.OnSelectionChanged = UpdateDeskSelectionActions;
                     Closed += delegate { deskView.Dispose(); };
@@ -1204,8 +1155,31 @@ namespace Clover
                 deskCanvas.UpdateLayout();
                 deskView.Load(name);
                 deskView.ApplyFilter(searchBox == null ? "" : searchBox.Text);
+                UpdateDeskFooter();
 
                 RebuildDeskToolRow();
+
+                // ScrollViewer 会沿用上一个页面的偏移。桌面页若没有自己的记录，
+                // 必须明确回到顶部，否则从长应用列表切来时顶部工具行会被滚出视口。
+                RestoreScrollOffset();
+                Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded,
+                    new Action(delegate
+                    {
+                        try
+                        {
+                            if (panelClosed || current != deskCategory || contentScroll == null) return;
+                            suppressScrollRecord = true;
+                            try
+                            {
+                                contentScroll.UpdateLayout();
+                                contentScroll.ScrollToVerticalOffset(deskScrollTarget);
+                                contentScroll.UpdateLayout();
+                                scrollOffsets[deskCategory] = contentScroll.VerticalOffset;
+                            }
+                            finally { suppressScrollRecord = false; }
+                        }
+                        catch (Exception ex) { Ui.LogError(ex, "恢复桌面页滚动位置"); }
+                    }));
 
                 // 旧标签迁移冲突：进这个页时提示一次，说明为什么没合并。
                 if (!string.IsNullOrEmpty(deskMigrationNotice))
@@ -1215,7 +1189,7 @@ namespace Clover
                     deskMigrationNotice = null;
                     try
                     {
-                        MessageBox.Show(this, notice, "四叶草 · 旧桌面未自动合并",
+                        MessageBox.Show(this, notice, AppBrand.Text("四叶草 · 旧桌面未自动合并"),
                             MessageBoxButton.OK, MessageBoxImage.Information);
                     }
                     catch { }

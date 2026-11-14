@@ -37,8 +37,8 @@ namespace Clover
 
         readonly Border root;
         readonly TextBlock message;
-        readonly Border undoBtn;
-        readonly Border keepBtn;
+        readonly Button undoBtn;
+        readonly Button keepBtn;
         readonly StackPanel host;
 
         DispatcherTimer timer;
@@ -96,22 +96,23 @@ namespace Clover
             Grid.SetColumn(message, 0);
             g.Children.Add(message);
 
-            undoBtn = new Border();
-            undoBtn.CornerRadius = new CornerRadius(Ui.R.Sm);
+            undoBtn = new Button();
+            undoBtn.Template = UiButtons.Template(Ui.R.Sm);
             undoBtn.Padding = new Thickness(10, 2, 10, 2);
             undoBtn.Cursor = System.Windows.Input.Cursors.Hand;
             undoBtn.Background = Brushes.Transparent;
             undoBtn.BorderBrush = Ui.Accent;
             undoBtn.BorderThickness = new Thickness(1);
             undoBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
+            undoBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+            undoBtn.VerticalContentAlignment = VerticalAlignment.Center;
 
             TextBlock ub = Ui.T("撤销", 10.5, Ui.Accent);
             ub.VerticalAlignment = VerticalAlignment.Center;
-            undoBtn.Child = ub;
+            undoBtn.Content = ub;
+            System.Windows.Automation.AutomationProperties.SetName(undoBtn, "撤销");
 
-            undoBtn.MouseEnter += delegate { undoBtn.Background = Ui.Hover; };
-            undoBtn.MouseLeave += delegate { undoBtn.Background = Brushes.Transparent; };
-            undoBtn.MouseLeftButtonUp += delegate
+            undoBtn.Click += delegate
             {
                 try
                 {
@@ -124,8 +125,8 @@ namespace Clover
             };
 
             // ---- 「保留」按钮（仅桌面移除场景显示）----
-            keepBtn = new Border();
-            keepBtn.CornerRadius = new CornerRadius(Ui.R.Sm);
+            keepBtn = new Button();
+            keepBtn.Template = UiButtons.Template(Ui.R.Sm);
             keepBtn.Padding = new Thickness(10, 2, 10, 2);
             keepBtn.Cursor = System.Windows.Input.Cursors.Hand;
             keepBtn.Background = Ui.Accent;
@@ -133,14 +134,15 @@ namespace Clover
             keepBtn.BorderThickness = new Thickness(1);
             keepBtn.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
             keepBtn.Visibility = Visibility.Collapsed;
+            keepBtn.HorizontalContentAlignment = HorizontalAlignment.Center;
+            keepBtn.VerticalContentAlignment = VerticalAlignment.Center;
 
             TextBlock kb = Ui.T("保留", 10.5, Brushes.White);
             kb.VerticalAlignment = VerticalAlignment.Center;
-            keepBtn.Child = kb;
+            keepBtn.Content = kb;
+            System.Windows.Automation.AutomationProperties.SetName(keepBtn, "保留");
 
-            keepBtn.MouseEnter += delegate { keepBtn.Opacity = 0.85; };
-            keepBtn.MouseLeave += delegate { keepBtn.Opacity = 1.0; };
-            keepBtn.MouseLeftButtonUp += delegate
+            keepBtn.Click += delegate
             {
                 try
                 {

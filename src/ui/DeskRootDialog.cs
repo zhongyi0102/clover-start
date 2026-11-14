@@ -103,7 +103,7 @@ namespace Clover
                 StackPanel btns = new StackPanel();
                 btns.Orientation = Orientation.Vertical;
 
-                Border bMove = MakeButton(
+                Button bMove = MakeButton(
                     "搬过去（推荐）",
                     "把这 " + plan.DeskCount + " 个桌面、共 " + plan.Files
                         + " 个文件移到新位置。全部核对成功后才切换目录；"
@@ -112,7 +112,7 @@ namespace Clover
                     delegate { result = Choice.Migrate; dlg.Close(); });
                 btns.Children.Add(bMove);
 
-                Border bPointer = MakeButton(
+                Button bPointer = MakeButton(
                     "只改指针，不搬文件",
                     "存放目录立即指向新位置，界面暂时是空的；"
                         + "现有文件仍留在上面的「当前」目录里，需要你自己搬。",
@@ -120,7 +120,7 @@ namespace Clover
                     delegate { result = Choice.PointerOnly; dlg.Close(); });
                 btns.Children.Add(bPointer);
 
-                Border bCancel = MakeButton("取消", "什么都不做，目录保持不变", false,
+                Button bCancel = MakeButton("取消", "什么都不做，目录保持不变", false,
                     delegate { result = Choice.Cancel; dlg.Close(); });
                 btns.Children.Add(bCancel);
 
@@ -198,17 +198,18 @@ namespace Clover
             return g;
         }
 
-        static Border MakeButton(string label, string hint, bool primary, Action onClick)
+        static Button MakeButton(string label, string hint, bool primary, Action onClick)
         {
-            Border b = new Border();
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            Button b = new Button();
+            b.Template = UiButtons.Template(Ui.R.Sm);
             b.Padding = new Thickness(12, 8, 12, 8);
             b.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
             b.Cursor = Cursors.Hand;
             b.Background = primary ? Ui.Accent : Ui.SearchBg;
             b.BorderBrush = primary ? Ui.Accent : Ui.Line;
             b.BorderThickness = new Thickness(primary ? 0 : 1);
-            b.Focusable = true;
+            b.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
 
             StackPanel sp = new StackPanel();
             sp.Orientation = Orientation.Vertical;
@@ -225,21 +226,10 @@ namespace Clover
             h.TextWrapping = TextWrapping.Wrap;
             sp.Children.Add(h);
 
-            b.Child = sp;
+            b.Content = sp;
+            System.Windows.Automation.AutomationProperties.SetName(b, label + "。" + hint);
 
-            b.MouseEnter += delegate { b.Opacity = 0.88; };
-            b.MouseLeave += delegate { b.Opacity = 1.0; };
-            b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
-
-            // 键盘：焦点在这块上时，Enter / 空格 = 点它
-            b.KeyDown += delegate(object s, KeyEventArgs e)
-            {
-                if (e.Key == Key.Enter || e.Key == Key.Space)
-                {
-                    if (onClick != null) onClick();
-                    e.Handled = true;
-                }
-            };
+            b.Click += delegate { if (onClick != null) onClick(); };
 
             return b;
         }

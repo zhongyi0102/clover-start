@@ -21,7 +21,7 @@ namespace Clover
         internal SuggestedHideDialog(Window owner, List<AppHideSuggestion> candidates)
         {
             suggestions = candidates ?? new List<AppHideSuggestion>();
-            dlg = new Window { Title = "四叶草 · 建议隐藏", Width = 600, Height = 620,
+            dlg = new Window { Title = AppBrand.Text("四叶草 · 建议隐藏"), Width = 600, Height = 620,
                 MinWidth = 460, MinHeight = 360, Owner = owner, ShowInTaskbar = false,
                 WindowStartupLocation = owner == null ? WindowStartupLocation.CenterScreen : WindowStartupLocation.CenterOwner,
                 Background = Ui.Bg, FontFamily = Ui.YaHei };

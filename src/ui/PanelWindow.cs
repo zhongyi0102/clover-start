@@ -136,7 +136,7 @@ namespace Clover
 
         // ---- 「文件」标签（2-3）----
         StackPanel filesPanel;         // 整个文件标签的容器
-        StackPanel filesChipRow;       // 来源胶囊行
+        WrapPanel filesChipRow;        // 来源胶囊行，窄窗口自然换行
         WrapPanel filesExtRow;         // 第二行：后缀筛选，窄窗口自然换行
         StackPanel filesUndoHost;      // 底部撤销提示条容器
         TextBlock filesNotice;         // 提示行
@@ -353,7 +353,7 @@ namespace Clover
             MinHeight = 440;
             ShowInTaskbar = false;
             Topmost = true;
-            Title = "四叶草面板";
+            Title = AppBrand.Text("四叶草面板");
             Width = 912;
             Height = 632;
             WindowStartupLocation = WindowStartupLocation.Manual;
@@ -496,6 +496,7 @@ namespace Clover
                 // 搜索框里有焦点时不接管（否则空格会被当预览、Delete 会被当删除）：
                 // 用户正在输入，键盘属于输入框。唯一例外是 Esc —— 仍走分层。
                 bool inSearchBox = searchBox != null && searchBox.IsKeyboardFocusWithin;
+                Key inputKey = Ui.EffectiveKey(e);
 
                 if (current == FilesCategory && filesView != null)
                 {
@@ -521,7 +522,7 @@ namespace Clover
                             return;
                         }
                         // 3) 有选中 → 清选择
-                        if (filesView.HandleKey(e.Key, Keyboard.Modifiers))
+                        if (filesView.HandleKey(inputKey, Keyboard.Modifiers))
                         {
                             e.Handled = true;
                             return;
@@ -531,7 +532,7 @@ namespace Clover
                     else if (!inSearchBox)
                     {
                         // 非 Esc 且焦点不在搜索框 → 交给文件列表
-                        if (filesView.HandleKey(e.Key, Keyboard.Modifiers))
+                        if (filesView.HandleKey(inputKey, Keyboard.Modifiers))
                         {
                             e.Handled = true;
                             return;
@@ -547,7 +548,7 @@ namespace Clover
                         e.Handled = true;
                         return;
                     }
-                    if ((!inSearchBox || e.Key == Key.Escape) && deskView.HandleKey(e.Key, Keyboard.Modifiers))
+                    if ((!inSearchBox || e.Key == Key.Escape) && deskView.HandleKey(inputKey, Keyboard.Modifiers))
                     {
                         e.Handled = true;
                         return;
@@ -561,9 +562,27 @@ namespace Clover
                     return;
                 }
 
+                // 文件库未处理的按键不能落到上一页的应用选择；搜索结果也有自己的列表。
+                if (current == FilesCategory) return;
+                if (searchResultPanel != null && searchResultPanel.Visibility == Visibility.Visible)
+                {
+                    if (searchResults != null && searchResults.HandleKey(e.Key, inSearchBox))
+                        e.Handled = true;
+                    return;
+                }
+
                 // 搜索框里：方向键交给光标移动，只在上下/回车时接管，
                 // 这样输入文字时按左右键不会跳磁贴选中。
                 bool inSearch = searchBox != null && searchBox.IsKeyboardFocusWithin;
+                if (!inSearch && Ui.IsContextMenuKey(inputKey, Keyboard.Modifiers))
+                {
+                    if (selectedTile != null && selectedIndex >= 0 && selectedIndex < renderedApps.Count)
+                    {
+                        ShowTileMenu(renderedApps[selectedIndex], selectedTile, true);
+                        e.Handled = true;
+                    }
+                    return;
+                }
                 switch (e.Key)
                 {
                     case Key.Right:
@@ -573,8 +592,11 @@ namespace Clover
                         return;
                     case Key.Up:
                     case Key.Down:
+                        if (MoveSelection(e.Key)) e.Handled = true;
+                        return;
                     case Key.Home:
                     case Key.End:
+                        if (inSearch) return;
                         if (MoveSelection(e.Key)) e.Handled = true;
                         return;
                     case Key.Enter:
@@ -967,9 +989,9 @@ namespace Clover
         ///   3. `SetForegroundWindow` —— 真正抢前台
         ///   4. 仍失败 → `Topmost` 抖动，强制提到 Z 序顶端
         ///
-        /// 最后把焦点还给搜索框（与 ShowPanel 一致，用户可直接打字搜索）。
+        /// 最后把焦点还给操作来源；没有指定来源时默认回到搜索框。
         /// </summary>
-        public void ReActivate()
+        public void ReActivate(IInputElement focusTarget = null)
         {
             try
             {
@@ -1000,7 +1022,11 @@ namespace Clover
                     }
                 }
 
-                if (searchBox != null)
+                if (focusTarget != null)
+                {
+                    try { Keyboard.Focus(focusTarget); } catch { }
+                }
+                else if (searchBox != null)
                 {
                     try { searchBox.Focus(); } catch { }
                 }
@@ -1521,7 +1547,7 @@ namespace Clover
                     }
                     MessageBox.Show(this,
                         r.Failed.Count + " 个文件未能移入：" + detail,
-                        "四叶草 · 拖入",
+                        AppBrand.Text("四叶草 · 拖入"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
 
@@ -2026,7 +2052,7 @@ namespace Clover
                     if (string.IsNullOrEmpty(aumid))
                     {
                         MessageBox.Show("这个商店应用缺少 AppUserModelID，无法启动。\r\n" + a.Path,
-                            "四叶草面板");
+                            AppBrand.Text("四叶草面板"));
                         return;
                     }
 
@@ -2051,7 +2077,7 @@ namespace Clover
             catch (Exception ex)
             {
                 Ui.Log("Launch error: " + ex.Message);
-                MessageBox.Show("无法启动 " + a.Name + "\r\n" + ex.Message, "四叶草面板");
+                MessageBox.Show("无法启动 " + a.Name + "\r\n" + ex.Message, AppBrand.Text("四叶草面板"));
             }
         }
 

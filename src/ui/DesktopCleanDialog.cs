@@ -155,7 +155,7 @@ namespace Clover
                         + "不删除软件本体；例外、临时、占用及未知项目保留。文件夹与公共桌面需手动收纳确认。";
 
                     MessageBoxResult r = MessageBox.Show(dlg, msg,
-                        "四叶草 · 自动保持桌面空",
+                        AppBrand.Text("四叶草 · 自动保持桌面空"),
                         MessageBoxButton.OKCancel, MessageBoxImage.Warning,
                         MessageBoxResult.Cancel);   // ★ 默认焦点在「取消」
 
@@ -290,7 +290,7 @@ namespace Clover
 
                 MessageBox.Show(dlg,
                     n > 0 ? ("清理了 " + n + " 个已不存在的条目。") : "没有失效条目。",
-                    "四叶草 · 保留名单", MessageBoxButton.OK, MessageBoxImage.Information);
+                    AppBrand.Text("四叶草 · 保留名单"), MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex) { Ui.LogError(ex, "清理保留名单"); }
         }
@@ -374,7 +374,7 @@ namespace Clover
                     MessageBox.Show(dlg,
                         "自动还原失败。\r\n\r\n请手动到回收站右键该文件 → 还原。\r\n"
                         + "（已加入保留名单，还原后不会再被移除）",
-                        "四叶草 · 恢复", MessageBoxButton.OK, MessageBoxImage.Information);
+                        AppBrand.Text("四叶草 · 恢复"), MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
             catch (Exception ex) { Ui.LogError(ex, "恢复已移除项"); }
@@ -428,12 +428,12 @@ namespace Clover
                 {
                     if (!TextPromptDialog.Confirm(dlg, "还原移动", "将此项目移回原位置？同名不覆盖，桌面项目将加入例外。\r\n" + from, "还原移动")) return;
                     string parent = System.IO.Path.GetDirectoryName(from);
-                    if (!System.IO.Directory.Exists(parent)) { MessageBox.Show(dlg, "原目录已不存在，未移动。请先确认位置。", "四叶草"); return; }
+                    if (!System.IO.Directory.Exists(parent)) { MessageBox.Show(dlg, "原目录已不存在，未移动。请先确认位置。", AppBrand.Text("四叶草")); return; }
                     string target = DeskCollector.MakeUniqueTarget(parent, System.IO.Path.GetFileName(from), System.IO.Directory.Exists(to));
                     if (DeskCollector.DesktopDirs().Exists(p => string.Equals(p, parent, StringComparison.OrdinalIgnoreCase))) DesktopWorkspace.Keep(settings, target);
                     VerifiedFileMove.Result result = VerifiedFileMove.Move(to, target);
                     if (result.Ok) { settings.DesktopMoves.Remove(record); settings.Save(); RefreshMoves(); RefreshKeepList(); Notify(); }
-                    else MessageBox.Show(dlg, "未还原：" + result.Message, "四叶草");
+                    else MessageBox.Show(dlg, "未还原：" + result.Message, AppBrand.Text("四叶草"));
                 });
                 restore.IsEnabled = System.IO.File.Exists(to) || System.IO.Directory.Exists(to);
                 Grid.SetColumn(restore, 1); row.Children.Add(restore);

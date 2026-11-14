@@ -69,7 +69,7 @@ namespace Clover
             ShowInTaskbar = false;
             ShowActivated = false;
             Topmost = true;
-            Title = "四叶草";
+            Title = AppBrand.Text("四叶草");
             Width = 44;
             Height = 48;
             WindowStartupLocation = WindowStartupLocation.Manual;
@@ -140,6 +140,11 @@ namespace Clover
             root.DragOver += delegate(object sender, DragEventArgs e) { e.Effects = DragDropEffects.None; e.Handled = true; };
             root.Drop += delegate(object sender, DragEventArgs e) { desktopDragReveal.Stop(); e.Handled = true; };
             root.MouseRightButtonUp += delegate(object s, MouseButtonEventArgs e) { e.Handled = true; ShowMenu(); };
+            root.PreviewKeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (!Ui.IsContextMenuKey(Ui.EffectiveKey(e), Keyboard.Modifiers)) return;
+                ShowMenu(); e.Handled = true;
+            };
 
             Content = root;
             TaskbarGeometry.LayoutChanged += OnTaskbarLayoutChanged;
@@ -515,7 +520,7 @@ namespace Clover
                 {
                     MessageBox.Show(this,
                         "主面板加载失败：" + ex.Message + "\r\n详细信息已写入 config\\error.log。",
-                        "四叶草", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        AppBrand.Text("四叶草"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
                 catch { }
             }
@@ -593,18 +598,18 @@ namespace Clover
                 string tip;
                 if (panelLoading)
                 {
-                    name = "正在加载四叶草面板";
+                    name = AppBrand.Text("正在加载四叶草面板");
                     tip = "正在加载主面板…";
                 }
                 else if (open)
                 {
-                    name = "收起四叶草面板";
-                    tip = "收起四叶草面板";
+                    name = AppBrand.Text("收起四叶草面板");
+                    tip = AppBrand.Text("收起四叶草面板");
                 }
                 else
                 {
-                    name = "打开四叶草面板";
-                    tip = "打开四叶草面板";
+                    name = AppBrand.Text("打开四叶草面板");
+                    tip = AppBrand.Text("打开四叶草面板");
                 }
 
                 AutomationProperties.SetName(root, name);
@@ -716,6 +721,7 @@ namespace Clover
 
             cm.Placement = PlacementMode.Bottom;
             cm.PlacementTarget = root;
+            cm.Closed += delegate { if (root.IsVisible) root.Focus(); };
             cm.IsOpen = true;
 
             // 供 MenuStructureTest 反射读取（生产代码不用它）
@@ -817,14 +823,14 @@ namespace Clover
                     + "  · 清除崩溃保护状态（退出安全模式）\r\n\r\n"
                     + "你的设置、应用清单、使用记录、快捷键备份都会**保留**。\r\n\r\n"
                     + "回滚完成后本程序会退出。继续吗？",
-                    "确认回滚");
+                    "确认回滚", true);
 
                 if (!yes) return;
 
                 string exe = Path.Combine(baseDir, "app", "CloverStart.exe");
                 if (!File.Exists(exe))
                 {
-                    MessageBox.Show("找不到 " + exe + "\r\n无法执行回滚。", "四叶草");
+                    MessageBox.Show("找不到 " + exe + "\r\n无法执行回滚。", AppBrand.Text("四叶草"));
                     return;
                 }
 
@@ -840,7 +846,7 @@ namespace Clover
                 MessageBox.Show(
                     "回滚已启动，本程序即将退出。\r\n\r\n"
                     + "回滚结果可在 config\\error.log 里查看（搜索「一键回滚」）。",
-                    "四叶草");
+                    AppBrand.Text("四叶草"));
 
                 // 让子进程先跑起来，再退出自己（否则它可能被本进程的退出清理干扰）
                 TaskbarVisibility.RestoreSystemState("一键回滚（用户触发）");
@@ -896,7 +902,7 @@ namespace Clover
                     + "DPI 缩放：" + TaskbarGeometry.ScaleFactor().ToString("0.##") + "\r\n"
                     + "\r\n"
                     + "开始按钮格：" + Fmt(s) + "\r\n"
-                    + "四叶草实际窗口：" + Fmt(c) + "\r\n"
+                    + AppBrand.Text("四叶草实际窗口：") + Fmt(c) + "\r\n"
                     + "按钮定位来源：" + PositionSource + "\r\n"
                     + "最后按钮组校准：" + calibrated + "\r\n"
                     + "\r\n";
@@ -917,11 +923,11 @@ namespace Clover
                     msg += "定位正常。";
                 }
 
-                MessageBox.Show(msg, "任务栏定位 · 四叶草");
+                MessageBox.Show(msg, AppBrand.Text("任务栏定位 · 四叶草"));
             }
             catch (Exception ex)
             {
-                MessageBox.Show("读取定位状态失败：" + ex.Message, "四叶草");
+                MessageBox.Show("读取定位状态失败：" + ex.Message, AppBrand.Text("四叶草"));
             }
         }
 
@@ -1053,16 +1059,16 @@ namespace Clover
                             "已退出安全模式。\r\n\r\n"
                             + "重启程序后，隐藏任务栏 / 迷你任务栏 / 全屏检测等功能会按你的设置恢复。\r\n"
                             + "（你的设置文件从未被安全模式改动过）",
-                            "四叶草");
+                            AppBrand.Text("四叶草"));
                     }
                     return;
                 }
 
-                MessageBox.Show(msg.TrimEnd(), "运行状态 · 四叶草");
+                MessageBox.Show(msg.TrimEnd(), AppBrand.Text("运行状态 · 四叶草"));
             }
             catch (Exception ex)
             {
-                MessageBox.Show("读取运行状态失败：" + ex.Message, "四叶草");
+                MessageBox.Show("读取运行状态失败：" + ex.Message, AppBrand.Text("四叶草"));
             }
         }
 
@@ -1129,14 +1135,14 @@ namespace Clover
 
                 if (!result.Success)
                 {
-                    MessageBox.Show(result.Message, "四叶草 · 开机自启",
+                    MessageBox.Show(result.Message, AppBrand.Text("四叶草 · 开机自启"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
                 else if (result.UsingLegacyFallback)
                 {
                     ErrorLog.Warn(result.Message);
                     MessageBox.Show(result.Message,
-                        "四叶草 · 已启用兼容自启",
+                        AppBrand.Text("四叶草 · 已启用兼容自启"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
@@ -1152,7 +1158,7 @@ namespace Clover
                     Success = false,
                     Message = "设置开机自启失败：" + ex.Message
                 };
-                MessageBox.Show(failed.Message, "四叶草 · 开机自启");
+                MessageBox.Show(failed.Message, AppBrand.Text("四叶草 · 开机自启"));
                 return failed;
             }
         }

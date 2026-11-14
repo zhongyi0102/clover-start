@@ -15,7 +15,7 @@ namespace Clover
     ///
     /// **设计约束**
     ///
-    /// 1. **不引入第三方控件**：色板是手绘的一排 Border，滑块用原生 Slider。
+    /// 1. **不引入第三方控件**：按钮与色板用原生 Button，滑块用原生 Slider。
     /// 2. **拖动实时预览，松手才写盘**：
     ///    · 拖动中：只改 settings 内存值 + 调 panel.ApplyGlassSettingPreview()
     ///      （降采样 + 短防抖，几毫秒一次）
@@ -43,13 +43,14 @@ namespace Clover
             {
                 Window dlg = new Window();
                 dlg.Title = "外观";
-                dlg.Width = 420;
-                dlg.Height = 620;
+                dlg.Width = DefaultW;
+                dlg.Height = DefaultH;
+                dlg.FontFamily = Ui.YaHei;
                 // 与另外两个长期配置窗口统一使用项目标题栏，只保留「关闭」。
                 // 四边四角拖拽由 WindowChrome + WM_NCHITTEST 钩子保留。
                 dlg.Background = Ui.Bg;
-                // 右下角另加显式 ResizeGrip，四条边还有拖拽热区。
-                dlg.ResizeMode = ResizeMode.CanResizeWithGrip;
+                // 四边保留缩放热区，不再叠加内外两套 ResizeGrip。
+                dlg.ResizeMode = ResizeMode.CanResize;
                 dlg.MinWidth = 360;
                 dlg.MinHeight = 300;
                 // 最大不超过屏幕工作区。初值按主屏算，窗口移动/尺寸变化时
@@ -128,12 +129,7 @@ namespace Clover
 
                 // ---- 根容器 ----
                 Border root = new Border();
-                root.CornerRadius = new CornerRadius(Ui.R.Lg);
                 root.Background = Ui.Bg;
-                root.BorderBrush = Ui.Line;
-                root.BorderThickness = new Thickness(1);
-                root.Margin = new Thickness(14);
-                try { root.Effect = Ui.PanelShadow(); } catch { }
 
                 Grid layout = new Grid();
                 layout.RowDefinitions.Add(new RowDefinition());   // 标题
@@ -147,7 +143,7 @@ namespace Clover
                 ScrollViewer scroll = new ScrollViewer();
                 scroll.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
                 scroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
-                scroll.Margin = new Thickness(Ui.S.Xl, 0, Ui.S.Xl, 0);
+                scroll.Margin = new Thickness(Ui.S.Xl, Ui.S.Sm, Ui.S.Xl, Ui.S.Sm);
 
                 StackPanel body = new StackPanel();
                 scroll.Content = body;
@@ -166,7 +162,7 @@ namespace Clover
                 themeRow.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Lg);
 
                 Ui.ThemeMode curTheme = Ui.ParseTheme(settings.Theme);
-                List<Border> themeChips = new List<Border>();
+                List<Button> themeChips = new List<Button>();
 
                 foreach (Ui.ThemeMode m in new Ui.ThemeMode[]
                     { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
@@ -174,23 +170,13 @@ namespace Clover
                     Ui.ThemeMode mm = m;
                     bool on = (mm == curTheme);
 
-                    Border chip = new Border();
-                    chip.CornerRadius = new CornerRadius(14);
-                    chip.Padding = new Thickness(14, 5, 14, 5);
-                    chip.Cursor = Cursors.Hand;
+                    Button chip = MakeChip(Ui.ThemeDisplayName(mm), null);
                     chip.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
-                    chip.Background = on ? Ui.Accent : Ui.SearchBg;
-                    chip.BorderBrush = on ? Ui.Accent : Ui.Line;
-                    chip.BorderThickness = new Thickness(1);
-
-                    TextBlock ct = Ui.T(Ui.ThemeDisplayName(mm), 11.5,
-                        on ? Brushes.White : Ui.Fg);
-                    ct.VerticalAlignment = VerticalAlignment.Center;
-                    chip.Child = ct;
+                    SetChipActive(chip, on);
 
                     themeChips.Add(chip);
 
-                    chip.MouseLeftButtonUp += delegate
+                    chip.Click += delegate
                     {
                         try
                         {
@@ -208,12 +194,9 @@ namespace Clover
                             foreach (Ui.ThemeMode each in new Ui.ThemeMode[]
                                 { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark })
                             {
-                                Border bc = themeChips[idx++];
+                                Button bc = themeChips[idx++];
                                 bool sel = (each == mm);
-                                bc.Background = sel ? Ui.Accent : Ui.SearchBg;
-                                bc.BorderBrush = sel ? Ui.Accent : Ui.Line;
-                                TextBlock tb = bc.Child as TextBlock;
-                                if (tb != null) tb.Foreground = sel ? Brushes.White : Ui.Fg;
+                                SetChipActive(bc, sel);
                             }
                         }
                         catch (Exception ex) { Ui.LogError(ex, "切换主题"); }
@@ -224,39 +207,60 @@ namespace Clover
 
                 body.Children.Add(themeRow);
 
-                // Keep the existing manual controls intact, but place the entire set
-                // behind one keyboard-accessible expander. Wallpaper source is separate.
+                // Manual settings are preserved; the entry switches mode rather than
+                // presenting a disabled expander that looks clickable.
                 StackPanel manualBody = body;
-                Expander manualSettings = new Expander { Header = "手动调整", Content = manualBody,
-                    Foreground = Ui.Fg, Margin = new Thickness(0, Ui.S.Md, 0, Ui.S.Md) };
+                manualBody.Visibility = Visibility.Collapsed;
+                Button manualSettings = MakeChip("手动调整", null);
+                manualSettings.HorizontalAlignment = HorizontalAlignment.Left;
+                manualSettings.Margin = new Thickness(0, Ui.S.Md, 0, Ui.S.Sm);
                 body = new StackPanel();
                 scroll.Content = body;
-                body.Children.Add(SectionLabel("外观适配"));
+                TextBlock heading = Ui.T("让背景与内容更协调", 16, Ui.Fg, FontWeights.SemiBold);
+                heading.Margin = new Thickness(0, Ui.S.Md, 0, Ui.S.Sm);
+                body.Children.Add(heading);
                 CheckBox autoMode = new CheckBox { Content = "自动适配壁纸", Foreground = Ui.Fg,
                     IsChecked = settings != null && settings.AutoAppearance,
+                    FontSize = 13, MinHeight = 36, VerticalContentAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Sm) };
                 body.Children.Add(autoMode);
-                TextBlock autoHint = Ui.T("根据背景自动选择明暗、配色、模糊与文字保护；手动参数保留。", 11, Ui.Sub);
+                TextBlock autoHint = Ui.T("自动选择明暗、配色和文字保护。无需逐项调节，原手动参数仍保留。", 12, Ui.Sub);
                 autoHint.TextWrapping = TextWrapping.Wrap;
                 body.Children.Add(autoHint);
-                TextBlock autoStatus = Ui.T("", 11, Ui.Fg);
+                TextBlock autoStatus = Ui.T("", 12, Ui.Sub);
                 autoStatus.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Md);
                 autoStatus.TextWrapping = TextWrapping.Wrap;
                 body.Children.Add(autoStatus);
+                Action fitContent = null;
+                Button reset = null;
+                bool? lastAutomatic = null;
                 Action refreshAutomatic = delegate
                 {
                     bool automatic = settings != null && settings.AutoAppearance;
-                    manualSettings.IsEnabled = !automatic;
-                    if (automatic) manualSettings.IsExpanded = false;
+                    autoMode.IsChecked = automatic;
+                    manualBody.Visibility = automatic ? Visibility.Collapsed : Visibility.Visible;
+                    manualSettings.Content = automatic ? "手动调整…" : "返回自动适配";
+                    manualSettings.ToolTip = automatic ? "切换到手动模式，使用之前保留的参数" : "恢复自动适配，不覆盖手动参数";
+                    if (reset != null) reset.Content = automatic ? "重新适配" : "恢复默认";
                     autoStatus.Text = panel == null ? (automatic ? "自动适配已开启" : "手动调整 · 原参数已保留")
                         : panel.AutomaticAppearanceDescription;
+                    if (lastAutomatic != automatic)
+                    {
+                        lastAutomatic = automatic;
+                        if (fitContent != null) fitContent();
+                    }
                 };
                 autoMode.Click += delegate
                 {
                     if (settings != null) settings.AutoAppearance = autoMode.IsChecked == true;
                     commit();
                     refreshAutomatic();
-                    if (settings != null && !settings.AutoAppearance) manualSettings.IsExpanded = true;
+                };
+                manualSettings.Click += delegate
+                {
+                    if (settings != null) settings.AutoAppearance = !settings.AutoAppearance;
+                    commit();
+                    refreshAutomatic();
                 };
 
                 // ===== 预设 =====
@@ -267,7 +271,7 @@ namespace Clover
                 manualBody.Children.Add(presetRow);
 
                 // 预设按钮的选中态要跟着 settings 变 → 存下来便于刷新
-                Dictionary<string, Border> presetButtons = new Dictionary<string, Border>(StringComparer.OrdinalIgnoreCase);
+                Dictionary<string, Button> presetButtons = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
 
                 // refreshAll 要在预设按钮之前声明（预设点击回调里会用到）
                 Action refreshAll = null;
@@ -278,13 +282,10 @@ namespace Clover
                     try
                     {
                         string cur = settings == null ? AppearancePresets.Custom : settings.GlassPreset;
-                        foreach (KeyValuePair<string, Border> kv in presetButtons)
+                        foreach (KeyValuePair<string, Button> kv in presetButtons)
                         {
                             bool on = string.Equals(kv.Key, cur, StringComparison.OrdinalIgnoreCase);
-                            kv.Value.Background = on ? Ui.Accent : Ui.SearchBg;
-                            kv.Value.BorderBrush = on ? Ui.Accent : Ui.Line;
-                            TextBlock tb = kv.Value.Child as TextBlock;
-                            if (tb != null) tb.Foreground = on ? Brushes.White : Ui.Fg;
+                            SetChipActive(kv.Value, on);
                         }
                     }
                     catch { }
@@ -293,10 +294,9 @@ namespace Clover
                 foreach (AppearancePresets.Preset p in AppearancePresets.AllPresets)
                 {
                     AppearancePresets.Preset preset = p;
-                    Border b = new Border();
+                    Button b = MakeChip(preset.DisplayName, null);
                     b.Width = PresetBtnW;
                     b.Height = PresetBtnH;
-                    b.CornerRadius = new CornerRadius(b.Height / 2);
                     b.Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
                     b.Cursor = Cursors.Hand;
                     b.Background = Ui.SearchBg;
@@ -304,12 +304,7 @@ namespace Clover
                     b.BorderThickness = new Thickness(1);
                     b.ToolTip = preset.Description;
 
-                    TextBlock t = Ui.T(preset.DisplayName, 11.5, Ui.Fg);
-                    t.HorizontalAlignment = HorizontalAlignment.Center;
-                    t.VerticalAlignment = VerticalAlignment.Center;
-                    b.Child = t;
-
-                    b.MouseLeftButtonUp += delegate
+                    b.Click += delegate
                     {
                         try
                         {
@@ -465,15 +460,14 @@ namespace Clover
                 // ===== 背景模式 =====
                 body.Children.Add(SectionLabel("背景"));
 
-                StackPanel modeRow = new StackPanel();
-                modeRow.Orientation = Orientation.Horizontal;
+                WrapPanel modeRow = new WrapPanel();
                 modeRow.Margin = new Thickness(0, Ui.S.Sm, 0, Ui.S.Sm);
                 body.Children.Add(modeRow);
 
-                Border bScreen = null, bCustom = null;
+                Button bScreen = null, bCustom = null, bWe = null;
                 TextBlock customPathText = null;
-                Border btnChange = null, btnClear = null;
-                StackPanel customRow = null;
+                Button btnChange = null;
+                Grid customRow = null;
 
                 // 拖放提示的当前文案（空 = 没有提示，refreshMode 按文件名显示）。
                 // 用局部变量而不是字段：AppearanceDialog 是 static class，
@@ -492,11 +486,7 @@ namespace Clover
 
                         SetChipActive(bScreen, screen);
                         SetChipActive(bCustom, custom);
-                        try { SetChipActive(FindWeChip(modeRow), we); } catch { }
-
-                        // 自定义行只在 custom 模式显示
-                        if (customRow != null)
-                            customRow.Visibility = custom ? Visibility.Visible : Visibility.Collapsed;
+                        SetChipActive(bWe, we);
 
                         if (customPathText != null)
                         {
@@ -511,14 +501,20 @@ namespace Clover
                             else
                             {
                                 string f = BackgroundStore.Find(baseDir);
-                                customPathText.Text = string.IsNullOrEmpty(f)
-                                    ? "（还没有导入图片）"
-                                    : System.IO.Path.GetFileName(f) + "  ·  " + FormatSize(f);
+                                customPathText.Text = custom ? "自定义图片 · " + (string.IsNullOrEmpty(f)
+                                    ? "尚未选择图片"
+                                    : System.IO.Path.GetFileName(f) + "  ·  " + FormatSize(f))
+                                    : we ? "WE 壁纸 · " + (string.IsNullOrEmpty(settings.WeWallpaperTitle) ? "尚未选择壁纸" : settings.WeWallpaperTitle)
+                                    : "使用当前桌面壁纸";
                                 customPathText.Foreground = Ui.Sub;
+                                customPathText.ToolTip = custom ? f : we ? settings.WeWallpaperTitle : "桌面壁纸更换后自动跟随";
                             }
                         }
-                        if (btnChange != null) btnChange.IsEnabled = true;
-                        if (btnClear != null) btnClear.IsEnabled = custom && BackgroundStore.Exists(baseDir);
+                        if (btnChange != null)
+                        {
+                            btnChange.Visibility = custom || we ? Visibility.Visible : Visibility.Collapsed;
+                            btnChange.Content = we ? "更换壁纸…" : "更换图片…";
+                        }
                     }
                     catch { }
                 };
@@ -526,9 +522,11 @@ namespace Clover
 
                 bScreen = MakeChip("跟随桌面", delegate
                 {
+                    customNoticeText = "";
                     if (settings != null) settings.GlassMode = "screen";
-                    refreshMode();
                     commit();
+                    refreshMode();
+                    refreshAutomatic();
                 });
                 bScreen.ToolTip = "自动模式直接读取桌面壁纸并保护文字；手动模式沿用桌面取景";
                 modeRow.Children.Add(bScreen);
@@ -537,15 +535,18 @@ namespace Clover
                 {
                     try
                     {
-                        // 还没导入过 → 直接拉起文件选择
-                        if (!BackgroundStore.Exists(baseDir))
+                        // Selecting an existing source switches to it. Selecting the
+                        // already active source is a shortcut to replacing its image.
+                        if (!BackgroundStore.Exists(baseDir) || settings.GlassMode == "custom")
                         {
-                            if (!DoImportCustom(baseDir, panel)) return;
+                            if (!DoImportCustom(dlg, baseDir, panel)) return;
                         }
+                        customNoticeText = "";
                         if (settings != null) settings.GlassMode = "custom";
                         InvalidateCustomCache(panel);
-                        refreshMode();
                         commit();
+                        refreshMode();
+                        refreshAutomatic();
                     }
                     catch (Exception ex) { Ui.LogError(ex, "切换到自定义背景"); }
                 });
@@ -553,10 +554,7 @@ namespace Clover
                 modeRow.Children.Add(bCustom);
 
                 // ---- WE 壁纸（引用模式，与前三项互斥）----
-                bool weInstalled = false;
-                try { weInstalled = WallpaperEngine.FindRoots().Count > 0; } catch { }
-
-                Border bWe = MakeChip("WE 壁纸", delegate
+                Action chooseWe = delegate
                 {
                     try
                     {
@@ -566,72 +564,55 @@ namespace Clover
                                 // 选好后 picker 已写好 settings（含 GlassMode = "we"）。
                                 // 不吞异常：让选择窗口显示“应用失败”，避免假成功。
                                 if (panel != null) panel.ApplyGlassSetting();
-                                refreshMode();
+                                customNoticeText = "";
                                 commit();
+                                refreshMode();
+                                refreshAutomatic();
                             });
                         picker.Show();
                     }
                     catch (Exception ex) { Ui.LogError(ex, "打开壁纸选择窗口"); }
+                };
+                bWe = MakeChip("WE 壁纸", delegate
+                {
+                    if (settings.GlassMode == "we" || string.IsNullOrEmpty(settings.WeWallpaperId)) { chooseWe(); return; }
+                    settings.GlassMode = "we";
+                    customNoticeText = "";
+                    commit(); refreshMode(); refreshAutomatic();
                 });
-
-                if (!weInstalled)
-                {
-                    bWe.Opacity = 0.45;
-                    bWe.ToolTip = "没找到 Wallpaper Engine 壁纸目录。"
-                        + "仍可点开窗口后手动选择目录。";
-                }
-                else
-                {
-                    bWe.ToolTip = "从 Wallpaper Engine 的创意工坊 / 本地壁纸里挑一张"
-                        + "（只引用，不复制；与桌面壁纸互相独立）";
-                }
+                bWe.ToolTip = "选择独立的图片或视频，不影响桌面壁纸；可手动指定 WE 目录";
                 modeRow.Children.Add(bWe);
+                foreach (UIElement item in modeRow.Children)
+                    ((FrameworkElement)item).Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
 
-                // ---- 自定义图状态行（[文件名] [更换] [清除]）----
-                customRow = new StackPanel();
-                customRow.Orientation = Orientation.Horizontal;
-                customRow.Margin = new Thickness(0, 0, 0, Ui.S.Lg);
-                customRow.Visibility = Visibility.Collapsed;
+                // ---- 当前来源与更换操作；切换来源不删除已导入图片 ----
+                customRow = new Grid();
+                customRow.ColumnDefinitions.Add(new ColumnDefinition());
+                customRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                customRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
 
-                customPathText = Ui.T("", 10.5, Ui.Sub);
+                customPathText = Ui.T("", 12, Ui.Sub);
                 customPathText.VerticalAlignment = VerticalAlignment.Center;
-                customPathText.TextTrimming = TextTrimming.CharacterEllipsis;
-                customPathText.MaxWidth = 200;
+                customPathText.TextWrapping = TextWrapping.Wrap;
                 customRow.Children.Add(customPathText);
 
                 btnChange = MakeChip("更换", delegate
                 {
                     try
                     {
-                        if (!DoImportCustom(baseDir, panel)) return;
+                        if (settings.GlassMode == "we") { chooseWe(); return; }
+                        if (!DoImportCustom(dlg, baseDir, panel)) return;
+                        customNoticeText = "";
                         if (settings != null) settings.GlassMode = "custom";
                         InvalidateCustomCache(panel);
-                        refreshMode();
                         commit();
+                        refreshMode(); refreshAutomatic();
                     }
                     catch (Exception ex) { Ui.LogError(ex, "更换自定义背景"); }
                 });
                 btnChange.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
-                btnChange.Height = 24;
-                btnChange.Padding = new Thickness(10, 0, 10, 0);
+                Grid.SetColumn(btnChange, 1);
                 customRow.Children.Add(btnChange);
-                btnClear = MakeChip("清除", delegate
-                {
-                    try
-                    {
-                        BackgroundStore.RemoveAll(baseDir);
-                        if (settings != null) settings.GlassMode = "screen";
-                        InvalidateCustomCache(panel);
-                        refreshMode();
-                        commit();
-                        Ui.Log("已清除自定义背景图");
-                    }
-                    catch (Exception ex) { Ui.LogError(ex, "清除自定义背景"); }
-                });
-                btnClear.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
-                btnClear.Height = 24;
-                btnClear.Padding = new Thickness(10, 0, 10, 0);
-                customRow.Children.Add(btnClear);
 
                 body.Children.Add(customRow);
 
@@ -649,6 +630,7 @@ namespace Clover
                 customDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Lg);
                 body.Children.Add(customDropHint.Root);
                 body.Children.Add(manualSettings);
+                body.Children.Add(manualBody);
 
                 // ---- 拖放接线（只做高亮 + Drop 后校验，不接管任何现有事件）----
                 //
@@ -674,8 +656,7 @@ namespace Clover
                         if (customPathText == null) return;
                         customPathText.Text = text;
                         customPathText.Foreground = Ui.AccentText;
-                        customPathText.MaxWidth = 460;
-                        customPathText.TextTrimming = TextTrimming.CharacterEllipsis;
+                        if (fitContent != null) fitContent();
                     }
                     catch { }
                 };
@@ -755,7 +736,7 @@ namespace Clover
                         {
                             MessageBox.Show(dlg,
                                 "无法读取该图片。\r\n\r\n" + (err ?? "未知原因"),
-                                "四叶草 · 背景图片",
+                                AppBrand.Text("四叶草 · 背景图片"),
                                 MessageBoxButton.OK, MessageBoxImage.Warning);
                             return;
                         }
@@ -764,6 +745,7 @@ namespace Clover
                         InvalidateCustomCache(panel);
                         refreshMode();
                         commit();
+                        refreshAutomatic();
                         showCustomNotice("已设为背景：" + System.IO.Path.GetFileName(saved));
                         Ui.Log("拖入背景图: " + picked + " → " + saved);
                     }
@@ -777,7 +759,7 @@ namespace Clover
                 // ===== 文字清晰保底 =====
                 manualBody.Children.Add(SectionLabel("文字清晰"));
 
-                Border guardChip = null;
+                Button guardChip = null;
                 TextBlock guardHint = null;
                 Action refreshGuard = null;
                 refreshGuard = delegate
@@ -787,10 +769,8 @@ namespace Clover
                         bool on = settings == null || settings.TextContrastGuard;
                         if (guardChip != null)
                         {
-                            guardChip.Background = on ? Ui.Accent : Ui.SearchBg;
-                            TextBlock t = guardChip.Child as TextBlock;
-                            if (t != null)
-                            { t.Foreground = on ? Brushes.White : Ui.Fg; t.Text = on ? "已开启" : "已关闭"; }
+                            SetChipActive(guardChip, on);
+                            guardChip.Content = on ? "文字保护已开启" : "文字保护已关闭";
                         }
                         // 触发时显示灰色小字（提示用户背景被自动补偿了）
                         if (guardHint != null)
@@ -833,10 +813,15 @@ namespace Clover
                 manualBody.Children.Add(guardHint);
 
                 refreshers.Add(refreshGuard);
+                refreshers.Add(delegate
+                {
+                    Ui.ThemeMode selected = Ui.ParseTheme(settings.Theme);
+                    Ui.ThemeMode[] modes = { Ui.ThemeMode.System, Ui.ThemeMode.Light, Ui.ThemeMode.Dark };
+                    for (int i = 0; i < modes.Length; i++) SetChipActive(themeChips[i], modes[i] == selected);
+                });
                 refreshers.Add(refreshMode);
                 refreshers.Add(refreshAutomatic);
                 refreshAutomatic();
-                manualSettings.IsExpanded = settings != null && !settings.AutoAppearance;
                 DispatcherTimer automaticStatusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
                 automaticStatusTimer.Tick += delegate { refreshAutomatic(); };
                 automaticStatusTimer.Start();
@@ -857,12 +842,16 @@ namespace Clover
                 refreshAll();
 
                 // ===== 底部按钮 =====
-                StackPanel footer = new StackPanel();
-                footer.Orientation = Orientation.Horizontal;
-                footer.HorizontalAlignment = HorizontalAlignment.Right;
+                Grid footer = new Grid();
+                footer.ColumnDefinitions.Add(new ColumnDefinition());
+                footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 footer.Margin = new Thickness(Ui.S.Xl, Ui.S.Sm, Ui.S.Xl, Ui.S.Lg);
+                StackPanel footerStart = new StackPanel { Orientation = Orientation.Horizontal };
+                TextBlock savedHint = Ui.T("修改即时生效", 11, Ui.Sub);
+                savedHint.VerticalAlignment = VerticalAlignment.Center;
+                savedHint.Margin = new Thickness(Ui.S.Md, 0, 0, 0);
 
-                Border reset = MakeChip("恢复默认", delegate
+                reset = MakeChip("恢复默认", delegate
                 {
                     try
                     {
@@ -878,23 +867,18 @@ namespace Clover
                     }
                     catch (Exception ex) { Ui.LogError(ex, "恢复默认"); }
                 });
-                reset.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
+                reset.HorizontalAlignment = HorizontalAlignment.Left;
                 reset.ToolTip = "自动模式重新适配当前背景；手动模式恢复当前预设的参数";
-                footer.Children.Add(reset);
+                footerStart.Children.Add(reset);
+                footerStart.Children.Add(savedHint);
+                footer.Children.Add(footerStart);
 
-                Border done = MakeChip("完成", delegate { dlg.Close(); });
+                Button done = MakeChip("完成", delegate { dlg.Close(); });
                 done.Background = Ui.Accent;
-                ((TextBlock)done.Child).Foreground = Brushes.White;
+                done.Foreground = Brushes.White;
+                done.MinWidth = 76;
+                Grid.SetColumn(done, 1);
                 footer.Children.Add(done);
-
-                ResizeGrip grip = new ResizeGrip();
-                grip.Width = 16;
-                grip.Height = 16;
-                grip.Margin = new Thickness(Ui.S.Sm, 0, 0, 0);
-                grip.VerticalAlignment = VerticalAlignment.Bottom;
-                grip.HorizontalAlignment = HorizontalAlignment.Right;
-                grip.ToolTip = "拖动调整窗口大小";
-                footer.Children.Add(grip);
 
                 Grid.SetRow(footer, 2);
                 layout.Children.Add(footer);
@@ -908,12 +892,40 @@ namespace Clover
                     oldRefreshMode();
                     customDropHint.Root.Visibility = settings != null && settings.GlassMode == "custom"
                         ? Visibility.Visible : Visibility.Collapsed;
+                    if (fitContent != null) fitContent();
                 };
                 // refreshers captured the old delegate earlier; add the final source
                 // visibility refresh as well for reset/import callbacks.
                 refreshers.Add(refreshMode);
                 root.Child = layout;
                 DialogChrome.UseCloseOnlyTitleBar(dlg, root);
+                // Keep position/width memory, but derive height from current content.
+                // This intentionally replaces obsolete tall automatic-mode records.
+                DispatcherOperation fitOperation = null;
+                fitContent = delegate
+                {
+                    if (fitOperation != null && fitOperation.Status == DispatcherOperationStatus.Pending) return;
+                    fitOperation = dlg.Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(delegate
+                    {
+                        if (!dlg.IsVisible) return;
+                        double bodyWidth = Math.Max(1, dlg.ActualWidth - Ui.S.Xl * 2 - 20);
+                        body.Measure(new Size(bodyWidth, double.PositiveInfinity));
+                        double contentHeight = body.DesiredSize.Height + footer.ActualHeight
+                            + 36 + scroll.Margin.Top + scroll.Margin.Bottom + footer.Margin.Top + footer.Margin.Bottom + 4;
+                        // Long manual forms should scroll instead of filling a tall
+                        // monitor; automatic mode only occupies its natural height.
+                        double heightLimit = Math.Min(dlg.MaxHeight, 760);
+                        dlg.Height = Math.Max(dlg.MinHeight, Math.Min(heightLimit, contentHeight));
+                        if (settings != null && settings.AutoAppearance) scroll.ScrollToTop();
+                    }));
+                };
+                dlg.Loaded += delegate { fitContent(); autoMode.Focus(); };
+                dlg.SizeChanged += delegate(object sender, SizeChangedEventArgs e)
+                {
+                    savedHint.Visibility = dlg.ActualWidth < 440 ? Visibility.Collapsed : Visibility.Visible;
+                    if (e.WidthChanged) fitContent();
+                };
+                refreshAutomatic();
 
                 // ---- 边缘拖拽 ----
                 //
@@ -934,7 +946,9 @@ namespace Clover
                 limitTimer.Tick += delegate
                 {
                     limitTimer.Stop();
+                    double previousMaxHeight = dlg.MaxHeight;
                     ApplyWorkAreaLimits(dlg);
+                    if (dlg.MaxHeight != previousMaxHeight) fitContent();
                 };
                 Action scheduleLimits = delegate
                 {
@@ -943,7 +957,11 @@ namespace Clover
                 };
                 dlg.LocationChanged += delegate { scheduleLimits(); };
                 dlg.SizeChanged += delegate { scheduleLimits(); };
-                dlg.Closed += delegate { limitTimer.Stop(); };
+                dlg.Closed += delegate
+                {
+                    limitTimer.Stop();
+                    if (fitOperation != null && fitOperation.Status == DispatcherOperationStatus.Pending) fitOperation.Abort();
+                };
 
                 // ---- 关窗：写盘一次 ----
                 dlg.Closing += delegate
@@ -986,24 +1004,6 @@ namespace Clover
             return t;
         }
 
-        /// <summary>在模式行里找「WE 壁纸」那个胶囊（按文字内容匹配）。</summary>
-        static Border FindWeChip(Panel row)
-        {
-            try
-            {
-                if (row == null) return null;
-                foreach (UIElement e in row.Children)
-                {
-                    Border b = e as Border;
-                    if (b == null) continue;
-                    TextBlock t = b.Child as TextBlock;
-                    if (t != null && t.Text == "WE 壁纸") return b;
-                }
-            }
-            catch { }
-            return null;
-        }
-
         /// <summary>
         /// 把窗口的最大尺寸限制到它**所在那块**显示器的工作区。
         ///
@@ -1019,8 +1019,8 @@ namespace Clover
         /// 留 16px 让视觉上不"顶死"屏幕。
         /// </summary>
         /// <summary>默认打开尺寸（记录无效时用）。</summary>
-        const double DefaultW = 420;
-        const double DefaultH = 620;
+        const double DefaultW = 520;
+        const double DefaultH = 340;
 
         /// <summary>
         /// 把恢复出来的尺寸收回到合理范围。
@@ -1215,15 +1215,15 @@ namespace Clover
         }
 
         /// <summary>设置胶囊的选中态（选中 = 强调色底 + 白字）。</summary>
-        static void SetChipActive(Border chip, bool on)
+        static void SetChipActive(Button chip, bool on)
         {
             try
             {
                 if (chip == null) return;
-                chip.Background = on ? Ui.Accent : Ui.SearchBg;
+                chip.Background = on ? Ui.AccentSoft : Ui.SearchBg;
                 chip.BorderBrush = on ? Ui.Accent : Ui.Line;
-                TextBlock t = chip.Child as TextBlock;
-                if (t != null) t.Foreground = on ? Brushes.White : Ui.Fg;
+                chip.Foreground = on ? Ui.AccentText : Ui.Fg;
+                System.Windows.Automation.AutomationProperties.SetItemStatus(chip, on ? "已选择" : "未选择");
             }
             catch { }
         }
@@ -1247,7 +1247,14 @@ namespace Clover
         /// 导入失败（格式不支持 / 解码失败 / 写盘失败）→ 弹提示，**不改动现有设置**。
         /// 成功 → 返回 true，调用方负责切到 custom 模式并刷新。
         /// </summary>
-        static bool DoImportCustom(string baseDir, PanelWindow panel)
+        sealed class FileDialogOwner : System.Windows.Forms.IWin32Window
+        {
+            public IntPtr Handle { get; private set; }
+            public FileDialogOwner(Window owner)
+            { Handle = new System.Windows.Interop.WindowInteropHelper(owner).Handle; }
+        }
+
+        static bool DoImportCustom(Window owner, string baseDir, PanelWindow panel)
         {
             try
             {
@@ -1260,7 +1267,8 @@ namespace Clover
                     dlg.CheckFileExists = true;
                     dlg.Multiselect = false;
 
-                    if (dlg.ShowDialog() != System.Windows.Forms.DialogResult.OK) return false;
+                    FileDialogOwner fileOwner = new FileDialogOwner(owner);
+                    if (dlg.ShowDialog(fileOwner) != System.Windows.Forms.DialogResult.OK) return false;
                     picked = dlg.FileName;
                 }
 
@@ -1273,7 +1281,7 @@ namespace Clover
                 {
                     MessageBox.Show("无法读取该图片。\r\n\r\n" + (err ?? "未知原因")
                         + "\r\n\r\n支持的格式：jpg / png / bmp / gif / webp / tif",
-                        "四叶草 · 背景图片", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        AppBrand.Text("四叶草 · 背景图片"), MessageBoxButton.OK, MessageBoxImage.Warning);
                     return false;
                 }
 
@@ -1285,7 +1293,7 @@ namespace Clover
                 try
                 {
                     MessageBox.Show("导入失败：" + ex.Message,
-                        "四叶草 · 背景图片", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        AppBrand.Text("四叶草 · 背景图片"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
                 catch { }
                 return false;
@@ -1338,59 +1346,30 @@ namespace Clover
             catch { return false; }
         }
 
-        static Border MakeChip(string label, Action onClick)
+        static Button MakeChip(string label, Action onClick)
         {
-            Border b = new Border();
-            b.Height = 28;
-            b.CornerRadius = new CornerRadius(b.Height / 2);
+            Button b = new Button();
+            b.Height = 36;
+            b.Template = MakeAppearanceButtonTemplate();
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
             b.Padding = new Thickness(14, 0, 14, 0);
             b.Cursor = Cursors.Hand;
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(1);
 
-            TextBlock t = Ui.T(label, 11.5, Ui.Fg);
-            t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
-
-            b.MouseEnter += delegate { b.Opacity = 0.85; };
-            b.MouseLeave += delegate { b.Opacity = 1.0; };
-            b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
+            b.Content = label;
+            b.FontFamily = Ui.YaHei;
+            b.FontSize = 12;
+            b.Foreground = Ui.Fg;
+            b.Click += delegate { if (onClick != null) onClick(); };
             return b;
         }
 
-        static Border MakeIconButton(string glyph, Action onClick)
+        static ControlTemplate MakeAppearanceButtonTemplate()
         {
-            Border b = new Border();
-            b.Width = 28;
-            b.Height = 28;
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
-            b.Cursor = Cursors.Hand;
-            b.Background = Brushes.Transparent;
-
-            TextBlock t = new TextBlock();
-            t.Text = glyph;
-            t.FontFamily = Ui.Mdl;
-            t.FontSize = 12;
-            t.Foreground = Ui.Sub;
-            t.HorizontalAlignment = HorizontalAlignment.Center;
-            t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
-
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
-
-            // 必须在 Down 阶段就吃掉事件：
-            // 标题栏 Grid 上挂着 MouseLeftButtonDown -> dlg.DragMove()，
-            // 那是冒泡事件。不拦截的话，按下 x 会先冒泡到标题栏触发
-            // DragMove（进入模态拖动循环并捕获鼠标），松手时
-            // MouseLeftButtonUp 就再也到不了这个按钮。
-            b.MouseLeftButtonDown += delegate(object s2, MouseButtonEventArgs e2)
-            {
-                e2.Handled = true;
-            };
-            b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
-            return b;
+            return UiButtons.Template(Ui.R.Sm);
         }
 
         /// <summary>
@@ -1425,6 +1404,7 @@ namespace Clover
             sl.IsSnapToTickEnabled = step >= 1;
             sl.VerticalAlignment = VerticalAlignment.Center;
             sl.ToolTip = tooltip;
+            System.Windows.Automation.AutomationProperties.SetName(sl, label);
             Grid.SetColumn(sl, 1);
             row.Children.Add(sl);
 
@@ -1474,7 +1454,7 @@ namespace Clover
         /// <summary>
         /// 一行「标签 + 色板 + #RRGGBB 输入框 + 清除」。
         ///
-        /// 色板是手绘的一排 Border（不引入取色控件）。
+        /// 色板是原生 Button（不引入取色控件）。
         /// </summary>
         static FrameworkElement MakeColorRow(
             string label, Settings settings,
@@ -1511,20 +1491,22 @@ namespace Clover
                 "#8E44AD", "#2C3E50", "#000000"
             };
 
-            List<Border> chips = new List<Border>();
+            List<Button> chips = new List<Button>();
+            TextBox input = null;
             Action refreshChips = null;
             refreshChips = delegate
             {
                 try
                 {
                     string cur = (getter() ?? "").ToUpperInvariant();
-                    foreach (Border c in chips)
+                    foreach (Button c in chips)
                     {
                         string tag = c.Tag as string;
                         string tagU = (tag ?? "").ToUpperInvariant();
                         bool on = tagU == cur;
                         c.BorderBrush = on ? Ui.Accent : Ui.Line;
                         c.BorderThickness = new Thickness(on ? 2 : 1);
+                        System.Windows.Automation.AutomationProperties.SetItemStatus(c, on ? "已选择" : "未选择");
                     }
                 }
                 catch { }
@@ -1533,16 +1515,17 @@ namespace Clover
             foreach (string hex in palette)
             {
                 string value = hex;
-                Border chip = new Border();
-                chip.Width = 22;
-                chip.Height = 22;
-                chip.CornerRadius = new CornerRadius(Ui.R.Sm);
+                Button chip = MakeChip("", null);
+                chip.Width = 26;
+                chip.Height = 26;
+                chip.Padding = new Thickness(0);
                 chip.Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
                 chip.Cursor = Cursors.Hand;
                 chip.Tag = value;
                 chip.BorderBrush = Ui.Line;
                 chip.BorderThickness = new Thickness(1);
                 chip.ToolTip = string.IsNullOrEmpty(value) ? "清除（用默认）" : value;
+                System.Windows.Automation.AutomationProperties.SetName(chip, label + " " + chip.ToolTip);
 
                 if (string.IsNullOrEmpty(value))
                 {
@@ -1552,7 +1535,7 @@ namespace Clover
                     x.FontFamily = Ui.Mdl;
                     x.HorizontalAlignment = HorizontalAlignment.Center;
                     x.VerticalAlignment = VerticalAlignment.Center;
-                    chip.Child = x;
+                    chip.Content = x;
                 }
                 else
                 {
@@ -1563,11 +1546,12 @@ namespace Clover
                         chip.Background = Ui.SearchBg;
                 }
 
-                chip.MouseLeftButtonUp += delegate
+                chip.Click += delegate
                 {
                     try
                     {
                         setter(value);
+                        if (input != null) input.Text = value;
                         refreshChips();
                         if (refreshPresetButtons != null) refreshPresetButtons();
                         if (schedulePreview != null) schedulePreview();
@@ -1581,7 +1565,7 @@ namespace Clover
             }
 
             // 手动输入 #RRGGBB
-            TextBox input = new TextBox();
+            input = new TextBox();
             input.Width = 96;
             input.Height = 26;
             input.FontFamily = Ui.YaHei;
@@ -1593,9 +1577,15 @@ namespace Clover
             input.Padding = new Thickness(6, 0, 6, 0);
             input.VerticalContentAlignment = VerticalAlignment.Center;
             input.ToolTip = tooltip;
+            System.Windows.Automation.AutomationProperties.SetName(input, label + "十六进制颜色");
             input.Margin = new Thickness(0, 0, Ui.S.Sm, Ui.S.Sm);
 
-            // 输入框回车/失焦时应用
+            TextBlock colorError = Ui.T("请输入 #RRGGBB 格式的颜色，或留空使用默认值。", 11, Ui.Sub);
+            colorError.TextWrapping = TextWrapping.Wrap;
+            colorError.Margin = new Thickness(64, 0, 0, Ui.S.Sm);
+            colorError.Visibility = Visibility.Collapsed;
+            input.TextChanged += delegate { colorError.Visibility = Visibility.Collapsed; };
+            // 输入框回车/失焦时应用；错误保留输入并就地解释，不静默丢弃。
             Action applyInput = delegate
             {
                 try
@@ -1604,10 +1594,11 @@ namespace Clover
                     if (text.Length > 0 && !text.StartsWith("#")) text = "#" + text;
                     if (text.Length > 0 && !Settings.IsHexColor(text))
                     {
-                        // 格式错：恢复成当前值，不报错
-                        input.Text = getter() ?? "";
+                        colorError.Visibility = Visibility.Visible;
                         return;
                     }
+                    colorError.Visibility = Visibility.Collapsed;
+                    if (string.Equals(text, getter() ?? "", StringComparison.OrdinalIgnoreCase)) return;
                     setter(text);
                     refreshChips();
                     if (refreshPresetButtons != null) refreshPresetButtons();
@@ -1624,6 +1615,7 @@ namespace Clover
             swatches.Children.Add(input);
 
             wrap.Children.Add(row);
+            wrap.Children.Add(colorError);
 
             // 可选说明（灰色小字，复用 Ui.Sub 样式）
             if (!string.IsNullOrEmpty(hint))

@@ -68,7 +68,7 @@ namespace Clover
             };
             list[1].Pinned = true;
             SearchRanking.Sort(list, "alpha");
-            Check(list[0].Name == "Alpha Two", "★同质量时手动固定优先", list[0].Name);
+            Check(list[0].Name == "Alpha One", "★旧固定记录不再影响搜索排序", list[0].Name);
 
             list[0].Pinned = false;
             list[0].Usage = 1;

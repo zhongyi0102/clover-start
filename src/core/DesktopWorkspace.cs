@@ -68,11 +68,14 @@ namespace Clover
             }
             try
             {
+                HashSet<string> processed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (string path in paths ?? new List<string>())
                 {
-                    if (automatic && (stopped || !settings.DesktopKeepEmptyEnabled || Settings.SafeModeActive)) break;
+                    if (automatic && (stopped || !settings.DesktopKeepEmptyEnabled || Settings.SafeModeActive))
+                    { Retain(result, path, "自动处理已停止，保留原处"); continue; }
                     try
                     {
+                        if (!string.IsNullOrWhiteSpace(path) && !processed.Add(Path.GetFullPath(path))) continue;
                         if (!IsDesktopChild(path) || IsKept(settings, path) || DesktopContentRules.IsTemporary(path))
                         { Retain(result, path, "例外、临时项目或已不在桌面，保留原处"); continue; }
                         DesktopContentKind kind = DesktopContentRules.Classify(path);
@@ -119,7 +122,7 @@ namespace Clover
         }
 
         static void Retain(Result r, string path, string reason)
-        { r.Retained.Add(Path.GetFileName(path)); r.Reasons.Add(reason); }
+        { r.Retained.Add(string.IsNullOrWhiteSpace(path) ? "(无效项目)" : Path.GetFileName(path)); r.Reasons.Add(reason); }
 
         public void Record(DeskCollector.MoveResult result, string action)
         {
@@ -155,16 +158,50 @@ namespace Clover
         public DeskCollector.MoveResult PutBack(List<string> paths, string desktop)
         {
             DeskCollector.MoveResult result = new DeskCollector.MoveResult();
-            foreach (string path in paths)
+            if (Interlocked.CompareExchange(ref busy, 1, 0) != 0)
             {
-                string target = DeskCollector.MakeUniqueTarget(desktop, Path.GetFileName(path), Directory.Exists(path));
-                Keep(settings, target); // 必须先于文件发布，避免 Created 被重新收走。
-                VerifiedFileMove.Result moved = VerifiedFileMove.Move(path, target);
-                if (moved.Ok) result.Moved.Add(new DeskCollector.MoveEntry {
-                    From = path, To = moved.Target, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
-                else { result.Failed.Add(Path.GetFileName(path)); result.Reasons.Add(moved.Message); }
+                result.Failed.Add("(本次操作)"); result.Reasons.Add("桌面正在处理中，请稍后重试"); return result;
             }
-            Record(result, "放回");
+            try
+            {
+                HashSet<string> processed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string path in paths ?? new List<string>())
+                {
+                    string target = null; bool addedKeep = false;
+                    try
+                    {
+                        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("无效项目路径");
+                        if (!processed.Add(Path.GetFullPath(path))) continue;
+                        if (!Directory.Exists(desktop)) throw new DirectoryNotFoundException("桌面目录不存在");
+                        if (!File.Exists(path) && !Directory.Exists(path)) throw new FileNotFoundException("项目已不存在");
+                        target = DeskCollector.MakeUniqueTarget(desktop, Path.GetFileName(path), Directory.Exists(path));
+                        lock (settings)
+                        {
+                            addedKeep = !IsKept(settings, target);
+                            Keep(settings, target); // 文件发布前登记，避免自动收纳再次收走。
+                        }
+                        VerifiedFileMove.Result moved = VerifiedFileMove.Move(path, target);
+                        if (!moved.Ok) throw new IOException(moved.Message);
+                        addedKeep = false; // 成功的保留例外必须持久保留。
+                        result.Moved.Add(new DeskCollector.MoveEntry {
+                            From = path, To = moved.Target, Time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+                    }
+                    catch (Exception ex)
+                    {
+                        // 仅撤销本次新增的例外，不能移除用户原先设置的保留项。
+                        if (addedKeep && target != null) lock (settings)
+                        {
+                            settings.DesktopKeepPaths.RemoveAll(p => string.Equals(DesktopKeep.NormalizeKey(p),
+                                DesktopKeep.NormalizeKey(target), StringComparison.OrdinalIgnoreCase));
+                            settings.Save();
+                        }
+                        result.Failed.Add(string.IsNullOrWhiteSpace(path) ? "(无效项目)" : Path.GetFileName(path));
+                        result.Reasons.Add(ex.Message);
+                    }
+                }
+                Record(result, "放回");
+            }
+            finally { Interlocked.Exchange(ref busy, 0); }
             return result;
         }
 

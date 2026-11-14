@@ -82,21 +82,21 @@ namespace Clover
                 StackPanel btns = new StackPanel();
                 btns.Orientation = Orientation.Vertical;
 
-                Border bMove = MakeButton(
+                Button bMove = MakeButton(
                     "文件放回桌面",
                     "把文件移到桌面，然后删除这个空文件夹",
                     true,
                     delegate { result = Choice.MoveToDesktop; dlg.Close(); });
                 btns.Children.Add(bMove);
 
-                Border bKeep = MakeButton(
+                Button bKeep = MakeButton(
                     "保留在存放文件夹",
                     "只删掉标签，文件夹和文件都留在原处",
                     false,
                     delegate { result = Choice.KeepInPlace; dlg.Close(); });
                 btns.Children.Add(bKeep);
 
-                Border bCancel = MakeButton("取消", "什么都不做", false,
+                Button bCancel = MakeButton("取消", "什么都不做", false,
                     delegate { result = Choice.Cancel; dlg.Close(); });
                 btns.Children.Add(bCancel);
 
@@ -132,16 +132,18 @@ namespace Clover
             return result;
         }
 
-        static Border MakeButton(string label, string hint, bool primary, Action onClick)
+        static Button MakeButton(string label, string hint, bool primary, Action onClick)
         {
-            Border b = new Border();
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            Button b = new Button();
+            b.Template = UiButtons.Template(Ui.R.Sm);
             b.Padding = new Thickness(12, 8, 12, 8);
             b.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
             b.Cursor = Cursors.Hand;
             b.Background = primary ? Ui.Accent : Ui.SearchBg;
             b.BorderBrush = primary ? Ui.Accent : Ui.Line;
             b.BorderThickness = new Thickness(primary ? 0 : 1);
+            b.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
 
             StackPanel sp = new StackPanel();
             sp.Orientation = Orientation.Vertical;
@@ -158,11 +160,10 @@ namespace Clover
             h.TextWrapping = TextWrapping.Wrap;
             sp.Children.Add(h);
 
-            b.Child = sp;
+            b.Content = sp;
+            System.Windows.Automation.AutomationProperties.SetName(b, label + "。" + hint);
 
-            b.MouseEnter += delegate { b.Opacity = 0.88; };
-            b.MouseLeave += delegate { b.Opacity = 1.0; };
-            b.MouseLeftButtonUp += delegate { if (onClick != null) onClick(); };
+            b.Click += delegate { if (onClick != null) onClick(); };
             return b;
         }
     }

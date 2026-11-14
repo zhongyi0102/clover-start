@@ -79,8 +79,8 @@ namespace Clover
                 buttons.HorizontalAlignment = HorizontalAlignment.Right;
                 buttons.Margin = new Thickness(0, 14, 0, 0);
 
-                Border cancel = MakeButton("取消", delegate { result = null; dlg.DialogResult = false; });
-                Border ok = MakeButton("确定", delegate { result = box.Text; dlg.DialogResult = true; });
+                Button cancel = MakeButton("取消", delegate { result = null; dlg.DialogResult = false; });
+                Button ok = MakeButton("确定", delegate { result = box.Text; dlg.DialogResult = true; });
                 buttons.Children.Add(cancel);
                 buttons.Children.Add(ok);
                 sp.Children.Add(buttons);
@@ -139,7 +139,7 @@ namespace Clover
         /// 为什么不用 MessageBox：WinForms 的 MessageBox **不跟随主题**，
         /// 深色模式下会弹出一个刺眼的浅色框。自己画一个更一致，也更短。
         /// </summary>
-        public static bool Confirm(Window owner, string title, string message, string okText = "确定")
+        public static bool Confirm(Window owner, string title, string message, string okText = "确定", bool destructive = false)
         {
             bool result = false;
             Window dlg = new Window();
@@ -188,8 +188,8 @@ namespace Clover
                 buttons.HorizontalAlignment = HorizontalAlignment.Right;
                 buttons.Margin = new Thickness(0, 16, 0, 0);
 
-                Border cancel = MakeButton("取消", delegate { result = false; dlg.DialogResult = false; });
-                Border ok = MakeButton(okText, delegate { result = true; dlg.DialogResult = true; });
+                Button cancel = MakeButton("取消", delegate { result = false; dlg.DialogResult = false; });
+                Button ok = MakeButton(okText, delegate { result = true; dlg.DialogResult = true; });
                 buttons.Children.Add(cancel);
                 buttons.Children.Add(ok);
                 sp.Children.Add(buttons);
@@ -213,7 +213,7 @@ namespace Clover
                     catch { }
                 };
 
-                dlg.Loaded += delegate { try { ok.Focus(); } catch { } };
+                dlg.Loaded += delegate { try { (destructive ? cancel : ok).Focus(); } catch { } };
 
                 dlg.ShowDialog();
             }
@@ -230,26 +230,27 @@ namespace Clover
             return result;
         }
 
-        static Border MakeButton(string text, Action onClick)
+        static Button MakeButton(string text, Action onClick)
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Height = 30;
             b.MinWidth = 66;
-            b.CornerRadius = new CornerRadius(Ui.R.Sm);
+            b.Template = UiButtons.Template(Ui.R.Sm);
             b.Margin = new Thickness(6, 0, 0, 0);
             b.Cursor = Cursors.Hand;
             b.Background = Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(1);
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
 
             TextBlock t = Ui.T(text, 12.5, Ui.Fg);
             t.HorizontalAlignment = HorizontalAlignment.Center;
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            b.Content = t;
+            System.Windows.Automation.AutomationProperties.SetName(b, text);
 
-            b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Ui.SearchBg; };
-            b.MouseLeftButtonUp += delegate { try { onClick(); } catch { } };
+            b.Click += delegate { try { onClick(); } catch { } };
             return b;
         }
 

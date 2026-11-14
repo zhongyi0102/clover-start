@@ -77,6 +77,7 @@ namespace Clover
 
         const uint SHGFI_ICON = 0x0100;
         const uint SHGFI_LARGEICON = 0x0000;
+        const uint SHGFI_USEFILEATTRIBUTES = 0x0010;
 
         const int MaxCacheFiles = 800;
         const int MaxAgeDays = 90;
@@ -151,6 +152,31 @@ namespace Clover
                 if (stale != null) foreach (string k in stale) memory.Remove(k);
             }
             return result;
+        }
+
+        /// <summary>
+        /// 文件库的关联图标：仅查询扩展名与文件属性，不读取真实文件、
+        /// 不调用文档预览或缩略图处理器，避免云文件被下载。
+        /// </summary>
+        internal static ImageSource GetFileType(string extension, bool folder)
+        {
+            SHFILEINFO info = new SHFILEINFO();
+            try
+            {
+                string ext = (extension ?? "").Trim().ToLowerInvariant();
+                if (ext.Length > 32 || ext.IndexOfAny(new char[] { '\\', '/', ':', '\0' }) >= 0) return null;
+                if (ext.Length > 0 && ext[0] != '.') ext = "." + ext;
+                SHGetFileInfo(folder ? "folder" : "file" + ext, folder ? 0x10u : 0x80u,
+                    ref info, (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(SHFILEINFO)),
+                    SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES);
+                if (info.hIcon == IntPtr.Zero) return null;
+                ImageSource source = Imaging.CreateBitmapSourceFromHIcon(info.hIcon,
+                    Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                source.Freeze();
+                return source;
+            }
+            catch { return null; }
+            finally { if (info.hIcon != IntPtr.Zero) DestroyIcon(info.hIcon); }
         }
 
         internal static int CachedCountForTest

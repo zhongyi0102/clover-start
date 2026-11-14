@@ -42,6 +42,8 @@ namespace Clover
                 return;
             }
             unchecked { searchGeneration++; }
+            // 输入变化即取消旧结果和后台回调，不能在防抖窗口内启动上一搜索的应用。
+            if (searchResults != null) searchResults.Invalidate();
             int ownGeneration = searchGeneration;
             if (searchDebounce == null)
             {
@@ -68,6 +70,7 @@ namespace Clover
             if (current == FilesCategory || IsDeskTab(current)) return;
             if (footerCount == null || searchResults == null || searchBox == null
                 || searchBox.Text.Trim().Length == 0) return;
+            footerCount.ToolTip = null;
             int n = searchResults.ShownCount;
             footerCount.Text = n > 0
                 ? "找到 " + n + " 条结果"

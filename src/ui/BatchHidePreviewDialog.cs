@@ -38,7 +38,7 @@ namespace Clover
         public BatchHidePreviewDialog(Window owner, string category, List<AppItem> targets)
         {
             dlg = new Window();
-            dlg.Title = "四叶草 · 批量隐藏";
+            dlg.Title = AppBrand.Text("四叶草 · 批量隐藏");
             dlg.Width = 460;
             dlg.Height = 520;
             dlg.WindowStartupLocation = owner != null
@@ -108,13 +108,17 @@ namespace Clover
             if (targets.Count > 0)
             {
                 // 折叠开关
-                Border toggle = new Border();
+                Button toggle = new Button();
                 toggle.Cursor = Cursors.Hand;
                 toggle.Padding = new Thickness(0, 4, 0, 6);
                 toggle.Background = Brushes.Transparent;
+                toggle.BorderThickness = new Thickness(0);
+                toggle.Template = UiButtons.Template(Ui.R.Sm);
+                toggle.HorizontalContentAlignment = HorizontalAlignment.Left;
 
                 TextBlock toggleText = Ui.T("\uE70D  展开清单", 11, Ui.Accent);
-                toggle.Child = toggleText;
+                toggle.Content = toggleText;
+                System.Windows.Automation.AutomationProperties.SetName(toggle, "展开隐藏清单");
                 body.Children.Add(toggle);
 
                 // 清单容器
@@ -153,7 +157,7 @@ namespace Clover
                 body.Children.Add(sv);
 
                 bool expanded = false;
-                toggle.MouseLeftButtonUp += delegate
+                toggle.Click += delegate
                 {
                     try
                     {
@@ -161,6 +165,8 @@ namespace Clover
                         sv.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
                         toggleText.Text = (expanded ? "\uE76C" : "\uE70D")
                             + (expanded ? "  收起清单" : "  展开清单");
+                        System.Windows.Automation.AutomationProperties.SetName(toggle,
+                            expanded ? "收起隐藏清单" : "展开隐藏清单");
                     }
                     catch (Exception ex) { Ui.LogError(ex, "折叠批量隐藏清单"); }
                 };
@@ -176,11 +182,11 @@ namespace Clover
             footer.Margin = new Thickness(Ui.S.Xl, Ui.S.Sm, Ui.S.Xl, Ui.S.Lg);
 
             // 「取消」放前面（视觉上靠左），但**默认焦点**在它身上
-            Border cancel = Chip("取消", false, delegate { dlg.Close(); });
+            Button cancel = Chip("取消", false, delegate { dlg.Close(); });
             cancel.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
             footer.Children.Add(cancel);
 
-            Border ok = Chip("隐藏", true, delegate
+            Button ok = Chip("隐藏", true, delegate
             {
                 confirmed = true;
                 dlg.Close();
@@ -198,11 +204,6 @@ namespace Clover
             dlg.PreviewKeyDown += delegate(object s, KeyEventArgs e)
             {
                 if (e.Key == Key.Escape) { dlg.Close(); e.Handled = true; }
-                else if (e.Key == Key.Enter)
-                {
-                    // ★ 回车不默认执行 —— 默认焦点在「取消」，这里也不给 Enter 删除
-                    e.Handled = true;
-                }
             };
 
             // 默认焦点：取消按钮（阻止 Enter 误触）
@@ -214,26 +215,26 @@ namespace Clover
             cancel.Focus();
         }
 
-        static Border Chip(string label, bool primary, Action onClick)
+        static Button Chip(string label, bool primary, Action onClick)
         {
-            Border b = new Border();
+            Button b = new Button();
             b.Height = 30;
-            b.CornerRadius = new CornerRadius(b.Height / 2);
+            b.Template = UiButtons.Template(b.Height / 2);
             b.Padding = new Thickness(16, 0, 16, 0);
             b.Cursor = Cursors.Hand;
             b.Background = primary ? Ui.Accent : Ui.SearchBg;
             b.BorderBrush = Ui.Line;
             b.BorderThickness = new Thickness(primary ? 0 : 1);
-            b.Focusable = true;
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
 
             TextBlock t = Ui.T(label, 11.5, primary ? Brushes.White : Ui.Fg,
                 primary ? FontWeights.SemiBold : FontWeights.Normal);
             t.VerticalAlignment = VerticalAlignment.Center;
-            b.Child = t;
+            b.Content = t;
+            System.Windows.Automation.AutomationProperties.SetName(b, label);
 
-            b.MouseEnter += delegate { b.Opacity = 0.85; };
-            b.MouseLeave += delegate { b.Opacity = 1.0; };
-            b.MouseLeftButtonUp += delegate
+            b.Click += delegate
             {
                 try { if (onClick != null) onClick(); }
                 catch (Exception ex) { Ui.LogError(ex, "批量隐藏预览按钮"); }

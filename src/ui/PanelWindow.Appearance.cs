@@ -12,6 +12,7 @@ namespace Clover
     {
         WallpaperAppearance.Scheme automaticAppearance;
         Border automaticSurface;
+        WallpaperTextProtection automaticTextProtection;
         DispatcherTimer appearanceTimer;
         string appearanceSource = "";
         string wallpaperIdentity = "";
@@ -28,7 +29,7 @@ namespace Clover
         }
 
         int EffectiveGlassOpacity
-        { get { return settings == null ? 0 : settings.AutoAppearance ? 90 : settings.GlassOpacity; } }
+        { get { return settings == null ? 0 : settings.AutoAppearance ? 100 : settings.GlassOpacity; } }
 
         public string AutomaticAppearanceDescription
         { get { return settings != null && settings.AutoAppearance ?
@@ -43,6 +44,8 @@ namespace Clover
             automaticSurface = new Border { IsHitTestVisible = false, Visibility = Visibility.Collapsed,
                 CornerRadius = new CornerRadius(Ui.R.Lg), Tag = "automaticAppearanceSurface" };
             host.Children.Insert(host.Children.IndexOf(content), automaticSurface);
+            automaticTextProtection = new WallpaperTextProtection(content) { Visibility = Visibility.Collapsed };
+            host.Children.Insert(host.Children.IndexOf(content), automaticTextProtection);
             glassBackdrop.OnBackgroundSample = ApplyAutomaticSample;
             glassBackdrop.OnBackgroundUnavailable = delegate { ApplyAutomaticSample(null); };
             appearanceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -68,6 +71,7 @@ namespace Clover
                 glassBackdrop.Stop();
                 Ui.SetAutomaticPalette(null);
             };
+            contentScroll.ScrollChanged += delegate { automaticTextProtection.Refresh(); };
         }
 
         string CurrentWallpaperIdentity()
@@ -91,6 +95,9 @@ namespace Clover
         {
             if (settings == null || !settings.AutoAppearance) return;
             bool dynamic = videoBackdrop != null && videoBackdrop.InUse;
+            // A static layer can be rebuilt beneath an active video; never let it
+            // replace the palette sampled from the video that is actually visible.
+            if (dynamic && pixels != null && object.ReferenceEquals(pixels, glassBackdrop.CurrentBackgroundSample)) return;
             if (!dynamic && pixels != null && object.ReferenceEquals(pixels, lastAnalyzedBackground)) return;
             if (dynamic && pixels != null && DateTime.UtcNow - lastAppearanceSample < TimeSpan.FromSeconds(2)) return;
             lastAppearanceSample = DateTime.UtcNow;
@@ -105,7 +112,7 @@ namespace Clover
             glassBackdrop.BlurRadius = automaticAppearance.Blur;
             glassBackdrop.Brightness = 0;
             glassBackdrop.TintStrength = 0; // semantic surface, no saturated full-panel tint
-            glassBackdrop.ContrastGuardEnabled = false; // surface protects every page/state
+            glassBackdrop.ContrastGuardEnabled = false; // precise text layer owns automatic protection
             if (automaticSurface != null)
             {
                 Color color = Color.FromRgb((byte)(automaticAppearance.Surface >> 16),
@@ -115,6 +122,8 @@ namespace Clover
                     (byte)Math.Ceiling(alpha * 255), color.R, color.G, color.B));
                 automaticSurface.Visibility = Visibility.Visible;
             }
+            automaticTextProtection.Visibility = pixels == null && !dynamic ? Visibility.Collapsed : Visibility.Visible;
+            automaticTextProtection.SetBackground(pixels, automaticAppearance, dynamic);
             if (rootBorder != null) rootBorder.Background = Ui.Bg;
             ApplyShadow();
         }
@@ -126,6 +135,7 @@ namespace Clover
             if (!enabled)
             {
                 if (automaticSurface != null) automaticSurface.Visibility = Visibility.Collapsed;
+                if (automaticTextProtection != null) automaticTextProtection.Visibility = Visibility.Collapsed;
                 if (appearanceTimer != null) appearanceTimer.Stop();
                 if (wasAutomaticAppearance)
                 {
@@ -157,7 +167,7 @@ namespace Clover
             glassBackdrop.TintStrength = 0;
             glassBackdrop.Brightness = 0;
             glassBackdrop.ContrastGuardEnabled = false;
-            glassBackdrop.BlurRadius = automaticAppearance == null ? 6 : automaticAppearance.Blur;
+            glassBackdrop.BlurRadius = automaticAppearance == null ? 0 : automaticAppearance.Blur;
             if (automaticAppearance == null) ApplyAutomaticSample(null);
             if (appearanceTimer != null && IsVisible) appearanceTimer.Start();
         }

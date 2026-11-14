@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -51,6 +53,22 @@ namespace Clover
         {
             int i = panel.TestRenderedIndexOfPath(path);
             return i < 0 ? null : panel.TestRenderedTileSnapshot()[i];
+        }
+        static int SelectedIndex(PanelWindow panel)
+        {
+            return (int)typeof(PanelWindow).GetField("selectedIndex",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(panel);
+        }
+        static void MouseDown(UIElement element)
+        {
+            element.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.MouseLeftButtonDownEvent
+            });
+            element.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.MouseLeftButtonUpEvent
+            });
         }
         [STAThread]
         static int Main()
@@ -140,6 +158,16 @@ namespace Clover
                     "统一常用仅有近期用户应用，持续使用优先于单日高频");
                 Check(!Text(panel, "手动固定") && !Text(panel, "最近常用") && Text(panel, "自动排序"),
                     "没有固定与最近分组，明确显示自动排序");
+                Border selectedCommon = Tile(panel, paths[0]);
+                MouseDown(selectedCommon);
+                Check(SelectedIndex(panel) >= 0, "常用页单击应用保持选中");
+                MouseDown((UIElement)typeof(PanelWindow).GetField("tilePanel",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(panel));
+                Check(SelectedIndex(panel) == -1 && selectedCommon.BorderBrush == Brushes.Transparent,
+                    "常用页点击内容空白处取消当前选择");
+                Check(!(bool)typeof(PanelWindow).GetMethod("LaunchSelected",
+                    BindingFlags.Instance | BindingFlags.NonPublic).Invoke(panel, null),
+                    "常用取消选中后Enter不会默认启动首项");
                 Button reset = ResetButton(panel);
                 Check(reset != null && !reset.IsEnabled && reset.ActualWidth > 0,
                     "窄窗口恢复按钮可见，自动状态不可重复恢复");
@@ -177,6 +205,16 @@ namespace Clover
                 panel.TestCommitDrag(0, 2); panel.TestRestoreCommonAutoSort();
                 panel.TestSwitchCategory(""); Wait(panel);
                 Check(panel.TestFirstRenderedPath() == paths[4], "常用恢复不改变全部页个人顺序");
+                Border selectedAll = Tile(panel, paths[4]);
+                MouseDown(selectedAll);
+                Check(SelectedIndex(panel) >= 0, "全部页单击应用保持选中");
+                MouseDown((UIElement)typeof(PanelWindow).GetField("tilePanel",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(panel));
+                Check(SelectedIndex(panel) == -1 && selectedAll.BorderBrush == Brushes.Transparent,
+                    "全部页点击内容空白处取消当前选择");
+                Check(!(bool)typeof(PanelWindow).GetMethod("LaunchSelected",
+                    BindingFlags.Instance | BindingFlags.NonPublic).Invoke(panel, null),
+                    "全部取消选中后Enter不会默认启动首项");
                 Check(Tile(panel, paths[3]) != null && Tile(panel, paths[4]) != null,
                     "过期与未启动应用仍留在全部，不隐藏软件");
                 panel.TestSwitchCategory("常用"); Wait(panel);

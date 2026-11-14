@@ -66,7 +66,7 @@ namespace Clover
             this.current = initialTab;
 
             dlg = new Window();
-            dlg.Title = initialTab == Tab.Hidden ? "四叶草 · 已隐藏的应用" : "四叶草 · 桌面设置";
+            dlg.Title = initialTab == Tab.Hidden ? AppBrand.Text("四叶草 · 已隐藏的应用") : AppBrand.Text("四叶草 · 桌面设置");
             dlg.Width = 560;
             dlg.Height = 700;
             dlg.WindowStartupLocation = owner != null

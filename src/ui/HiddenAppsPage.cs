@@ -42,7 +42,7 @@ namespace Clover
         StackPanel listHost;
         TextBlock statusText;
         StackPanel exceptionHost;
-        Border exceptionHeader;
+        Button exceptionHeader;
 
         /// <summary>当前显示的行（筛选后，按显示顺序）。键盘导航靠它。</summary>
         readonly List<HiddenRow> rows = new List<HiddenRow>();
@@ -163,15 +163,19 @@ namespace Clover
             exWrap.Orientation = Orientation.Vertical;
             exWrap.Margin = new Thickness(Ui.S.Xl, Ui.S.Sm, Ui.S.Xl, 0);
 
-            exceptionHeader = new Border();
+            exceptionHeader = new Button();
             exceptionHeader.Cursor = Cursors.Hand;
             exceptionHeader.Padding = new Thickness(0, 4, 0, 4);
             exceptionHeader.Background = Brushes.Transparent;
+            exceptionHeader.BorderThickness = new Thickness(0);
+            exceptionHeader.Template = UiButtons.Template(Ui.R.Sm);
+            exceptionHeader.HorizontalContentAlignment = HorizontalAlignment.Left;
 
             TextBlock exTitle = Ui.T("例外名单 (0)", 11, Ui.Sub);
             exTitle.FontWeight = FontWeights.SemiBold;
-            exceptionHeader.Child = exTitle;
-            exceptionHeader.MouseLeftButtonUp += delegate
+            exceptionHeader.Content = exTitle;
+            System.Windows.Automation.AutomationProperties.SetName(exceptionHeader, "展开例外名单");
+            exceptionHeader.Click += delegate
             {
                 try
                 {
@@ -233,6 +237,7 @@ namespace Clover
                 try
                 {
                     if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.ButtonBase) return;
+                    if (searchBox != null && searchBox.IsKeyboardFocusWithin) return;
                     if (e.Key == Key.Down) { MoveSelection(1); e.Handled = true; }
                     else if (e.Key == Key.Up) { MoveSelection(-1); e.Handled = true; }
                     else if (e.Key == Key.Enter) { RestoreCurrent(); e.Handled = true; }
@@ -789,7 +794,7 @@ namespace Clover
                 MessageBoxResult r = MessageBox.Show(dlg,
                     "将恢复全部 " + n + " 个被隐藏的应用。\r\n\r\n"
                     + "（批量 / 建议 / 自动隐藏项会加入保留例外，下次不会再隐藏）",
-                    "四叶草 · 全部恢复",
+                    AppBrand.Text("四叶草 · 全部恢复"),
                     MessageBoxButton.OKCancel, MessageBoxImage.Question,
                     MessageBoxResult.Cancel);
 
@@ -830,9 +835,11 @@ namespace Clover
                 List<string> ex = panel.BatchExceptionSnapshot();
                 int n = ex == null ? 0 : ex.Count;
 
-                TextBlock title = exceptionHeader.Child as TextBlock;
+                TextBlock title = exceptionHeader.Content as TextBlock;
                 if (title != null)
                     title.Text = (exceptionCollapsed ? "\uE76C" : "\uE70D") + "  例外名单 (" + n + ")";
+                System.Windows.Automation.AutomationProperties.SetName(exceptionHeader,
+                    exceptionCollapsed ? "展开例外名单" : "收起例外名单");
 
                 exceptionHost.Children.Clear();
 

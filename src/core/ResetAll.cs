@@ -140,7 +140,7 @@ namespace Clover
             // ---------- 输出结果 ----------
             // 主程序是 winexe，从命令行运行时没有控制台；此时改用弹窗展示。
             StringBuilder text = new StringBuilder();
-            text.AppendLine("四叶草一键回滚结果");
+            text.AppendLine(AppBrand.Name + "一键回滚结果");
             text.AppendLine(new string('-', 50));
 
             int failed = 0;
@@ -173,8 +173,9 @@ namespace Clover
             if (!keepConfig)
             {
                 text.AppendLine();
-                text.AppendLine("注意：配置与缓存已清理，程序下次启动会重新扫描并重建。");
+                text.AppendLine("图标缓存已清理。设置、分类、排序、使用记录及收纳文件均保留。");
             }
+            else text.AppendLine("已保留配置与图标缓存；收纳文件不会被删除或自动放回。");
 
             string report = text.ToString();
 

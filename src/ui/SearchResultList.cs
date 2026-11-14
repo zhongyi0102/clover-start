@@ -34,6 +34,8 @@ namespace Clover
         int generation;
         bool completed;
         string lastQuery = "";
+        ContextMenu activeMenu;
+        int selectionGeneration;
         readonly Dictionary<string, Border> rowsByKey = new Dictionary<string, Border>(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<int, TextBlock> headersByRole = new Dictionary<int, TextBlock>();
 
@@ -56,12 +58,74 @@ namespace Clover
 
         public bool Completed { get { return completed; } }
 
+        /// <summary>立即撤掉过期结果；实际匹配仍由宿主防抖后执行。</summary>
+        public void Invalidate()
+        {
+            Clear();
+            completed = false;
+            NotifyChanged();
+        }
+
+        bool IsCurrentResult(SearchResult result)
+        {
+            if (host == null || result == null) return false;
+            foreach (UIElement child in host.Children)
+            {
+                Border row = child as Border;
+                if (row != null && ReferenceEquals(row.Tag, result)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>键盘操作当前搜索结果，不借用已隐藏的应用磁贴选择。</summary>
+        internal bool HandleKey(Key key, bool inSearchBox)
+        {
+            if (host == null || (key != Key.Enter && key != Key.Up && key != Key.Down
+                && key != Key.Home && key != Key.End)) return false;
+            if (inSearchBox && (key == Key.Home || key == Key.End)) return false;
+            List<Border> rows = new List<Border>();
+            foreach (UIElement child in host.Children)
+            {
+                Border row = child as Border;
+                if (row != null && row.Tag is SearchResult) rows.Add(row);
+            }
+            int index = rows.FindIndex(row => row.IsKeyboardFocusWithin);
+            if (key == Key.Enter)
+            {
+                if (index < 0 && !inSearchBox) return false;
+                if (rows.Count > 0) Open((SearchResult)rows[Math.Max(0, index)].Tag);
+                return true;
+            }
+            if (rows.Count == 0) return true;
+            if (key == Key.Home) index = 0;
+            else if (key == Key.End) index = rows.Count - 1;
+            else if (index < 0) index = 0;
+            else index = Math.Max(0, Math.Min(rows.Count - 1, index + (key == Key.Up ? -1 : 1)));
+            rows[index].Focus();
+            rows[index].BringIntoView();
+            return true;
+        }
+
         /// <summary>结果条数上限（界面上超过这个数也没人翻）。</summary>
         const int MaxDisplay = 60;
 
         public SearchResultList(StackPanel host)
         {
             this.host = host;
+            if (host != null)
+            {
+                host.Background = Brushes.Transparent;
+                host.Focusable = true;
+            }
+        }
+
+        internal void ClearSelectionFromBackground()
+        {
+            selectionGeneration++;
+            ContextMenu previous = activeMenu;
+            activeMenu = null;
+            if (previous != null) previous.IsOpen = false;
+            if (host != null) host.Focus();
         }
 
         /// <summary>清空并取消正在进行的搜索。</summary>
@@ -74,6 +138,7 @@ namespace Clover
                 resultCount = 0;
                 completed = true;
                 if (host != null) host.Children.Clear();
+                if (activeMenu != null) activeMenu.IsOpen = false;
                 rowsByKey.Clear(); headersByRole.Clear(); lastQuery = "";
                 NotifyChanged();
             }
@@ -344,11 +409,16 @@ namespace Clover
             b.Focusable = true;
             System.Windows.Automation.AutomationProperties.SetName(b, r.Name + "，" + ResultDetail(r));
             b.GotKeyboardFocus += delegate { b.Background = Ui.Hover; };
-            b.LostKeyboardFocus += delegate { b.Background = Brushes.Transparent; };
+            b.LostKeyboardFocus += delegate
+            {
+                b.Background = b.IsMouseOver || (activeMenu != null && activeMenu.PlacementTarget == b)
+                    ? Ui.Hover : Brushes.Transparent;
+            };
             b.KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.Key == Key.Enter) { Open(r); e.Handled = true; }
-                if (e.Key == Key.Apps) { ShowRowMenu(r, b); e.Handled = true; }
+                if (Ui.IsContextMenuKey(Ui.EffectiveKey(e), Keyboard.Modifiers))
+                { ShowRowMenu(r, b, true); e.Handled = true; }
             };
 
             Grid g = new Grid();
@@ -382,19 +452,57 @@ namespace Clover
             b.Child = g;
 
             b.MouseEnter += delegate { b.Background = Ui.Hover; };
-            b.MouseLeave += delegate { b.Background = Brushes.Transparent; };
-            b.MouseLeftButtonDown += delegate { b.Background = Ui.Pressed; };
+            b.MouseLeave += delegate
+            {
+                // 鼠标离开不能抹掉键盘焦点，否则方向键/Tab 用户看不见当前位置。
+                b.Background = b.IsKeyboardFocused || (activeMenu != null && activeMenu.PlacementTarget == b)
+                    ? Ui.Hover : Brushes.Transparent;
+            };
+            b.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
+            {
+                if (!IsCurrentResult(r)) return;
+                b.Focus();
+                b.Background = Ui.Pressed;
+                // 与应用磁贴一致：单击只选择，双击才启动，避免搜索结果误触。
+                if (ResolveClickAction(e.ClickCount) == SearchResultClickAction.Open)
+                {
+                    Open(r);
+                    e.Handled = true;
+                }
+            };
             b.MouseLeftButtonUp += delegate
             {
-                b.Background = Ui.Hover;
-                Open(r);
+                b.Background = b.IsMouseOver || b.IsKeyboardFocused
+                    ? Ui.Hover : Brushes.Transparent;
             };
-            b.MouseRightButtonUp += delegate
+            b.MouseRightButtonDown += delegate
             {
+                if (IsCurrentResult(r)) b.Focus();
+            };
+            b.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
+            {
+                if (!IsCurrentResult(r)) return;
+                b.Focus();
+                e.Handled = true;
                 ShowRowMenu(r, b);
             };
 
             return b;
+        }
+
+        internal enum SearchResultClickAction
+        {
+            Select,
+            Open
+        }
+
+        /// <summary>
+        /// 搜索结果的鼠标语义：只有完整双击才打开；单击、三击以及异常计数都只选择。
+        /// 单独提取为纯逻辑，防止以后在事件处理里误改回“松手即启动”。
+        /// </summary>
+        internal static SearchResultClickAction ResolveClickAction(int clickCount)
+        {
+            return clickCount == 2 ? SearchResultClickAction.Open : SearchResultClickAction.Select;
         }
 
         /// <summary>图标：exe/lnk 用应用图标缓存，文件夹用字形，其他用文件字形。</summary>
@@ -489,6 +597,11 @@ namespace Clover
             TextBlock title = Ui.T("没有找到「" + (query ?? "") + "」", 13.5, Ui.Fg,
                 FontWeights.SemiBold);
             title.Margin = new Thickness(0, Ui.S.Sm, 0, 0);
+            title.TextWrapping = TextWrapping.Wrap;
+            title.TextTrimming = TextTrimming.CharacterEllipsis;
+            title.MaxWidth = 520;
+            title.MaxHeight = 44;
+            title.ToolTip = title.Text;
             empty.Children.Add(title);
             TextBlock hint = Ui.T("换个说法试试，或者用拼音首字母（如 wx → 微信）", 12, Ui.Sub);
             hint.Margin = new Thickness(0, Ui.S.Xs, 0, 0);
@@ -541,7 +654,7 @@ namespace Clover
         {
             try
             {
-                if (r == null || string.IsNullOrEmpty(r.Path)) return;
+                if (!IsCurrentResult(r) || string.IsNullOrEmpty(r.Path)) return;
                 if (r.IsFolder)
                 {
                     if (Directory.Exists(r.Path)) Process.Start("explorer.exe", "\"" + r.Path + "\"");
@@ -612,10 +725,14 @@ namespace Clover
         }
 
         /// <summary>右键：打开 / 打开所在位置 / 复制路径。</summary>
-        void ShowRowMenu(SearchResult r, FrameworkElement anchor)
+        void ShowRowMenu(SearchResult r, FrameworkElement anchor, bool keyboard = false)
         {
             try
             {
+                if (!IsCurrentResult(r)) return;
+                int selectionTicket = ++selectionGeneration;
+                Func<bool> valid = delegate { return selectionTicket == selectionGeneration && IsCurrentResult(r); };
+                if (activeMenu != null) activeMenu.IsOpen = false;
                 ContextMenu cm = new ContextMenu();
                 if (ClassificationChanged != null)
                 {
@@ -625,7 +742,7 @@ namespace Clover
                         AppRole selected = value;
                         MenuItem option = new MenuItem { Header = value == AppRole.User ? "用户用的" : value == AppRole.LowValue ? "低价值" : "电脑用的（仅搜索显示）",
                             IsCheckable = true, IsChecked = r.RoleRank == (int)value };
-                        option.Click += delegate { ClassificationChanged(r, selected); };
+                        option.Click += delegate { if (valid()) ClassificationChanged(r, selected); };
                         category.Items.Add(option);
                     }
                     cm.Items.Add(category);
@@ -633,7 +750,7 @@ namespace Clover
 
                 MenuItem open = new MenuItem();
                 open.Header = "打开";
-                open.Click += delegate { Open(r); };
+                open.Click += delegate { if (valid()) Open(r); };
                 cm.Items.Add(open);
 
                 // ---- 打开所在位置 ----
@@ -647,11 +764,12 @@ namespace Clover
                 {
                     try
                     {
+                        if (!valid()) return;
                         if (AppPaths.IsShellPath(r.Path))
                         {
                             MessageBox.Show("商店应用没有文件位置。\r\n\r\n"
                                 + "它由 Microsoft Store 管理，安装文件在受保护的 WindowsApps 目录下。\r\n"
-                                + "如需管理，请打开「设置 → 应用 → 已安装的应用」。", "四叶草");
+                                + "如需管理，请打开「设置 → 应用 → 已安装的应用」。", AppBrand.Text("四叶草"));
                             return;
                         }
 
@@ -669,6 +787,7 @@ namespace Clover
                 {
                     try
                     {
+                        if (!valid()) return;
                         if (AppPaths.IsShellPath(r.Path))
                         {
                             string aumid = AppPaths.ExtractAumid(r.Path);
@@ -684,7 +803,14 @@ namespace Clover
                 cm.Items.Add(copy);
 
                 cm.PlacementTarget = anchor;
-                cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                cm.Placement = keyboard ? System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    : System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                activeMenu = cm;
+                cm.Closed += delegate
+                {
+                    if (ReferenceEquals(activeMenu, cm)) activeMenu = null;
+                    if (valid()) anchor.Focus();
+                };
                 cm.IsOpen = true;
             }
             catch { }

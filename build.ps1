@@ -14,6 +14,7 @@
 #
 # 版本号来源：仓库根目录的 VERSION 文件（如 1.0.0）。
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -eq 'Core') { throw 'Use Windows PowerShell 5.1, not pwsh, for build.ps1.' }
 $root = $PSScriptRoot
 $srcDir = Join-Path $root 'src'
 $coreDir = Join-Path $srcDir 'core'
@@ -40,7 +41,7 @@ $versionCode = @"
 using System.Reflection;
 [assembly: AssemblyVersion("$appVersion")]
 [assembly: AssemblyFileVersion("$appVersion")]
-[assembly: AssemblyProduct("四叶草启动面板")]
+[assembly: AssemblyProduct(Clover.AppBrand.Product)]
 namespace Clover
 {
     static class BuildInfo
@@ -48,7 +49,7 @@ namespace Clover
         public const string Version = "$appVersion";
         public const string Stamp = "$stamp";
         public const string BuildTime = "$buildTime";
-        public static string Describe { get { return "四叶草 v" + Version + "（" + BuildTime + " 构建）"; } }
+        public static string Describe { get { return AppBrand.Name + " v" + Version + "（" + BuildTime + " 构建）"; } }
     }
 }
 "@
@@ -107,12 +108,15 @@ try {
 
 # ---------------- 2. 正式编译：core + ui 一起编成单文件 exe ----------------
 $exe = Join-Path $outDir 'CloverStart.exe'
-$ico = Join-Path $root 'res\clover.ico'
+$ico = Join-Path $root 'res\brand.ico'
+if (-not (Test-Path -LiteralPath $ico)) { & (Join-Path $root 'tools\make-brand-icons.ps1') }
 
 # 把界面图标嵌进程序集，这样单文件 exe 场景下没有外部 res\ 也能显示四叶草。
 # 资源名固定为 CloverStart.clover.png（命名空间 + 文件名）。
 $png = Join-Path $root 'res\clover.png'
 $resourceArgs = @()
+$brandPng = Join-Path $root 'res\brand.png'
+if (Test-Path -LiteralPath $brandPng) { $resourceArgs += ('/resource:' + $brandPng + ',CloverStart.brand.png') }
 if (Test-Path $png) { $resourceArgs += ('/resource:' + $png + ',CloverStart.clover.png') }
 $colorLicense = Join-Path $root 'licenses\Apache-2.0.txt'
 $thirdPartyNotices = Join-Path $root 'THIRD-PARTY-NOTICES.md'

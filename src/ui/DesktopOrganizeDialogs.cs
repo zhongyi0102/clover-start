@@ -31,7 +31,7 @@ namespace Clover
             store = DesktopOrganizeRules.Load(this.baseDir);
 
             dlg = new Window();
-            dlg.Title = "四叶草 · 整理规则";
+            dlg.Title = AppBrand.Text("四叶草 · 整理规则");
             dlg.Width = 760;
             dlg.Height = 590;
             dlg.MinWidth = 600;
@@ -208,7 +208,7 @@ namespace Clover
             if (store.Items.Count >= DesktopOrganizeRules.MaxRules)
             {
                 MessageBox.Show(dlg, "最多支持 " + DesktopOrganizeRules.MaxRules + " 条规则。",
-                    "四叶草 · 整理规则", MessageBoxButton.OK, MessageBoxImage.Information);
+                    AppBrand.Text("四叶草 · 整理规则"), MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
             DesktopOrganizeRule rule = new DesktopOrganizeRule();
@@ -234,7 +234,7 @@ namespace Clover
         {
             if (!TextPromptDialog.Confirm(dlg, "删除规则",
                 "删除「" + (rule.Name ?? "") + "」？\r\n\r\n这只删除规则，不会移动或删除任何文件。",
-                "删除规则")) return;
+                "删除规则", true)) return;
             store.Items.RemoveAt(index);
             SaveAndRefresh(true);
         }
@@ -256,7 +256,7 @@ namespace Clover
             if (!store.Save(out error))
             {
                 MessageBox.Show(dlg, "规则未能保存：\r\n" + error,
-                    "四叶草 · 整理规则", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppBrand.Text("四叶草 · 整理规则"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
             changed = true;
@@ -339,7 +339,7 @@ namespace Clover
                 ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             Window dlg = new Window();
-            dlg.Title = "四叶草 · " + (isNew ? "新建整理规则" : "编辑整理规则");
+            dlg.Title = AppBrand.Text("四叶草 · ") + (isNew ? "新建整理规则" : "编辑整理规则");
             dlg.Width = 600;
             dlg.Height = 650;
             dlg.MinWidth = 520;
@@ -605,7 +605,7 @@ namespace Clover
             catch (Exception ex)
             {
                 MessageBox.Show(owner, "打不开选目录窗口：" + ex.Message,
-                    "四叶草 · 整理规则", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AppBrand.Text("四叶草 · 整理规则"), MessageBoxButton.OK, MessageBoxImage.Warning);
                 return null;
             }
         }
@@ -659,7 +659,7 @@ namespace Clover
         {
             this.plan = plan ?? new DesktopOrganizePlan();
             dlg = new Window();
-            dlg.Title = "四叶草 · 智能整理预览";
+            dlg.Title = AppBrand.Text("四叶草 · 智能整理预览");
             dlg.Width = 980;
             dlg.Height = 620;
             dlg.MinWidth = 760;

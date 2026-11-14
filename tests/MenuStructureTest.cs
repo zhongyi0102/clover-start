@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 
 namespace Clover
 {
@@ -57,7 +58,7 @@ namespace Clover
                 cfg.HideTaskbar = false;   // 测试默认路径，不修改磁盘也不碰系统任务栏
                 TriggerWindow tw = new TriggerWindow(root, cfg);
                 Check(tw.TestPanelIndicator != null,
-                    "★四叶草按钮有面板状态指示条");
+                    "★归位按钮有面板状态指示条");
                 Check(tw.TestPanelIndicator != null
                         && tw.TestPanelIndicator.Visibility == Visibility.Collapsed,
                     "★面板未打开时状态指示条隐藏");
@@ -69,7 +70,7 @@ namespace Clover
                 Check(tw.TestPanelIndicator != null
                         && object.ReferenceEquals(tw.TestPanelIndicator.Background, Ui.Accent),
                     "★状态指示条复用 Ui.Accent 令牌");
-                Check(tw.TestAccessibleName == "打开四叶草面板",
+                Check(tw.TestAccessibleName == "打开归位面板",
                     "★关闭态有正确的辅助功能名称", tw.TestAccessibleName);
                 int panelFactoryCalls = 0;
                 tw.AttachPanelFactory(delegate
@@ -78,9 +79,23 @@ namespace Clover
                     return null;
                 });
                 ContextMenu cm = BuildMenu(tw);
+                cm.IsOpen = false;
+                tw.Show(); tw.UpdateLayout();
+                Button triggerButton = (Button)typeof(TriggerWindow)
+                    .GetField("root", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(tw);
+                tw.Activate(); triggerButton.Focus();
+                KeyEventArgs triggerMenuKey = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(tw), 0, Key.Apps)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                triggerButton.RaiseEvent(triggerMenuKey);
+                cm = tw.lastMenu;
+                Check(triggerMenuKey.Handled && cm.IsOpen && ReferenceEquals(cm.PlacementTarget, triggerButton),
+                    "归位按钮的菜单键打开已有全局菜单");
+                cm.IsOpen = false;
+                tw.Dispatcher.Invoke(new Action(delegate { }), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                Check(triggerButton.IsKeyboardFocused, "全局菜单关闭回到归位按钮");
 
                 Check(panelFactoryCalls == 0,
-                    "★构建四叶草按钮和右键菜单不会提前创建主面板",
+                    "★构建归位按钮和右键菜单不会提前创建主面板",
                     "工厂调用 " + panelFactoryCalls + " 次");
                 Check(!tw.TestHasStartButton(),
                     "★默认设置不创建“开始”辅助窗");

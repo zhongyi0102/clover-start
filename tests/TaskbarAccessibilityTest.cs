@@ -12,7 +12,7 @@ using System.Windows.Threading;
 
 namespace Clover
 {
-    /// <summary>四叶草任务栏按钮的键盘、UIAutomation、焦点与冗余状态反馈。</summary>
+    /// <summary>归位任务栏按钮的键盘、UIAutomation、焦点与冗余状态反馈。</summary>
     static class TaskbarAccessibilityTest
     {
         static int passed;
@@ -58,10 +58,10 @@ namespace Clover
 
                 string name = AutomationProperties.GetName(button);
                 string help = AutomationProperties.GetHelpText(button);
-                Check(name == "打开四叶草面板", "关闭态有准确辅助名称", name);
+                Check(name == "打开归位面板", "关闭态有准确辅助名称", name);
                 Check(!string.IsNullOrEmpty(help) && help.IndexOf("右键", StringComparison.Ordinal) >= 0,
                     "帮助文本同时说明左键与右键", help);
-                Check(Convert.ToString(button.ToolTip) == "打开四叶草面板",
+                Check(Convert.ToString(button.ToolTip) == "打开归位面板",
                     "状态有 Tooltip 冗余反馈，不只依赖颜色");
 
                 ButtonAutomationPeer peer = new ButtonAutomationPeer(button);

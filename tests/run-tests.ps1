@@ -17,6 +17,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -eq 'Core') { throw 'Use Windows PowerShell 5.1, not pwsh, for run-tests.ps1.' }
 $root = Split-Path -Parent $PSScriptRoot
 $srcDir = Join-Path $root 'src'
 # 源码分两层：core 零 WPF 依赖，ui 依赖 WPF。
@@ -63,7 +64,7 @@ $script:executed = 0
 $script:startedAt = Get-Date
 $script:results = @()
 $script:desktopSuites = @(
-    'CommonPinTest', 'FilesLibraryUiTest', 'DesktopWorkspaceTest', 'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest', 'AutoAppearanceTest',
+    'ResponsiveLayoutTest', 'ProjectContractTest', 'CommonPinTest', 'FilesLibraryUiTest', 'DesktopWorkspaceTest', 'CrashGuardTest', 'OpenFolderTest', 'GlassBackdropTest', 'AppearanceTest', 'AutoAppearanceTest',
     'IconTest', 'FullscreenTest', 'TaskbarCreatedTest', 'TaskbarStabilityTest',
     'TaskbarAccessibilityTest', 'ActiveRowTest',
     'MenuStructureTest', 'OrganizeShellTest', 'DeskRootDialogTest', 'DropHintTest',
@@ -71,6 +72,7 @@ $script:desktopSuites = @(
 )
 
 function Invoke-Suite($name, $refs, $sources, $module = $null) {
+    if (-not $module) { $sources = @($sources) + @((Join-Path $coreDir 'AppBrand.cs')) | Select-Object -Unique }
     if (-not $module -and @($sources | Where-Object {
         [System.IO.Path]::GetFileName($_) -in @('Catalog.cs', 'NativeScanner.cs', 'DropSpec.cs', 'DeskCollector.cs', 'DeskImporter.cs', 'DesktopCleaner.cs')
     }).Count -gt 0) {
@@ -438,6 +440,14 @@ Invoke-Suite 'ActiveRowTest' $wpfRefs `
 # 右键菜单结构：顶层 8 项、顺序、分隔线、子菜单归属、状态绑定
 Invoke-Suite 'MenuStructureTest' $wpfRefs `
     @((Join-Path $testDir 'MenuStructureTest.cs')) $uiModule
+
+# Brand compatibility, shared native buttons and sandbox-only safe update/rollback.
+Invoke-Suite 'ProjectContractTest' $wpfRefs `
+    @((Join-Path $testDir 'ProjectContractTest.cs')) $uiModule
+
+# 主面板缩放：顶部不挤压、网格均匀占满、点击区域同步、保留阅读锚点。
+Invoke-Suite 'ResponsiveLayoutTest' $wpfRefs `
+    @((Join-Path $testDir 'ResponsiveLayoutTest.cs')) $uiModule
 
 # 「整理与隐藏」外壳完整性：切标签不得覆盖宿主窗口的 Content
 Invoke-Suite 'OrganizeShellTest' $wpfRefs `

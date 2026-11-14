@@ -10,6 +10,17 @@ namespace Clover
 {
     static class Ui
     {
+        internal static bool IsContextMenuKey(System.Windows.Input.Key key, System.Windows.Input.ModifierKeys modifiers)
+        {
+            return (key == System.Windows.Input.Key.Apps && modifiers == System.Windows.Input.ModifierKeys.None)
+                || (key == System.Windows.Input.Key.F10 && modifiers == System.Windows.Input.ModifierKeys.Shift);
+        }
+
+        internal static System.Windows.Input.Key EffectiveKey(System.Windows.Input.KeyEventArgs e)
+        {
+            return e.Key == System.Windows.Input.Key.System ? e.SystemKey : e.Key;
+        }
+
         /// <summary>主题模式。System = 跟随 Windows 的浅色/深色设置。</summary>
         public enum ThemeMode { Light, Dark, System }
 
@@ -649,7 +660,17 @@ namespace Clover
         /// </summary>
         public static BitmapImage LoadCloverIcon(string externalPath)
         {
-            BitmapImage img = LoadImage(externalPath);
+            // The new embedded brand wins over stale clover assets in an old installation.
+            try
+            {
+                using (System.IO.Stream brand = System.Reflection.Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("CloverStart.brand.png"))
+                    if (brand != null) return DecodeStream(brand);
+            }
+            catch (Exception ex) { ErrorLog.Warn("读取品牌图标失败: " + ex.Message); }
+            string directory = string.IsNullOrEmpty(externalPath) ? "" : System.IO.Path.GetDirectoryName(externalPath);
+            BitmapImage img = LoadImage(System.IO.Path.Combine(directory, "brand.png"));
+            if (img == null) img = LoadImage(externalPath);
             if (img != null) return img;
 
             // 兜底：编译时嵌入的程序集资源（见 build.ps1 的 /resource 参数）

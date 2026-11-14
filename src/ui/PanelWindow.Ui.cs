@@ -75,8 +75,9 @@ namespace Clover
             Grid.SetColumn(logo, 0);
             header.Children.Add(logo);
 
-            TextBlock title = Ui.T("四叶草", 16, Ui.Fg, FontWeights.SemiBold);
+            TextBlock title = Ui.T(AppBrand.Text("四叶草"), 16, Ui.Fg, FontWeights.SemiBold);
             title.VerticalAlignment = VerticalAlignment.Center;
+            title.Margin = new Thickness(0, 0, Ui.S.Md, 0);
             Grid.SetColumn(title, 1);
             header.Children.Add(title);
 
@@ -123,6 +124,7 @@ namespace Clover
             searchHint.Foreground = Ui.Sub;
             searchHint.VerticalAlignment = VerticalAlignment.Center;
             searchHint.Margin = new Thickness(2, 0, 0, 0);
+            searchHint.TextTrimming = TextTrimming.CharacterEllipsis;
             searchHint.IsHitTestVisible = false;
 
             searchBox = new TextBox();
@@ -151,7 +153,7 @@ namespace Clover
             // 主面板的“最小化”不是系统任务栏最小化，而是收起到常驻四叶草；
             // 可再次点击四叶草或使用全局快捷键恢复。按 Windows 惯例放在最左侧。
             minBtn = MakeHeaderButton("\uE921", delegate { HidePanel(); });
-            minBtn.ToolTip = "最小化到四叶草";
+            minBtn.ToolTip = AppBrand.Text("最小化到四叶草");
             AutomationProperties.SetName(minBtn, "最小化主面板");
             winButtons.Children.Add(minBtn);
 
@@ -252,8 +254,16 @@ namespace Clover
             // WPF 默认滚轮按“行”瞬移，磁贴页会呈现明显的一格一格跳动。
             // 保留系统滚轮距离语义，但由短促、可中断的像素滚动呈现。
             contentScroll.PreviewMouseWheel += OnContentPreviewMouseWheel;
-            tilePanel = new WrapPanel();
+            ResponsiveTilePanel responsiveTiles = new ResponsiveTilePanel();
+            responsiveTiles.BeforeReflow = PreserveTileReflowAnchor;
+            tilePanel = responsiveTiles;
             tilePanel.Orientation = Orientation.Horizontal;
+            contentScroll.SizeChanged += delegate
+            {
+                CancelTileDrag();
+                ScheduleViewportIconRefresh();
+                if (automaticTextProtection != null) automaticTextProtection.Refresh();
+            };
 
             // 搜索结果列表（与磁贴区互斥显示）。
             //
@@ -264,6 +274,7 @@ namespace Clover
             searchResultPanel = new StackPanel();
             searchResultPanel.Orientation = Orientation.Vertical;
             searchResultPanel.Visibility = Visibility.Collapsed;
+            searchResultPanel.MouseLeftButtonDown += OnContentBlankMouseLeftButtonDown;
             searchResults = new SearchResultList(searchResultPanel);
             // 注入应用清单：搜索时要先在这 119 个已扫描应用里匹配（支持拼音），
             // 否则拼音搜索（weixin/wx）在界面上永远搜不到 —— 磁贴被隐藏了，
@@ -296,6 +307,13 @@ namespace Clover
 
             // 两者放进同一个 Grid，靠 Visibility 切换
             contentStack = new Grid();
+            contentStack.Background = Brushes.Transparent;
+            contentStack.MouseLeftButtonDown += OnContentBlankMouseLeftButtonDown;
+            tilePanel.Background = Brushes.Transparent;
+            tilePanel.Focusable = true;
+            tilePanel.MouseLeftButtonDown += OnContentBlankMouseLeftButtonDown;
+            tilePanel.AddHandler(UIElement.MouseDownEvent,
+                new MouseButtonEventHandler(OnContentBlankMouseLeftButtonDown), true);
             contentStack.Children.Add(tilePanel);
             contentStack.Children.Add(searchResultPanel);
 
@@ -351,7 +369,7 @@ namespace Clover
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            footerHint = Ui.T("单击选中 · 双击启动 · 拖动排序 · 方向键选择 · Enter 启动", 11, Ui.Sub);
+            footerHint = Ui.T("双击启动 · 拖动排序 · 方向键选择 · Enter 启动选中项", 11, Ui.Sub);
             footerHint.TextTrimming = TextTrimming.CharacterEllipsis;
             footerHint.Margin = new Thickness(0, 0, Ui.S.Sm, 0);
             footerHint.SetBinding(ToolTipProperty, new System.Windows.Data.Binding("Text") { Source = footerHint });
@@ -514,14 +532,10 @@ namespace Clover
             filesPanel.Orientation = Orientation.Vertical;
             filesPanel.Visibility = Visibility.Collapsed;
 
-            ScrollViewer chipScroll = new ScrollViewer();
-            chipScroll.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
-            chipScroll.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            chipScroll.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
-            filesChipRow = new StackPanel();
+            filesChipRow = new WrapPanel();
             filesChipRow.Orientation = Orientation.Horizontal;
-            chipScroll.Content = filesChipRow;
-            filesPanel.Children.Add(chipScroll);
+            filesChipRow.Margin = new Thickness(0, 0, 0, Ui.S.Xs);
+            filesPanel.Children.Add(filesChipRow);
 
             filesDropHint = new DropHint("把文件夹拖进来", DropSpec.FolderHintText());
             filesDropHint.Root.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
@@ -556,6 +570,8 @@ namespace Clover
             if (deskPanel != null || contentStack == null) return;
 
             deskPanel = new Grid();
+            deskPanel.Background = Brushes.Transparent;
+            deskPanel.MouseLeftButtonDown += OnContentBlankMouseLeftButtonDown;
             deskPanel.Visibility = Visibility.Collapsed;
             deskPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
             deskPanel.VerticalAlignment = VerticalAlignment.Stretch;
@@ -564,6 +580,8 @@ namespace Clover
             deskPanel.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
             deskToolRow = new WrapPanel();
+            deskToolRow.Background = Brushes.Transparent;
+            deskToolRow.MouseLeftButtonDown += OnContentBlankMouseLeftButtonDown;
             deskToolRow.Orientation = Orientation.Horizontal;
             deskToolRow.Margin = new Thickness(0, 0, 0, Ui.S.Sm);
             Grid.SetRow(deskToolRow, 0);
@@ -598,6 +616,59 @@ namespace Clover
 
             InsertBeforeInteractionLayer(deskPanel);
             InsertBeforeInteractionLayer(deskOverlay);
+        }
+
+        /// <summary>
+        /// 统一内容页的“点击空白取消选择”。只识别承载层本身与工具栏空隙，
+        /// 文件行、应用磁贴、桌面图标、按钮和滚动条等子控件都不会误触发。
+        /// </summary>
+        void OnContentBlankMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            try
+            {
+                if (e == null || e.ChangedButton != MouseButton.Left) return;
+                object hit = e.OriginalSource;
+
+                if (searchResultPanel != null && searchResultPanel.Visibility == Visibility.Visible
+                    && (ReferenceEquals(hit, searchResultPanel) || ReferenceEquals(hit, contentStack)))
+                {
+                    SelectTile(-1, false);
+                    searchResults.ClearSelectionFromBackground();
+                    e.Handled = true;
+                    return;
+                }
+
+                bool applicationPage = (current == "常用" || current == "")
+                    && tilePanel != null && tilePanel.Visibility == Visibility.Visible;
+                if (applicationPage && IsApplicationBlankHit(hit as DependencyObject))
+                {
+                    SelectTile(-1, false);
+                    e.Handled = true;
+                    return;
+                }
+
+                if (IsDeskTab(current) && deskView != null
+                    && (ReferenceEquals(hit, deskPanel) || ReferenceEquals(hit, deskToolRow)
+                        || ReferenceEquals(hit, contentStack)))
+                {
+                    deskView.ClearSelectionFromBackground();
+                    e.Handled = true;
+                }
+            }
+            catch (Exception ex) { Ui.LogError(ex, "内容页点击空白处"); }
+        }
+
+        bool IsApplicationBlankHit(DependencyObject hit)
+        {
+            if (!(hit is Panel) && !(hit is Border)) return false;
+            for (DependencyObject node = hit; node != null; node = VisualTreeHelper.GetParent(node))
+            {
+                Border border = node as Border;
+                if (border != null && tileAppIndex.ContainsKey(border)) return false;
+                if (node is Control || node is TextBlock) return false;
+                if (ReferenceEquals(node, tilePanel) || ReferenceEquals(node, contentStack)) return true;
+            }
+            return false;
         }
 
         /// <summary>懒页面永远插在拖拽覆盖层下方。</summary>
@@ -702,6 +773,8 @@ namespace Clover
             b.BorderThickness = new Thickness(0);
             b.Padding = new Thickness(0);
             b.Margin = new Thickness(2, 0, 0, 0);
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
             b.Template = MakeButtonTemplate(Ui.R.Sm);
             b.Content = MakeGlyph(glyph);
             b.Click += delegate { if (action != null) action(); };
@@ -714,41 +787,7 @@ namespace Clover
 
         internal static ControlTemplate MakeButtonTemplate(double radius)
         {
-            ControlTemplate template = new ControlTemplate(typeof(Button));
-            FrameworkElementFactory border = new FrameworkElementFactory(typeof(Border));
-            border.Name = "ButtonChrome";
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(radius));
-            border.SetBinding(Border.BackgroundProperty,
-                new System.Windows.Data.Binding("Background")
-                {
-                    RelativeSource = new System.Windows.Data.RelativeSource(
-                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
-                });
-            border.SetBinding(Border.BorderBrushProperty,
-                new System.Windows.Data.Binding("BorderBrush")
-                {
-                    RelativeSource = new System.Windows.Data.RelativeSource(
-                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
-                });
-            border.SetBinding(Border.BorderThicknessProperty,
-                new System.Windows.Data.Binding("BorderThickness")
-                {
-                    RelativeSource = new System.Windows.Data.RelativeSource(
-                        System.Windows.Data.RelativeSourceMode.TemplatedParent)
-                });
-
-            FrameworkElementFactory presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-            border.AppendChild(presenter);
-            template.VisualTree = border;
-
-            Trigger pressed = new Trigger();
-            pressed.Property = Button.IsPressedProperty;
-            pressed.Value = true;
-            pressed.Setters.Add(new Setter(Border.OpacityProperty, 0.82, "ButtonChrome"));
-            template.Triggers.Add(pressed);
-            return template;
+            return UiButtons.Template(radius);
         }
 
         /// <summary>
@@ -772,6 +811,8 @@ namespace Clover
             b.Padding = new Thickness(0);
             b.Template = MakeButtonTemplate(Ui.R.Sm);
             b.ToolTip = "收起 / 展开分类栏";
+            b.HorizontalContentAlignment = HorizontalAlignment.Center;
+            b.VerticalContentAlignment = VerticalAlignment.Center;
             AutomationProperties.SetName(b, "收起或展开分类栏");
             b.Content = MakeGlyph("\uE76B");   // ChevronLeft
             b.Click += delegate { ToggleNavCollapsed(); };

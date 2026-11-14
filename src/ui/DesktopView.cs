@@ -67,6 +67,8 @@ namespace Clover
 
         /// <summary>当前选中（文件名集合）。</summary>
         readonly HashSet<string> selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Item currentItem;
+        Item rangeAnchor;
 
         // ---- 拖动状态 ----
         bool dragging;
@@ -123,6 +125,18 @@ namespace Clover
         /// </summary>
         public Action<int> OnItemCountChanged;
 
+        internal string VisibleCountText()
+        {
+            int files = 0, folders = 0;
+            foreach (Item item in items)
+            {
+                if (item.Host == null || item.Host.Visibility != Visibility.Visible) continue;
+                if (item.IsFolder) folders++; else files++;
+            }
+            string count = folders > 0 ? folders + " 个文件夹 · " + files + " 个文件" : files + " 个文件";
+            return string.IsNullOrEmpty(filterQuery) ? count : "找到 " + (files + folders) + " / " + items.Count + " 项";
+        }
+
         public DesktopView(PanelWindow owner, Canvas canvas, Canvas overlay,
             VirtualDesks desks, string deskName)
         {
@@ -146,6 +160,7 @@ namespace Clover
         {
             try
             {
+                InvalidateItemMenu();
                 if (desks == null || string.IsNullOrEmpty(name)) return;
 
                 string dir = desks.FolderOf(name);
@@ -185,6 +200,7 @@ namespace Clover
                 {
                     canvas.Children.Clear();
                     selected.Clear();
+                    currentItem = rangeAnchor = null;
                     filterQuery = "";
                     layoutUndo = null;
                 }
@@ -277,6 +293,7 @@ namespace Clover
         {
             try
             {
+                InvalidateItemMenu();
                 string q = (query ?? "").Trim();
                 filterQuery = q;
                 foreach (Item it in items)
@@ -286,6 +303,9 @@ namespace Clover
                     it.Host.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
                     if (!visible) SetSelected(it, false);
                 }
+                if (!IsVisibleItem(currentItem)) currentItem = null;
+                if (!IsVisibleItem(rangeAnchor)) rangeAnchor = null;
+                if (OnItemCountChanged != null) OnItemCountChanged(items.Count);
             }
             catch (Exception ex) { Ui.LogError(ex, "筛选桌面收纳"); }
         }
@@ -394,12 +414,15 @@ namespace Clover
             if (disposed) return;
             canvas.Dispatcher.BeginInvoke(new Action(delegate
             {
-                if (disposed || reloadQueued) return;
+                if (disposed) return;
+                InvalidateItemMenu();
+                if (reloadQueued) return;
                 reloadQueued = true;
                 DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
                 timer.Tick += delegate
                 {
                     if (disposed) { timer.Stop(); reloadQueued = false; return; }
+                    if (menuOpen) InvalidateItemMenu();
                     if (IsInteracting || (owner != null && owner.DeskTransferPending)) return;
                     timer.Stop(); reloadQueued = false;
                     Load(deskName);
@@ -410,6 +433,7 @@ namespace Clover
 
         public void Dispose()
         {
+            InvalidateItemMenu();
             disposed = true;
             if (folderWatcher != null) folderWatcher.Dispose();
             folderWatcher = null;
@@ -424,6 +448,8 @@ namespace Clover
             cell.Height = CellH;
             cell.CornerRadius = new CornerRadius(Ui.R.Sm);
             cell.Background = Brushes.Transparent;
+            cell.BorderBrush = Brushes.Transparent;
+            cell.BorderThickness = new Thickness(1);
             cell.Cursor = Cursors.Hand;
             cell.Tag = it;
 
@@ -472,6 +498,7 @@ namespace Clover
         {
             try
             {
+                canvas.Focusable = true;
                 // 空白处：框选 / 清空选择
                 canvas.MouseLeftButtonDown += OnCanvasDown;
                 canvas.MouseMove += OnCanvasMove;
@@ -551,6 +578,7 @@ namespace Clover
                 if (shift) SelectRange(hit);
                 else if (ctrl2) ToggleSelect(hit);
                 else if (!hit.IsSelected) SelectOnly(hit);
+                else { currentItem = rangeAnchor = hit; }
 
                 dragging = true;
                 dragMoved = false;
@@ -991,7 +1019,7 @@ namespace Clover
 
         void OnKey(object s, KeyEventArgs e)
         {
-            if (HandleKey(e.Key, Keyboard.Modifiers)) e.Handled = true;
+            if (HandleKey(Ui.EffectiveKey(e), Keyboard.Modifiers)) e.Handled = true;
         }
 
         internal bool HandleKey(Key key, ModifierKeys modifiers)
@@ -1000,6 +1028,17 @@ namespace Clover
             {
                 if (TransferPending) return true;
                 bool ctrl = (modifiers & ModifierKeys.Control) != 0;
+
+                if (Ui.IsContextMenuKey(key, modifiers))
+                {
+                    if (IsVisibleItem(currentItem) && currentItem.IsSelected)
+                    { ShowItemMenu(currentItem, true); return true; }
+                    foreach (Item item in items)
+                        if (item.IsSelected && item.Host.Visibility == Visibility.Visible)
+                        { ShowItemMenu(item, true); return true; }
+                    ShowBlankMenu(true);
+                    return true;
+                }
 
                 if (ctrl && key == Key.A)
                 {
@@ -1041,6 +1080,7 @@ namespace Clover
                 }
                 if (key == Key.Enter)
                 {
+                    if (IsVisibleItem(currentItem) && currentItem.IsSelected) { OpenItem(currentItem); return true; }
                     foreach (Item item in items)
                         if (item.IsSelected && item.Host.Visibility == Visibility.Visible) { OpenItem(item); return true; }
                 }
@@ -1051,9 +1091,10 @@ namespace Clover
 
         void SelectNearest(Key direction, bool extend)
         {
-            Item anchor = null, next = null;
-            foreach (Item item in items)
-                if (item.IsSelected && item.Host.Visibility == Visibility.Visible) { anchor = item; break; }
+            Item anchor = IsVisibleItem(currentItem) ? currentItem : null, next = null;
+            if (anchor == null)
+                foreach (Item item in items)
+                    if (item.IsSelected && item.Host.Visibility == Visibility.Visible) { anchor = item; break; }
             double best = double.MaxValue;
             foreach (Item item in items)
             {
@@ -1068,7 +1109,14 @@ namespace Clover
                 if (score < best) { best = score; next = item; }
             }
             if (next == null) return;
-            if (extend) SetSelected(next, true); else SelectOnly(next);
+            if (extend)
+            {
+                if (!IsVisibleItem(rangeAnchor)) rangeAnchor = anchor ?? next;
+                if (anchor != null) SetSelected(anchor, true);
+                SetSelected(next, true);
+                currentItem = next;
+            }
+            else SelectOnly(next);
             next.Host.BringIntoView();
         }
 
@@ -1094,30 +1142,45 @@ namespace Clover
 
         void ClearSelection()
         {
+            InvalidateItemMenu();
+            currentItem = rangeAnchor = null;
             foreach (Item it in items) SetSelected(it, false);
+        }
+
+        /// <summary>供桌面收纳页面外围空白复用，与画布内空白点击保持同一语义。</summary>
+        internal void ClearSelectionFromBackground()
+        {
+            if (selected.Count == 0 && currentItem == null && rangeAnchor == null) return;
+            ClearSelection();
         }
 
         void SelectOnly(Item one)
         {
             foreach (Item it in items) SetSelected(it, ReferenceEquals(it, one));
+            currentItem = rangeAnchor = one;
         }
 
         void ToggleSelect(Item one)
         {
             SetSelected(one, !one.IsSelected);
+            currentItem = one;
+            rangeAnchor = one;
         }
 
         void SelectRange(Item to)
         {
             try
             {
-                int a = items.FindIndex(delegate(Item x) { return x.IsSelected; });
+                int a = IsVisibleItem(rangeAnchor) ? items.IndexOf(rangeAnchor)
+                    : items.FindIndex(delegate(Item x) { return x.IsSelected; });
                 int b = items.IndexOf(to);
                 if (a < 0 || b < 0) { SelectOnly(to); return; }
 
                 int lo = Math.Min(a, b), hi = Math.Max(a, b);
                 for (int i = 0; i < items.Count; i++)
                     SetSelected(items[i], i >= lo && i <= hi && items[i].Host.Visibility == Visibility.Visible);
+                rangeAnchor = items[a];
+                currentItem = to;
             }
             catch { SelectOnly(to); }
         }
@@ -1128,8 +1191,9 @@ namespace Clover
             {
                 if (it == null) return;
 
+                if (it.IsSelected == on) return;
+                InvalidateItemMenu();
                 it.IsSelected = on;
-                if (OnSelectionChanged != null) OnSelectionChanged();
                 if (on) selected.Add(it.Name);
                 else selected.Remove(it.Name);
 
@@ -1137,8 +1201,8 @@ namespace Clover
                 {
                     it.Host.Background = on ? Ui.AccentSoft : Brushes.Transparent;
                     it.Host.BorderBrush = on ? Ui.Accent : Brushes.Transparent;
-                    it.Host.BorderThickness = new Thickness(on ? 1 : 0);
                 }
+                if (OnSelectionChanged != null) OnSelectionChanged();
             }
             catch { }
         }
@@ -1202,96 +1266,140 @@ namespace Clover
                     if (hit) SetSelected(it, true);
                     else if (!ctrl) SetSelected(it, false);
                 }
+                if (currentItem == null || !currentItem.IsSelected)
+                    currentItem = items.Find(item => item.IsSelected);
+                rangeAnchor = currentItem;
             }
             catch { }
         }
 
         // ========== 菜单 ==========
 
-        void ShowBlankMenu()
+        void ShowBlankMenu(bool keyboard = false)
         {
             try
             {
+                InvalidateItemMenu();
+                int ticket = itemMenuGeneration;
+                Func<bool> valid = delegate { return ticket == itemMenuGeneration && !disposed; };
                 ContextMenu cm = new ContextMenu();
                 MenuItem undo = new MenuItem { Header = "撤销最近摆放", IsEnabled = layoutUndo != null };
-                undo.Click += delegate { UndoLayout(); };
+                undo.Click += delegate { if (valid()) UndoLayout(); };
                 cm.Items.Add(undo);
 
                 MenuItem refresh = new MenuItem();
                 refresh.Header = "刷新";
-                refresh.Click += delegate { Load(deskName); };
+                refresh.Click += delegate { if (valid()) Load(deskName); };
                 cm.Items.Add(refresh);
 
                 MenuItem newFolder = new MenuItem();
                 newFolder.Header = "新建文件夹";
-                newFolder.Click += delegate { CreateNew(true); };
+                newFolder.Click += delegate { if (valid()) CreateNew(true); };
                 cm.Items.Add(newFolder);
 
                 MenuItem newText = new MenuItem();
                 newText.Header = "新建文本文档";
-                newText.Click += delegate { CreateNew(false); };
+                newText.Click += delegate { if (valid()) CreateNew(false); };
                 cm.Items.Add(newText);
 
                 MenuItem arrange = new MenuItem();
                 arrange.Header = "自动排列图标";
-                arrange.Click += delegate { ArrangeAll(); };
+                arrange.Click += delegate { if (valid()) ArrangeAll(); };
                 cm.Items.Add(arrange);
 
                 cm.PlacementTarget = canvas;
                 menuOpen = true;
-                cm.Closed += delegate { menuOpen = false; };
-                cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                cm.Closed += delegate { menuOpen = false; if (keyboard && canvas.IsVisible && valid()) canvas.Focus(); };
+                cm.Placement = keyboard ? System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    : System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                activeItemMenu = cm;
                 cm.IsOpen = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "桌面空白菜单"); }
         }
 
-        void ShowItemMenu(Item it)
+        ContextMenu activeItemMenu;
+        int itemMenuGeneration;
+
+        bool IsVisibleItem(Item item)
+        {
+            return item != null && items.Contains(item) && item.Host != null
+                && item.Host.Visibility == Visibility.Visible;
+        }
+
+        internal void InvalidateItemMenu()
+        {
+            unchecked { itemMenuGeneration++; }
+            ContextMenu previous = activeItemMenu;
+            activeItemMenu = null;
+            menuOpen = false;
+            if (previous != null) previous.IsOpen = false;
+        }
+
+        bool IsMenuTargetCurrent(int ticket, Item item, HashSet<string> selection)
+        {
+            if (ticket != itemMenuGeneration || disposed || !IsVisibleItem(item)
+                || !selected.SetEquals(selection)) return false;
+            if (!File.Exists(item.FullPath) && !Directory.Exists(item.FullPath)) return false;
+            foreach (Item target in items)
+                if (selection.Contains(target.Name) && !File.Exists(target.FullPath)
+                    && !Directory.Exists(target.FullPath)) return false;
+            return true;
+        }
+
+        void ShowItemMenu(Item it, bool keyboard = false)
         {
             try
             {
-                if (it == null) return;
+                if (!IsVisibleItem(it)) return;
+                InvalidateItemMenu();
+                currentItem = it;
+                int ticket = itemMenuGeneration;
+                HashSet<string> selection = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+                Func<bool> valid = delegate { return IsMenuTargetCurrent(ticket, it, selection); };
 
                 ContextMenu cm = new ContextMenu();
 
                 MenuItem open = new MenuItem();
                 open.Header = "打开";
-                open.Click += delegate { OpenItem(it); };
+                open.Click += delegate { if (valid()) OpenItem(it); };
                 cm.Items.Add(open);
 
                 MenuItem reveal = new MenuItem();
                 reveal.Header = "打开所在位置";
-                reveal.Click += delegate { RevealItem(it); };
+                reveal.Click += delegate { if (valid()) RevealItem(it); };
                 cm.Items.Add(reveal);
 
                 cm.Items.Add(new Separator());
 
                 MenuItem rename = new MenuItem();
                 rename.Header = "重命名";
-                rename.Click += delegate { RenameItem(it); };
+                rename.Click += delegate { if (valid()) RenameItem(it); };
                 cm.Items.Add(rename);
 
                 MenuItem back = new MenuItem();
                 back.Header = "放回桌面（" + SelectedPaths().Count + " 项）";
-                back.Click += delegate { if (owner != null) owner.PutBackSelectedDesktopItems(); };
+                back.Click += delegate { if (valid() && owner != null) owner.PutBackSelectedDesktopItems(); };
                 cm.Items.Add(back);
 
                 MenuItem del = new MenuItem();
                 del.Header = "移到回收站";
-                del.Click += delegate { DeleteSelected(); };
+                del.Click += delegate { if (valid()) DeleteSelected(); };
                 cm.Items.Add(del);
 
                 cm.Items.Add(new Separator());
 
                 MenuItem props = new MenuItem();
                 props.Header = "属性";
-                props.Click += delegate { ShowProperties(it); };
+                props.Click += delegate { if (valid()) ShowProperties(it); };
                 cm.Items.Add(props);
 
                 cm.PlacementTarget = it.Host;
                 menuOpen = true;
-                cm.Closed += delegate { menuOpen = false; };
-                cm.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                cm.Closed += delegate { menuOpen = false; if (keyboard && canvas.IsVisible && valid()) canvas.Focus(); };
+                cm.Placement = keyboard ? System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    : System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                activeItemMenu = cm;
                 cm.IsOpen = true;
             }
             catch (Exception ex) { Ui.LogError(ex, "桌面图标菜单"); }
@@ -1355,7 +1463,7 @@ namespace Clover
                     FileOps.OpResult r = FileOps.NewFolder(dir);
                     if (r != null && !r.Ok)
                     {
-                        MessageBox.Show(owner, r.Message, "四叶草 · 新建文件夹",
+                        MessageBox.Show(owner, r.Message, AppBrand.Text("四叶草 · 新建文件夹"),
                             MessageBoxButton.OK, MessageBoxImage.Information);
                         return;
                     }
@@ -1394,7 +1502,7 @@ namespace Clover
                 FileOps.OpResult r = FileOps.Rename(it.FullPath, nn, null);
                 if (r != null && !r.Ok)
                 {
-                    MessageBox.Show(owner, r.Message, "四叶草 · 重命名",
+                    MessageBox.Show(owner, r.Message, AppBrand.Text("四叶草 · 重命名"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -1424,14 +1532,14 @@ namespace Clover
                     ? ("确定删除「" + Path.GetFileName(targets[0]) + "」？\r\n\r\n文件会移到回收站。")
                     : ("确定删除这 " + targets.Count + " 项？\r\n\r\n文件会移到回收站。");
 
-                if (!TextPromptDialog.Confirm(owner, "删除", msg, "删除")) return;
+                if (!TextPromptDialog.Confirm(owner, "删除", msg, "删除", true)) return;
 
                 FileOps.OpResult r = FileOps.Delete(targets, null,
                     new System.Windows.Interop.WindowInteropHelper(owner).Handle);
 
                 if (r != null && !r.Ok)
                 {
-                    MessageBox.Show(owner, r.Message, "四叶草 · 删除",
+                    MessageBox.Show(owner, r.Message, AppBrand.Text("四叶草 · 删除"),
                         MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
@@ -1459,7 +1567,7 @@ namespace Clover
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 if (string.IsNullOrEmpty(desktop))
                 {
-                    MessageBox.Show(owner, "取不到桌面路径。", "四叶草 · 放回桌面",
+                    MessageBox.Show(owner, "取不到桌面路径。", AppBrand.Text("四叶草 · 放回桌面"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
@@ -1477,7 +1585,7 @@ namespace Clover
                         + (moved.SourceStillExists
                             ? "文件仍在原处：" + it.FullPath
                             : "请检查目标：" + moved.Target),
-                        "四叶草 · 放回桌面",
+                        AppBrand.Text("四叶草 · 放回桌面"),
                         MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }

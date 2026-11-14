@@ -40,7 +40,7 @@ namespace Clover
             Pump();
             Check(view.Status != "更新中…", "异步扫描正常完成");
         }
-        static Button ButtonWithTag(StackPanel host, string tag)
+        static Button ButtonWithTag(Panel host, string tag)
         {
             foreach (UIElement child in host.Children)
             {
@@ -55,6 +55,42 @@ namespace Clover
             Border row;
             return Get<Dictionary<string, Border>>(view, "rowMap").TryGetValue(path, out row) ? row : null;
         }
+        static FileScanner.Entry Current(FilesTabView view)
+        {
+            return (FileScanner.Entry)typeof(FilesTabView).GetMethod("CurrentEntry",
+                BindingFlags.Instance | BindingFlags.NonPublic).Invoke(view, null);
+        }
+        static MenuItem MenuAction(ContextMenu menu, string title)
+        {
+            foreach (object item in menu.Items)
+            {
+                MenuItem action = item as MenuItem;
+                if (action != null && Convert.ToString(action.Header) == title) return action;
+            }
+            return null;
+        }
+        static void CancelBatchDelete(FilesTabView view, int count)
+        {
+            bool sawDialog = false, cancelFocused = false;
+            DispatcherTimer timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+            timer.Tick += delegate
+            {
+                foreach (Window dialog in Application.Current.Windows)
+                {
+                    if (!dialog.Title.Contains("移到回收站")) continue;
+                    sawDialog = true;
+                    Button cancel = Keyboard.FocusedElement as Button;
+                    cancelFocused = cancel != null && System.Windows.Automation.AutomationProperties
+                        .GetName(cancel) == "取消移到回收站";
+                    timer.Stop(); dialog.Close(); break;
+                }
+            };
+            timer.Start();
+            try { view.ConfirmAndDelete(); }
+            finally { timer.Stop(); }
+            Check(sawDialog && cancelFocused && view.TestSelectedCount() == count,
+                count + "个普通文件删除先确认，默认取消且保留多选");
+        }
         [STAThread]
         static int Main()
         {
@@ -65,6 +101,7 @@ namespace Clover
             Window window = null;
             PanelWindow panel = null;
             FilesTabView view = null;
+            IDataObject previousClipboard = Clipboard.GetDataObject();
             try
             {
                 Ui.ApplyTheme(Ui.ThemeMode.Light);
@@ -77,20 +114,38 @@ namespace Clover
                 FileFolders folders = FileFolders.Load(root); folders.Add(first); folders.Add(second);
                 Settings settings = Settings.Load(root); settings.FilesSort = "name:asc";
                 settings.AutoAppearance = false; // this fixture explicitly tests manual theme switching
-                StackPanel chips = new StackPanel { Orientation = Orientation.Horizontal };
-                StackPanel exts = new StackPanel { Orientation = Orientation.Horizontal };
+                WrapPanel chips = new WrapPanel { Orientation = Orientation.Horizontal };
+                WrapPanel exts = new WrapPanel { Orientation = Orientation.Horizontal };
                 StackPanel list = new StackPanel(), undo = new StackPanel(), content = new StackPanel();
                 TextBlock notice = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Ui.Sub };
-                content.Children.Add(new ScrollViewer { Content = chips, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
-                content.Children.Add(new ScrollViewer { Content = exts, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Disabled });
+                content.Children.Add(chips);
+                content.Children.Add(exts);
                 content.Children.Add(notice); content.Children.Add(list); content.Children.Add(undo);
                 ScrollViewer scroll = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-                window = new Window { Width = 640, Height = 460, Content = scroll, Background = Ui.Bg };
+                Border testSurface = new Border { Background = Ui.Bg, Child = scroll };
+                window = new Window { Width = 640, Height = 460, Content = testSurface, Background = Ui.Bg };
                 window.Show();
                 view = new FilesTabView(null, settings, root, chips, exts, list, notice, undo);
+                view.AttachSelectionSurface(content);
                 view.OnEnter(); view.Refresh(true); Wait(view, notice); window.UpdateLayout();
+                string longSourceName = "来源" + new string('长', 100);
+                folders.Rename(first, longSourceName); view.ReloadFolders(); view.Refresh(true); Wait(view, notice);
+                window.UpdateLayout();
+                Button longChip = ButtonWithTag(chips, first);
+                TextBlock longLabel = longChip.Content as TextBlock;
+                Check(longLabel != null && longLabel.Text == longSourceName
+                    && longLabel.TextTrimming == TextTrimming.CharacterEllipsis && longChip.ActualWidth <= 280.1
+                    && longLabel.ActualWidth < longChip.ActualWidth,
+                    "长来源名限制宽度并省略显示，不撑破来源栏");
+                Check(Convert.ToString(longChip.ToolTip).Contains(longSourceName)
+                    && Convert.ToString(longChip.ToolTip).Contains(first), "长来源悬停可读完整名称和路径");
+                window.Width = 240; window.UpdateLayout(); Pump(); window.UpdateLayout();
+                Check(longChip.ActualWidth + longChip.Margin.Right <= chips.ActualWidth + 0.1,
+                    "单个长来源按钮随更窄窗口缩小");
+                window.Width = 640; window.UpdateLayout(); Pump(); window.UpdateLayout();
+                Check(longChip.ActualWidth > 200 && longChip.MaxWidth == 280,
+                    "放宽窗口恢复来源名可用宽度且复用按钮");
+                folders.Rename(first, "项目"); view.ReloadFolders(); view.Refresh(true); Wait(view, notice); window.UpdateLayout();
                 Check(view.TestRowCount() == 500 && ButtonWithTag(list, "file-load-more") != null, "初始仅显示500项，提供加载更多");
                 Check(Get<List<FileScanner.Entry>>(view, "visible")[0].IsFolder, "默认全部且文件夹在前");
                 Check(Get<FileScanner.Result>(view, "cached").Items.Count == 534, "已扫描元数据未提前按500截断");
@@ -103,10 +158,17 @@ namespace Clover
                     if (button != null && Convert.ToString(button.Content).Contains("刷新")) extRefresh = true;
                 }
                 Check(!extRefresh, "后缀筛选栏不再混入刷新操作");
-                Check(((Grid)Row(view, Path.Combine(first, "文件夹")).Child).Children[0] is System.Windows.Shapes.Path,
-                    "文件夹使用矢量图标，不依赖缺字的系统图标字体");
+                Grid folderSlot = (Grid)((Grid)Row(view, Path.Combine(first, "文件夹")).Child).Children[0];
+                Check(folderSlot.Width == 24 && folderSlot.Height == 24 && !folderSlot.IsHitTestVisible
+                    && (folderSlot.Children[0] is Image || folderSlot.Children[0] is System.Windows.Shapes.Path),
+                    "文件夹有固定图标槽，系统图标或矢量兜底均不依赖缺字字体");
                 view.HandleKey(Key.A, ModifierKeys.Control);
                 Check(view.TestSelectedCount() == 500, "全选只选已显示项，不操作隐藏分页结果");
+                content.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                {
+                    RoutedEvent = UIElement.MouseLeftButtonDownEvent
+                });
+                Check(view.TestSelectedCount() == 0, "点击文件页内容空白处取消当前选择");
                 view.ApplyFilter("最后报告"); window.UpdateLayout();
                 Check(view.TestRowCount() == 1 && Get<List<FileScanner.Entry>>(view, "visible")[0].Name == "最后报告.pdf",
                     "搜索找到排序后500项之外的文件");
@@ -120,6 +182,18 @@ namespace Clover
                     "文件夹模式忽略文件后缀筛选");
                 Check(!ButtonWithTag(exts, "pdf").IsEnabled, "文件夹模式禁用后缀按钮并解释原因");
                 Click(ButtonWithTag(exts, "file-mode:All"));
+                view.ApplyFilter(""); view.HandleKey(Key.A, ModifierKeys.Control);
+                view.HandleKey(Key.C, ModifierKeys.Control);
+                System.Collections.Specialized.StringCollection keyboardCopy = Clipboard.GetFileDropList();
+                string folderPath = Path.Combine(first, "文件夹");
+                Check(keyboardCopy.Count == view.TestSelectedCount() && keyboardCopy.Contains(folderPath),
+                    "Ctrl+C复制当前选中集合，包含文件夹");
+                Invoke(view, "ShowItemMenu", Get<List<FileScanner.Entry>>(view, "visible")[0], false);
+                ContextMenu copyMenu = Get<ContextMenu>(view, "activeItemMenu");
+                copyMenu.IsOpen = false;
+                MenuAction(copyMenu, "复制文件").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Check(Clipboard.GetFileDropList().Count == keyboardCopy.Count
+                    && Clipboard.GetFileDropList().Contains(folderPath), "菜单关闭后正常复制仍执行，与Ctrl+C相同");
                 Check(view.TestRowCount() == 2, "切回全部保留后缀选择：文件夹加PDF");
                 Click(ButtonWithTag(exts, "pdf"));
                 Click(ButtonWithTag(list, "file-load-more"));
@@ -127,11 +201,16 @@ namespace Clover
                 view.ApplyFilter("同名");
                 string a = Path.Combine(first, "同名.txt"), b = Path.Combine(second, "同名.txt");
                 Border kept = Row(view, a), other = Row(view, b);
-                TextBlock aSource = (TextBlock)((Grid)kept.Child).Children[4];
+                Grid keptGrid = (Grid)kept.Child;
+                TextBlock aSource = (TextBlock)keptGrid.Children[4];
                 TextBlock bSource = (TextBlock)((Grid)other.Child).Children[4];
                 Check(view.TestRowCount() == 2 && aSource.Text != bSource.Text
                     && Convert.ToString(aSource.ToolTip) == first && Convert.ToString(bSource.ToolTip) == second,
                     "同名文件分别显示来源名称与完整来源路径");
+                Check(kept.Height == 52 && Grid.GetColumn(aSource) == 1
+                    && keptGrid.ColumnDefinitions[4].Width.Value == 0
+                    && ((TextBlock)keptGrid.Children[1]).VerticalAlignment == VerticalAlignment.Top,
+                    "640像素多来源时来源移到名称下方，独立来源列收起");
                 view.HandleKey(Key.A, ModifierKeys.Control);
                 File.WriteAllText(a, "changed contents");
                 view.Refresh(true);
@@ -183,13 +262,16 @@ namespace Clover
                 view.TestSetSources(null); view.ApplyFilter("file000"); view.Refresh(true); Wait(view, notice); window.UpdateLayout();
                 scroll.ScrollToTop(); scroll.UpdateLayout();
                 RenderTargetBitmap bitmap = new RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
-                bitmap.Render(scroll);
+                bitmap.Render(testSurface);
                 PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
                 string screenshot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "files-library-narrow.png");
                 using (FileStream stream = File.Create(screenshot)) encoder.Save(stream);
+                Check(HasVisiblePixels(bitmap), "文件库窄窗口截图包含真实界面内容");
                 Console.WriteLine("Screenshot: " + screenshot);
 
                 Settings panelSettings = Settings.Load(root); panelSettings.AutoAppearance = false;
+                // 上面的排序测试已保存倒序；导航夹具固定正序，避免把文件名当作当前排序。
+                panelSettings.FilesSort = "name:asc";
                 panel = new PanelWindow(root, null, panelSettings); panel.Show(); panel.TestSwitchCategory("文件"); Pump();
                 panel.TestSetSearchText("file000"); Pump(); panel.TestSwitchCategory("常用"); Pump();
                 Check(Get<TextBox>(panel, "searchBox").Text.Length == 0, "文件搜索不泄漏到应用页");
@@ -214,11 +296,108 @@ namespace Clover
                     "F5只在刷新按钮提示中说明，不重复占底栏");
                 FilesTabView panelFiles = Get<FilesTabView>(panel, "filesView");
                 Border panelKept = Row(panelFiles, Path.Combine(first, "file0000.txt"));
+                panel.Activate();
+                Invoke(panelFiles, "ClearSelection");
+                panelFiles.HandleKey(Key.Down, ModifierKeys.None);
+                panelFiles.HandleKey(Key.Down, ModifierKeys.Shift);
+                panelFiles.HandleKey(Key.Down, ModifierKeys.Shift);
+                Check(panelFiles.TestSelectedCount() == 3 && Current(panelFiles).Name == "file0002.txt",
+                    "连续Shift向下从当前行扩展，不回到范围起点");
+                panelFiles.HandleKey(Key.Up, ModifierKeys.Shift);
+                Check(panelFiles.TestSelectedCount() == 2 && Current(panelFiles).Name == "file0001.txt",
+                    "Shift反向移动收缩范围，当前操作目标同步");
+                CancelBatchDelete(panelFiles, 2);
+                Check(File.Exists(Path.Combine(first, "file0000.txt")) && File.Exists(Path.Combine(first, "file0001.txt")),
+                    "取消两项删除不改变临时来源文件");
+                for (int i = 0; i < 3; i++) panelFiles.HandleKey(Key.Down, ModifierKeys.Shift);
+                CancelBatchDelete(panelFiles, 5);
+                bool batchIntact = true;
+                for (int i = 0; i < 5; i++) batchIntact &= File.Exists(Path.Combine(first, "file000" + i + ".txt"));
+                Check(batchIntact, "取消五项删除保留所有临时来源文件");
+                panelFiles.HandleKey(Key.A, ModifierKeys.Control);
+                Border tabTarget = Row(panelFiles, Path.Combine(first, "file0007.txt"));
+                tabTarget.Focus();
+                Check(Current(panelFiles).Name == "file0007.txt" && panelFiles.TestSelectedCount() == 10,
+                    "Tab焦点行决定打开和预览目标，不改变多选集合");
+                panelFiles.Refresh(true); Wait(panelFiles, null);
+                Check(Current(panelFiles).Name == "file0007.txt" && panelFiles.TestSelectedCount() == 10,
+                    "刷新按路径保留当前操作目标和多选");
+                StackPanel panelList = Get<StackPanel>(panelFiles, "listPanel");
+                Button panelSort = (Button)((Grid)((Border)panelList.Children[0]).Child).Children[0];
+                Click(panelSort);
+                Check(Current(panelFiles).Name == "file0007.txt" && panelFiles.TestSelectedCount() == 10,
+                    "排序后当前打开与预览目标按路径保持，不切到第一项");
+                Click(panelSort);
+                Invoke(panelFiles, "ClearSelection");
+                panelFiles.HandleKey(Key.Down, ModifierKeys.None);
+                panelFiles.HandleKey(Key.Down, ModifierKeys.Shift);
+                panelFiles.Refresh(true); Wait(panelFiles, null);
+                panelFiles.HandleKey(Key.Down, ModifierKeys.Shift);
+                Check(panelFiles.TestSelectedCount() == 3 && Current(panelFiles).Name == "file0002.txt",
+                    "刷新保留范围起点与移动位置，可继续Shift扩展");
+                Invoke(panelFiles, "ClearSelection");
+                Check(Current(panelFiles) == null && !panelFiles.HandleKey(Key.Enter, ModifierKeys.None),
+                    "取消选择后不沿用旧操作目标");
+                panelFiles.HandleKey(Key.A, ModifierKeys.Control);
+                panelKept.Focus();
+                KeyEventArgs fileMenuKey = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(panel), 0, Key.Apps)
+                    { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                panel.RaiseEvent(fileMenuKey);
+                ContextMenu fileMenu = Get<ContextMenu>(panelFiles, "activeItemMenu");
+                Check(fileMenuKey.Handled && fileMenu != null && fileMenu.IsOpen
+                    && fileMenu.Placement == System.Windows.Controls.Primitives.PlacementMode.Bottom
+                    && ReferenceEquals(fileMenu.PlacementTarget, panelKept) && panelFiles.TestSelectedCount() == 10,
+                    "文件菜单键对应焦点行且不清多选");
+                fileMenu.IsOpen = false; Pump();
+                Check(panelKept.IsKeyboardFocused && panelFiles.FilterQuery == "file000"
+                    && panelFiles.TestSelectedCount() == 10, "文件菜单关闭返回列表，保留搜索与多选");
+                Check(panelFiles.HandleKey(Key.F10, ModifierKeys.Shift)
+                    && Get<ContextMenu>(panelFiles, "activeItemMenu").IsOpen,
+                    "文件列表Shift+F10可打开同一菜单");
+                Get<ContextMenu>(panelFiles, "activeItemMenu").IsOpen = false; Pump();
+                Get<TextBox>(panel, "searchBox").Focus();
+                Invoke(panelFiles, "RestoreListFocus", new object[] { null });
+                Check(Keyboard.FocusedElement is Border && panelFiles.TestSelectedCount() == 10
+                    && !Get<TextBox>(panel, "searchBox").IsKeyboardFocusWithin,
+                    "文件操作后的重新激活回到文件行，不回搜索框");
+                panelFiles.HandleKey(Key.Down, ModifierKeys.None);
+                Border afterArrow = Keyboard.FocusedElement as Border;
+                Check(afterArrow != null && panelFiles.TestSelectedCount() == 1
+                    && panelFiles.HandleKey(Key.Apps, ModifierKeys.None)
+                    && ReferenceEquals(Get<ContextMenu>(panelFiles, "activeItemMenu").PlacementTarget, afterArrow),
+                    "方向键移动后菜单跟随新选择，不使用旧焦点行");
+                Get<ContextMenu>(panelFiles, "activeItemMenu").IsOpen = false; Pump();
+                panelFiles.HandleKey(Key.A, ModifierKeys.Control);
+                foreach (UIElement child in Get<WrapPanel>(panel, "navStack").Children)
+                {
+                    Button tab = child as Button;
+                    if (tab != null && System.Windows.Automation.AutomationProperties.GetName(tab) == "文件库标签")
+                        Click(tab);
+                }
+                Check(panelFiles.FilterQuery == "file000" && panelFiles.TestSelectedCount() == 10
+                    && ReferenceEquals(panelKept, Row(panelFiles, Path.Combine(first, "file0000.txt"))),
+                    "重复点击文件库标签不清搜索、多选或重建行");
                 Click(refresh);
                 for (int i = 0; i < 200 && panelFiles.Status == "更新中…"; i++)
                 { Pump(); System.Threading.Thread.Sleep(10); }
                 Check(panelFiles.FilterQuery == "file000" && ReferenceEquals(panelKept, Row(panelFiles, Path.Combine(first, "file0000.txt"))),
                     "点击底部刷新保留搜索和列表行");
+                panelKept.Focus(); panelFiles.HandleKey(Key.Apps, ModifierKeys.None);
+                ContextMenu staleMenu = Get<ContextMenu>(panelFiles, "activeItemMenu");
+                Clipboard.SetText("stale-file-menu-sentinel");
+                panelFiles.ApplyFilter("file0009");
+                Check(!staleMenu.IsOpen && panelFiles.TestSelectedCount() == 1, "筛选关闭旧文件菜单且保留仍可见选择");
+                MenuAction(staleMenu, "复制文件").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Check(Clipboard.ContainsText() && Clipboard.GetText() == "stale-file-menu-sentinel",
+                    "旧文件菜单不能改为复制筛选后剩下的项目");
+                panelFiles.ApplyFilter("file000");
+                panelKept.Focus(); panelFiles.HandleKey(Key.Apps, ModifierKeys.None);
+                ContextMenu leavingMenu = Get<ContextMenu>(panelFiles, "activeItemMenu");
+                panelFiles.OnLeave();
+                MenuAction(leavingMenu, "复制路径").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Check(!leavingMenu.IsOpen && Clipboard.GetText() == "stale-file-menu-sentinel",
+                    "离开文件页关闭菜单，旧复制路径回调失效");
+                panelFiles.OnEnter();
                 panel.TestSwitchCategory(""); Pump();
                 Check(refresh.Visibility == Visibility.Collapsed, "应用页不出现文件刷新按钮");
                 panel.TestSwitchCategory(PanelWindow.VirtualDesktopCategory); Pump();
@@ -251,10 +430,13 @@ namespace Clover
                 using (FileStream stream = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "files-library-panel-dark.png")))
                     panelEncoder.Save(stream);
                 Ui.ApplyTheme(Ui.ThemeMode.Light);
+                TestFileDisplay(root);
             }
             catch (Exception ex) { Check(false, ex.ToString()); }
             finally
             {
+                try { if (previousClipboard != null) Clipboard.SetDataObject(previousClipboard, true); else Clipboard.Clear(); }
+                catch { }
                 if (view != null) view.Dispose();
                 if (panel != null) panel.Close();
                 if (window != null) window.Close();
@@ -264,6 +446,180 @@ namespace Clover
             }
             Console.WriteLine("通过 " + passed + " / 失败 " + failed);
             return failed == 0 ? 0 : 1;
+        }
+
+        static Image Icon(Border row)
+        {
+            Grid slot = (Grid)((Grid)row.Child).Children[0];
+            return slot.Children.Count > 0 ? slot.Children[0] as Image : null;
+        }
+
+        static void SaveDisplay(Window window, string name)
+        {
+            FrameworkElement visual = (FrameworkElement)window.Content;
+            visual.UpdateLayout();
+            RenderTargetBitmap bitmap = new RenderTargetBitmap((int)Math.Ceiling(visual.ActualWidth),
+                (int)Math.Ceiling(visual.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+            bitmap.Render(visual);
+            PngBitmapEncoder encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, name);
+            using (FileStream stream = File.Create(path)) encoder.Save(stream);
+            Console.WriteLine("Screenshot: " + path);
+        }
+
+        static void TestFileDisplay(string sandbox)
+        {
+            string root = Path.Combine(sandbox, "display-test"), documents = Path.Combine(root, "文档");
+            Directory.CreateDirectory(documents);
+            string[] names = new string[] { "实验报告+神江+202471030634.docx", "实验报告模板.docx",
+                "Pyecharts练习数据.xlsx", "第4章 使用matplotlib绘制简单图表.pptx", "课程说明.pdf", "资料归档.zip",
+                "网页入口.html", "未知格式.cloverunknown", "文件名称很长但不应挤占时间与大小列_" + new string('长', 45) + ".docx" };
+            Dictionary<string, byte[]> contents = new Dictionary<string, byte[]>();
+            foreach (string name in names)
+            {
+                string path = Path.Combine(documents, name);
+                File.WriteAllText(path, "test-only-not-a-real-document");
+                contents[path] = File.ReadAllBytes(path);
+            }
+            string folder = Path.Combine(documents, "26年5月4日更新-最新音源");
+            Directory.CreateDirectory(folder);
+            FileFolders sources = FileFolders.Load(root); sources.Add(documents);
+            Settings settings = Settings.Load(root); settings.AutoAppearance = false; settings.FilesSort = "name:asc";
+            Window window = null;
+            FilesTabView view = null;
+            try
+            {
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+                WrapPanel chips = new WrapPanel(), filters = new WrapPanel();
+                StackPanel list = new StackPanel(), undo = new StackPanel(), content = new StackPanel();
+                TextBlock notice = Ui.T("", 12, Ui.Sub);
+                content.Children.Add(chips); content.Children.Add(filters); content.Children.Add(notice);
+                content.Children.Add(list); content.Children.Add(undo);
+                ScrollViewer scroll = new ScrollViewer { Content = content, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+                Border surface = new Border { Background = Ui.Bg, Padding = new Thickness(12), Child = scroll };
+                window = new Window { Width = 760, Height = 620, Content = surface, ShowInTaskbar = false };
+                window.Show();
+                view = new FilesTabView(null, settings, root, chips, filters, list, notice, undo);
+                view.OnEnter(); view.Refresh(true); Wait(view, notice); window.UpdateLayout();
+                Border report = Row(view, Path.Combine(documents, names[0]));
+                Grid reportSlot = (Grid)((Grid)report.Child).Children[0];
+                view.HandleKey(Key.A, ModifierKeys.Control);
+                int selectedCount = view.TestSelectedCount();
+                int pending = 0;
+                for (int tick = 0; tick < 400; tick++)
+                {
+                    Pump(); window.UpdateLayout();
+                    pending = 0;
+                    foreach (Border row in Get<Dictionary<string, Border>>(view, "rowMap").Values)
+                        if (Icon(row) == null) pending++;
+                    if (pending == 0) break;
+                    System.Threading.Thread.Sleep(10);
+                }
+                Check(pending == 0, "Word、Excel、PPT、PDF、网页、压缩包和文件夹均读到Windows关联图标");
+                Check(ReferenceEquals(report, Row(view, Path.Combine(documents, names[0])))
+                    && ReferenceEquals(reportSlot, ((Grid)report.Child).Children[0]) && selectedCount == view.TestSelectedCount(),
+                    "异步补图标只更新图标槽，不重建行或丢多选");
+                Check(ReferenceEquals(Icon(report).Source, Icon(Row(view, Path.Combine(documents, names[1]))).Source),
+                    "同类型文档跨路径复用同一系统图标");
+                Check(Icon(Row(view, folder)) != null && Convert.ToString(((Grid)((Grid)Row(view, folder).Child).Children[0]).Tag) == "folder",
+                    "文件夹使用Windows文件夹图标而非通用纸张");
+                foreach (string name in names)
+                {
+                    Border row = Row(view, Path.Combine(documents, name));
+                    Image icon = Icon(row);
+                    Check(icon != null && ((BitmapSource)icon.Source).IsFrozen && icon.Width == 24 && icon.Height == 24,
+                        "图标已冻结可跨线程且大小一致：" + Path.GetExtension(name));
+                }
+                Check(FileListIcons.Key("DOCX", false) == FileListIcons.Key(".docx", false)
+                    && FileListIcons.Key(".exe", true) == "folder" && !FileListIcons.HasOwnIcon(".docx")
+                    && FileListIcons.HasOwnIcon(".EXE"), "文档按类型归并，独立程序仍按实际路径取图标");
+
+                // 对Windows结果做像素对照，而非只检查“有一张图片”。
+                foreach (string ext in new string[] { ".docx", ".xlsx", ".pptx", ".pdf", ".zip", ".html" })
+                {
+                    Image actual = null;
+                    foreach (string name in names) if (name.EndsWith(ext, StringComparison.Ordinal))
+                        { actual = Icon(Row(view, Path.Combine(documents, name))); break; }
+                    BitmapSource expected = (BitmapSource)IconCache.GetFileType(ext, false);
+                    BitmapSource image = actual == null ? null : actual.Source as BitmapSource;
+                    Check(image != null && SamePixels(image, expected), ext + "显示与Windows关联图标逐像素一致");
+                }
+                view.HandleKey(Key.Escape, ModifierKeys.None); scroll.ScrollToTop(); Pump(); window.UpdateLayout();
+                SaveDisplay(window, "files-display-light.png");
+                foreach (double width in new double[] { 640, 760, 1050 })
+                {
+                    window.Width = width; window.UpdateLayout(); Pump(); window.UpdateLayout();
+                    Grid row = (Grid)report.Child;
+                    FrameworkElement icon = (FrameworkElement)row.Children[0];
+                    TextBlock name = (TextBlock)row.Children[1];
+                    TextBlock time = (TextBlock)row.Children[2];
+                    Point iconAt = icon.TranslatePoint(new Point(), row), nameAt = name.TranslatePoint(new Point(), row);
+                    Point timeAt = time.TranslatePoint(new Point(), row);
+                    Check(iconAt.X + icon.ActualWidth <= nameAt.X + 0.5
+                        && nameAt.X + name.ActualWidth <= timeAt.X + 0.5
+                        && row.ActualWidth <= list.ActualWidth + 0.5, "图标、名称与时间不重叠，窗口宽度 " + width);
+                    Check(ReferenceEquals(report, Row(view, Path.Combine(documents, names[0])))
+                        && ReferenceEquals(reportSlot, row.Children[0]), "缩放不重建文件行或图标槽，窗口宽度 " + width);
+                }
+                TextBlock longName = (TextBlock)((Grid)Row(view, Path.Combine(documents, names[names.Length - 1])).Child).Children[1];
+                Check(longName.Text == names[names.Length - 1] && longName.TextTrimming == TextTrimming.CharacterEllipsis
+                    && Convert.ToString(longName.ToolTip).Contains(names[names.Length - 1]),
+                    "长文件名不裁剪底层文本，省略显示且悬停可读完整路径");
+                window.Width = 640; window.Height = 460; Pump(); window.UpdateLayout();
+                SaveDisplay(window, "files-display-narrow.png");
+                Ui.ApplyTheme(Ui.ThemeMode.Dark); window.UpdateLayout(); Pump();
+                Check(!Ui.Sub.IsFrozen && !Ui.Accent.IsFrozen && SamePixels((BitmapSource)Icon(report).Source,
+                    (BitmapSource)IconCache.GetFileType(".docx", false)), "深色主题不染色文件图标、不冻结共享刷子");
+                SaveDisplay(window, "files-display-dark.png");
+                view.ApplyFilter("实验报告"); view.Refresh(true); Wait(view, notice); Pump();
+                Check(ReferenceEquals(report, Row(view, Path.Combine(documents, names[0])))
+                    && ReferenceEquals(reportSlot, ((Grid)report.Child).Children[0]), "筛选和刷新保留行与已加载图标");
+                bool unchanged = true;
+                foreach (KeyValuePair<string, byte[]> file in contents)
+                    unchanged &= Convert.ToBase64String(File.ReadAllBytes(file.Key)) == Convert.ToBase64String(file.Value);
+                Check(unchanged && Directory.Exists(folder), "图标显示不更改文档内容或目录");
+                Check(IconCache.GetFileType("../.docx", false) == null, "关联图标仅接受类型，不允许真实路径输入");
+                for (int i = 0; i < FileListIcons.Capacity + 8; i++)
+                {
+                    string key = FileListIcons.Key(".clovericon" + i, false);
+                    bool done = false;
+                    FileListIcons.GetAsync(key, delegate { done = true; });
+                    for (int tick = 0; tick < 400 && !done; tick++) { Pump(); System.Threading.Thread.Sleep(1); }
+                }
+                Check(FileListIcons.CountForTest <= FileListIcons.Capacity, "文件类型图标缓存有界，不随来源增长无限积累");
+                view.Dispose(); view = null; Pump();
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+            }
+            finally
+            {
+                if (view != null) view.Dispose();
+                if (window != null) window.Close();
+                Ui.ApplyTheme(Ui.ThemeMode.Light);
+            }
+        }
+
+        static bool SamePixels(BitmapSource left, BitmapSource right)
+        {
+            if (left == null || right == null || left.PixelWidth != right.PixelWidth || left.PixelHeight != right.PixelHeight)
+                return false;
+            FormatConvertedBitmap a = new FormatConvertedBitmap(left, PixelFormats.Bgra32, null, 0);
+            FormatConvertedBitmap b = new FormatConvertedBitmap(right, PixelFormats.Bgra32, null, 0);
+            int stride = left.PixelWidth * 4;
+            byte[] first = new byte[stride * left.PixelHeight], second = new byte[first.Length];
+            a.CopyPixels(first, stride, 0); b.CopyPixels(second, stride, 0);
+            return Convert.ToBase64String(first) == Convert.ToBase64String(second);
+        }
+
+        static bool HasVisiblePixels(BitmapSource bitmap)
+        {
+            if (bitmap == null || bitmap.PixelWidth <= 0 || bitmap.PixelHeight <= 0) return false;
+            int stride = bitmap.PixelWidth * 4;
+            byte[] pixels = new byte[stride * bitmap.PixelHeight];
+            bitmap.CopyPixels(pixels, stride, 0);
+            for (int i = 0; i + 3 < pixels.Length; i += 4)
+                if (pixels[i + 3] > 0 && (pixels[i] > 4 || pixels[i + 1] > 4 || pixels[i + 2] > 4)) return true;
+            return false;
         }
     }
 }

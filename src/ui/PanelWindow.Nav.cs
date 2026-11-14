@@ -226,7 +226,7 @@ namespace Clover
                 if (selectedTile != null)
                 {
                     selectedTile.Background = Brushes.Transparent;
-                    selectedTile.BorderThickness = new Thickness(0);
+                    selectedTile.BorderBrush = Brushes.Transparent;
                 }
                 selectedTile = null;
                 selectedIndex = -1;
@@ -256,63 +256,55 @@ namespace Clover
         /// <summary>方向键导航。返回 true 表示已处理（调用方应把事件标记为 Handled）。</summary>
         bool MoveSelection(Key key)
         {
-            if (renderedApps == null || renderedApps.Count == 0) return false;
+            if (tilePanel == null || tilePanel.Visibility != Visibility.Visible
+                || renderedTiles.Count == 0) return false;
+            if (key != Key.Left && key != Key.Right && key != Key.Up && key != Key.Down
+                && key != Key.Home && key != Key.End) return false;
 
-            // WrapPanel 当前一行放几个磁贴；拿不到布局信息时按 8 列估算
-            int cols = 8;
-            try
+            int index = selectedIndex;
+            if (key == Key.Home || index < 0 || index >= renderedTiles.Count) index = 0;
+            if (key == Key.End) index = renderedTiles.Count - 1;
+            else if (key != Key.Home && selectedIndex >= 0 && selectedIndex < renderedTiles.Count)
             {
-                double w = tilePanel.ActualWidth;
-                if (w > 0)
+                // 按布局后的中心坐标选位，分组标题和不满行不参与应用下标推算。
+                Border origin = renderedTiles[selectedIndex];
+                Point center = origin.TranslatePoint(new Point(origin.ActualWidth / 2,
+                    origin.ActualHeight / 2), tilePanel);
+                bool vertical = key == Key.Up || key == Key.Down;
+                double nearestRow = double.MaxValue, nearestColumn = double.MaxValue;
+                for (int i = 0; i < renderedTiles.Count; i++)
                 {
-                    double unit = 96 + 4; // 磁贴宽 + 左右 margin
-                    int c = (int)Math.Floor(w / unit);
-                    if (c >= 1) cols = c;
+                    Border candidate = renderedTiles[i];
+                    if (i == selectedIndex || candidate.Visibility != Visibility.Visible
+                        || candidate.ActualWidth <= 0 || candidate.ActualHeight <= 0) continue;
+                    Point point = candidate.TranslatePoint(new Point(candidate.ActualWidth / 2,
+                        candidate.ActualHeight / 2), tilePanel);
+                    double dx = point.X - center.X, dy = point.Y - center.Y;
+                    double forward = key == Key.Up ? -dy : key == Key.Down ? dy
+                        : key == Key.Left ? -dx : dx;
+                    if (forward <= 1 || (!vertical && Math.Abs(dy) > 1)) continue;
+                    double sideways = vertical ? Math.Abs(dx) : 0;
+                    if (forward < nearestRow - 1
+                        || (Math.Abs(forward - nearestRow) <= 1 && sideways < nearestColumn))
+                    {
+                        nearestRow = forward; nearestColumn = sideways; index = i;
+                    }
                 }
             }
-            catch { }
-
-            int n = renderedApps.Count;
-            int i = selectedIndex;
-
-            switch (key)
-            {
-                case Key.Right:
-                    i = (i < 0) ? 0 : i + 1;
-                    break;
-                case Key.Left:
-                    i = (i < 0) ? 0 : i - 1;
-                    break;
-                case Key.Down:
-                    i = (i < 0) ? 0 : i + cols;
-                    break;
-                case Key.Up:
-                    i = (i < 0) ? 0 : i - cols;
-                    break;
-                case Key.Home:
-                    i = 0;
-                    break;
-                case Key.End:
-                    i = n - 1;
-                    break;
-                default:
-                    return false;
-            }
-
-            if (i < 0) i = 0;
-            if (i > n - 1) i = n - 1;
-            SelectTile(i, true);
+            SelectTile(index, true);
             return true;
         }
 
-        /// <summary>回车启动当前选中的磁贴；没有选中时启动第一个。返回是否已处理。</summary>
+        /// <summary>回车只启动当前可见列表中明确选中的应用。</summary>
         bool LaunchSelected()
         {
             try
             {
-                if (renderedApps == null || renderedApps.Count == 0) return false;
+                if (tilePanel == null || tilePanel.Visibility != Visibility.Visible
+                    || renderedApps == null || renderedApps.Count == 0
+                    || (searchBox != null && !string.IsNullOrWhiteSpace(searchBox.Text))) return false;
                 int i = selectedIndex;
-                if (i < 0 || i >= renderedApps.Count) i = 0;
+                if (i < 0 || i >= renderedApps.Count || selectedTile == null) return false;
                 Launch(renderedApps[i]);
                 return true;
             }
@@ -441,6 +433,7 @@ namespace Clover
                 };
                 item.Click += delegate
                 {
+                    if (current == c) return;
                     // 先把当前分类的滚动位置存下来（必须在改 current 之前）
                     SaveScrollOffset();
                     SwitchCategory(c);
@@ -451,7 +444,7 @@ namespace Clover
                     reveal.Tick += delegate
                     {
                         reveal.Stop();
-                        SwitchCategory(c);
+                        if (current != c) SwitchCategory(c);
                         dragOverPanel = true;
                     };
                     item.AllowDrop = true;
@@ -570,19 +563,19 @@ namespace Clover
                 {
                     searchName = "筛选文件库";
                     hint = "筛选当前文件来源…";
-                    footer = "文件库 · 双击打开 · Ctrl 多选 · Delete 移到回收站";
+                    footer = "双击打开 · Ctrl 多选 · Delete 移到回收站";
                 }
                 else if (IsDeskTab(current))
                 {
                     searchName = "搜索桌面收纳";
                     hint = "搜索桌面收纳中的文件…";
-                    footer = "桌面收纳 · 桌面拖入默认移动，Ctrl 复制 · 框选／自由摆放 · Ctrl+Z 撤销摆放";
+                    footer = "桌面拖入移动，Ctrl 复制 · 自由摆放 · Ctrl+Z 撤销摆放";
                 }
                 else
                 {
                     searchName = "搜索应用";
                     hint = "搜索应用（支持拼音 / 首字母）…";
-                    footer = "单击选中 · 双击启动 · 拖动排序 · 方向键选择 · Enter 启动";
+                    footer = "双击启动 · 拖动排序 · 方向键选择 · Enter 启动选中项";
                 }
 
                 if (searchHint != null) searchHint.Text = hint;
@@ -637,6 +630,7 @@ namespace Clover
                 // ---- 1. 离开的标签释放状态 ----
                 if (wasFiles && !willFiles && filesView != null)
                     filesView.OnLeave();
+                if (current != next && deskView != null) deskView.InvalidateItemMenu();
 
                 // ---- 2. 清空搜索框（跨标签不共用搜索词）----
                 //   searchSuppress 防止 TextChanged 触发一次多余渲染
@@ -650,6 +644,25 @@ namespace Clover
 
                 // ---- 3. 切换 + 渲染 ----
                 current = next;
+                if (footerCount != null)
+                {
+                    footerCount.Text = "";
+                    footerCount.ToolTip = null;
+                }
+                if (contentScroll != null && !scrollOffsets.ContainsKey(next))
+                {
+                    // 先归零再换内容。否则新页面的 ExtentHeight 变化会触发 ScrollChanged，
+                    // 把上一页的旧偏移误记到 next 名下，顶部操作只剩一条边。
+                    suppressScrollRecord = true;
+                    try
+                    {
+                        StopSmoothScroll(false);
+                        contentScroll.ScrollToVerticalOffset(0);
+                        contentScroll.UpdateLayout();
+                        scrollOffsets[next] = 0;
+                    }
+                    finally { suppressScrollRecord = false; }
+                }
                 if (contentScroll != null)
                     contentScroll.HorizontalScrollBarVisibility = IsDeskTab(next)
                         ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled;
@@ -724,7 +737,11 @@ namespace Clover
                 // 三者互斥：只显示文件层
                 ShowContentLayer(ContentLayer.Files);
                 if (searchResults != null) searchResults.Clear();
-                if (footerCount != null) footerCount.Text = ""; // 文件数量由文件视图更新，不能沿用应用统计。
+                if (footerCount != null)
+                {
+                    footerCount.Text = "";
+                    footerCount.ToolTip = null;
+                }
 
                 // 首次创建 FilesTabView
                 if (filesView == null && filesPanel != null)
@@ -733,6 +750,7 @@ namespace Clover
                         filesChipRow, filesExtRow, filesListPanel, filesNotice,
                         filesUndoHost);
                     filesView.AttachStatus(footerCount);
+                    filesView.AttachSelectionSurface(filesPanel);
 
                     // 注入放置提示层（FilesTabView 只拿容器引用，不负责建控件）
                     if (filesDropHint != null) filesView.AttachDropHint(filesDropHint);

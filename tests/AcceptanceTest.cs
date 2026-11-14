@@ -287,7 +287,7 @@ namespace Clover
             // ---------- 3. 界面证据：控件树真的建起来了 ----------
             Verify("窗口标题正确", delegate
             {
-                return panel.Title == "四叶草面板" ? "ok" : "实际标题: " + panel.Title;
+                return panel.Title == "归位面板" ? "ok" : "实际标题: " + panel.Title;
             });
 
             Verify("窗口有内容（Content 非空）", delegate
@@ -315,14 +315,14 @@ namespace Clover
                 CollectWindowButtons(panel, ref btnCount, tips);
 
                 if (btnCount != 3) return "应有 3 个窗口按钮，实际 " + btnCount;
-                if (!tips.Contains("最小化到四叶草")) return "缺少最小化按钮的 tooltip";
+                if (!tips.Contains("最小化到归位")) return "缺少最小化按钮的 tooltip";
                 if (!tips.Contains("最大化 / 还原")) return "缺少最大化按钮的 tooltip";
                 if (!tips.Contains("收起面板")) return "缺少收起按钮的 tooltip";
-                if (tips.Count != 3 || tips[0] != "最小化到四叶草"
+                if (tips.Count != 3 || tips[0] != "最小化到归位"
                     || tips[1] != "最大化 / 还原" || tips[2] != "收起面板")
                     return "按钮顺序不对：" + string.Join(" / ", tips.ToArray());
 
-                Button minimize = FindWindowButtonByTip(panel, "最小化到四叶草");
+                Button minimize = FindWindowButtonByTip(panel, "最小化到归位");
                 if (minimize == null) return "找不到最小化按钮";
                 if (AutomationProperties.GetName(minimize) != "最小化主面板")
                     return "最小化按钮缺少正确的可访问名称";
@@ -331,13 +331,13 @@ namespace Clover
                 return "ok（最小化 / 最大化 / 收起）";
             });
 
-            // ---------- 3c. 点最小化 → 面板隐藏到四叶草 ----------
-            Verify("★点最小化按钮 → 主面板隐藏到四叶草", delegate
+            // ---------- 3c. 点最小化 → 面板隐藏到归位 ----------
+            Verify("★点最小化按钮 → 主面板隐藏到归位", delegate
             {
                 panel.ShowPanel();
                 if (!panel.IsVisible) return "ShowPanel 后不可见";
 
-                Button minimize = FindWindowButtonByTip(panel, "最小化到四叶草");
+                Button minimize = FindWindowButtonByTip(panel, "最小化到归位");
                 if (minimize == null) return "找不到最小化按钮";
 
                 // 直接触发 Button.Click 路由事件，验证按钮本身确实接到了 HidePanel。
@@ -350,15 +350,15 @@ namespace Clover
                 // 正确做法：用 DispatcherFrame 泵消息，让动画真正推进。
                 WaitForDispatcher(600);
                 if (panel.IsVisible) return "点最小化后仍可见";
-                return "ok（主面板已隐藏，可从四叶草恢复）";
+                return "ok（主面板已隐藏，可从归位恢复）";
             });
 
             // 恢复面板：3c 把它收起了，后续断言需要可见的面板
             panel.ShowPanel();
             WaitForDispatcher(400);
 
-            // ---------- 3d. 任务栏四叶草反馈面板开/关状态 ----------
-            Verify("★四叶草按钮同步面板打开状态与辅助名称", delegate
+            // ---------- 3d. 任务栏归位反馈面板开/关状态 ----------
+            Verify("★归位按钮同步面板打开状态与辅助名称", delegate
             {
                 TriggerWindow trigger = null;
                 try
@@ -371,14 +371,14 @@ namespace Clover
                     if (trigger.TestPanelIndicator == null) return "没有状态指示条";
                     if (trigger.TestPanelIndicator.Visibility != Visibility.Visible)
                         return "面板已打开但指示条未显示";
-                    if (trigger.TestAccessibleName != "收起四叶草面板")
+                    if (trigger.TestAccessibleName != "收起归位面板")
                         return "打开态辅助名称错误：" + trigger.TestAccessibleName;
 
                     panel.Hide();
                     WaitForDispatcher(50);
                     if (trigger.TestPanelIndicator.Visibility != Visibility.Collapsed)
                         return "面板收起后指示条未隐藏";
-                    if (trigger.TestAccessibleName != "打开四叶草面板")
+                    if (trigger.TestAccessibleName != "打开归位面板")
                         return "关闭态辅助名称错误：" + trigger.TestAccessibleName;
 
                     panel.Show();
@@ -471,8 +471,7 @@ namespace Clover
                     if (panel.TestSearchHint().IndexOf("应用", StringComparison.Ordinal) < 0)
                         return "常用页搜索提示不含“应用”：" + panel.TestSearchHint();
                     string footer = panel.TestFooterHint();
-                    if (footer.IndexOf("单击选中", StringComparison.Ordinal) < 0
-                        || footer.IndexOf("双击启动", StringComparison.Ordinal) < 0
+                    if (footer.IndexOf("双击启动", StringComparison.Ordinal) < 0
                         || footer.IndexOf("拖动排序", StringComparison.Ordinal) < 0
                         || footer.IndexOf("Enter 启动", StringComparison.Ordinal) < 0)
                         return "常用页底部提示错误：" + panel.TestFooterHint();
@@ -482,14 +481,15 @@ namespace Clover
                         return "文件库搜索提示错误：" + panel.TestSearchHint();
                     if (!panel.TestFilesSurfaceCreated()) return "首次进入后仍未创建文件库表面";
                     if (panel.TestDeskSurfaceCreated()) return "进入文件库却提前创建了桌面收纳表面";
-                    if (panel.TestFooterHint().IndexOf("文件库", StringComparison.Ordinal) < 0)
+                    if (panel.TestFooterHint().IndexOf("双击打开", StringComparison.Ordinal) < 0
+                        || panel.TestFooterHint().IndexOf("移到回收站", StringComparison.Ordinal) < 0)
                         return "文件库底部提示错误：" + panel.TestFooterHint();
 
                     panel.TestSwitchCategory("桌面文件");
                     if (panel.TestSearchHint().IndexOf("桌面收纳", StringComparison.Ordinal) < 0)
                         return "桌面收纳搜索提示错误：" + panel.TestSearchHint();
                     if (!panel.TestDeskSurfaceCreated()) return "首次进入后仍未创建桌面收纳表面";
-                    if (panel.TestFooterHint().IndexOf("默认移动", StringComparison.Ordinal) < 0
+                    if (panel.TestFooterHint().IndexOf("桌面拖入移动", StringComparison.Ordinal) < 0
                         || panel.TestFooterHint().IndexOf("Ctrl", StringComparison.Ordinal) < 0)
                         return "桌面收纳底部提示错误：" + panel.TestFooterHint();
 
@@ -1499,7 +1499,7 @@ namespace Clover
                     bool recentHintTrims = false;
                     foreach (TextBlock t in FindAll<TextBlock>(visual))
                     {
-                        if (t.Text == "自动排序 · 3 天未使用自动移除")
+                        if (t.Text == "自动排序 · 面板启动记录 · 3 天未用退出本页")
                             recentHintTrims = t.TextTrimming == TextTrimming.CharacterEllipsis;
                     }
                     if (!recentHintTrims)
@@ -2319,10 +2319,10 @@ namespace Clover
                     return "滑块松手没有提交（缺 DragCompleted）";
                 if (text.IndexOf("DispatcherTimer", StringComparison.Ordinal) < 0)
                     return "没有预览防抖";
-                if (text.IndexOf("ResizeMode.CanResizeWithGrip", StringComparison.Ordinal) < 0)
-                    return "外观窗口不可伸缩（缺 CanResizeWithGrip）";
-                if (text.IndexOf("new ResizeGrip()", StringComparison.Ordinal) < 0)
-                    return "外观窗口缺右下角 ResizeGrip";
+                if (text.IndexOf("dlg.ResizeMode = ResizeMode.CanResize", StringComparison.Ordinal) < 0)
+                    return "外观窗口不可伸缩";
+                if (text.IndexOf("new ResizeGrip()", StringComparison.Ordinal) >= 0)
+                    return "外观窗口仍有重复缩放手柄";
                 if (text.IndexOf("dlg.MinWidth = 360", StringComparison.Ordinal) < 0
                     || text.IndexOf("dlg.MinHeight = 300", StringComparison.Ordinal) < 0)
                     return "外观窗口缺最小尺寸保护（360x300）";
@@ -2352,8 +2352,8 @@ namespace Clover
                     return "设置窗口没有「桌面收纳」区块";
                 if (text.IndexOf("InfoRow(\"存放目录\"", StringComparison.Ordinal) < 0)
                     return "没有显示当前存放目录";
-                if (text.IndexOf("SmallButton(\"更改…\"", StringComparison.Ordinal) < 0)
-                    return "没有「更改…」按钮";
+                if (text.IndexOf("SmallButton(\"更改目录…\"", StringComparison.Ordinal) < 0)
+                    return "没有「更改目录…」按钮";
                 if (text.IndexOf("SmallButton(\"打开目录\"", StringComparison.Ordinal) < 0)
                     return "没有「打开目录」按钮";
                 if (text.IndexOf("SmallButton(\"恢复默认\"", StringComparison.Ordinal) < 0)
@@ -2432,8 +2432,8 @@ namespace Clover
 
                     string[] need = new string[]
                     {
-                        "桌面收纳", "存放目录", "更改…", "打开目录", "恢复默认", "搬过去",
-                        "实际窗口", "最后校准"
+                        "桌面收纳", "存放目录", "更改目录…", "打开目录", "恢复默认",
+                        "维护与诊断", "诊断详情", "修改即时生效"
                     };
                     foreach (string n in need)
                     {
@@ -2710,7 +2710,7 @@ namespace Clover
 
         static bool IsWindowButtonTip(string tip)
         {
-            return tip == "最小化到四叶草"
+            return tip == "最小化到归位"
                 || tip == "最大化 / 还原" || tip == "最大化" || tip == "还原"
                 || tip == "收起面板";
         }

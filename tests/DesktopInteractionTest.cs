@@ -25,6 +25,7 @@ namespace Clover
             Directory.CreateDirectory(root);
             Application application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
             DesktopView view = null;
+            Window window = null;
             try
             {
                 Ui.ApplyTheme(Ui.ThemeMode.Light);
@@ -137,11 +138,38 @@ namespace Clover
                 Pump(600);
                 Check(view.TestTile("new.txt") != null && ReferenceEquals(second, view.TestTile("second.txt")),
                     "外部新增增量出现");
+                desks.SetPos("桌面文件", "aaa.txt", 8, 8);
+                desks.SetPos("桌面文件", "second.txt", 104, 8);
+                desks.SetPos("桌面文件", "new.txt", 200, 8);
+                view.Load("桌面文件");
+                view.ClearSelectionFromBackground();
+                view.HandleKey(Key.Right, ModifierKeys.None);
+                view.HandleKey(Key.Right, ModifierKeys.Shift);
+                view.HandleKey(Key.Right, ModifierKeys.Shift);
+                Check(view.SelectedPaths().Count == 3 && view.SelectedPaths().Contains(Path.Combine(dir, "new.txt")),
+                    "桌面连续Shift方向多选从当前位置继续移动");
+                view.HandleKey(Key.Left, ModifierKeys.None);
+                Check(view.SelectedPaths().Count == 1 && view.SelectedPaths()[0] == Path.Combine(dir, "second.txt"),
+                    "桌面取消Shift后方向单选从最后移动位置开始");
+                window = new Window { Content = canvas, Width = 660, Height = 440 };
+                window.Show(); window.Activate(); canvas.Focus();
+                view.HandleKey(Key.Apps, ModifierKeys.None);
+                ContextMenu staleMenu = (ContextMenu)typeof(DesktopView).GetField("activeItemMenu",
+                    BindingFlags.Instance | BindingFlags.NonPublic).GetValue(view);
+                Check(staleMenu != null && staleMenu.IsOpen, "临时桌面项目可打开键盘菜单");
+                File.Move(Path.Combine(dir, "second.txt"), Path.Combine(dir, "second-renamed.txt"));
+                Pump(700);
+                Check(!staleMenu.IsOpen && view.TestTile("second-renamed.txt") != null,
+                    "菜单打开时外部改名也及时更新，旧菜单关闭");
+                ((MenuItem)staleMenu.Items[3]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Check(File.Exists(Path.Combine(dir, "second-renamed.txt")) && Application.Current.Windows.Count == 1,
+                    "旧桌面菜单的改名回调失效，不操作剩余项目或弹出对话框");
             }
             catch (Exception ex) { Check(false, "异常：" + ex); }
             finally
             {
                 if (view != null) view.Dispose();
+                if (window != null) window.Close();
                 application.Shutdown();
                 try { Directory.Delete(root, true); } catch { }
             }
